@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Print a time-bounded local attribution and VPS traffic summary."""
+
+from __future__ import annotations
+
+import argparse
+from datetime import datetime
+from pathlib import Path
+import sys
+import time
+from typing import Any, Iterable
+
+from sentinel import SAMPLE_SCHEMA, Config, format_bytes, iter_jsonl, read_config
+from vps import SUPPORTED_VPS_SAMPLE_SCHEMAS, iter_vps_samples
+
+
+def parse_timestamp(value: str) -> float:
+    return datetime.fromisoformat(value).timestamp()
+
+
+def records(config: Config, prefix: str) -> Iterable[dict[str, Any]]:
+    for path in sorted(config.state_dir.glob(f"{prefix}*.jsonl"), key=lambda item: item.stat().st_mtime):
+        yield from iter_jsonl(path)
+
+
+def sum_local_traffic(samples: Iterable[dict[str, Any]], group_id: str) -> dict[str, int]:
+    result = {"up_bytes": 0, "down_bytes": 0, "sample_count": 0}
+    for sample in samples:
+        traffic = sample.get("groups", {}).get(group_id, {})
+        result["up_bytes"] += int(traffic.get("up_bytes", 0))
+        result["down_bytes"] += int(traffic.get("down_bytes", 0))
+        result["sample_count"] += 1
+    return result
+
+
+def sum_vps_traffic(samples: Iterable[dict[str, Any]]) -> dict[str, int]:
+    result = {"in_bytes": 0, "out_bytes": 0, "sample_count": 0}
+    for sample in samples:
+        result["in_bytes"] += int(sample.get("in_bytes", 0))
+        result["out_bytes"] += int(sample.get("out_bytes", 0))
+        result["sample_count"] += 1
+    result["total_bytes"] = result["in_bytes"] + result["out_bytes"]
+    return result
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="汇总 Codex Traffic Sentinel 的本地记录")
+    parser.add_argument("--config", type=Path, help="TOML 配置文件")
+    parser.add_argument("--hours", type=float, default=24, help="最近多少小时；默认 24")
+    parser.add_argument("--since", help="开始时间，ISO 8601，例如 2026-07-26T09:00:00+08:00")
+    parser.add_argument("--until", help="结束时间，ISO 8601；默认现在")
+    args = parser.parse_args()
+    try:
+        config = read_config(args.config)
+        until = parse_timestamp(args.until) if args.until else time.time()
+        since = parse_timestamp(args.since) if args.since else until - args.hours * 3600
+        if since > until:
+            raise ValueError("--since 不能晚于 --until")
+        local_samples = [sample for sample in records(config, "samples") if sample.get("schema") == SAMPLE_SCHEMA and since <= float(sample.get("epoch", -1)) <= until]
+        vps_samples = [sample for sample in iter_vps_samples(config.state_dir) if sample.get("schema") in SUPPORTED_VPS_SAMPLE_SCHEMAS and since <= float(sample.get("epoch", -1)) <= until]
+        matching_events = [event for event in records(config, "events") if isinstance(event.get("timestamp"), str) and event.get("sample", {}).get("schema") == SAMPLE_SCHEMA and since <= parse_timestamp(event["timestamp"]) <= until]
+        print(f"时间段：{datetime.fromtimestamp(since).astimezone().isoformat(timespec='seconds')} 至 {datetime.fromtimestamp(until).astimezone().isoformat(timespec='seconds')}")
+        print(f"本机采样数：{len(local_samples)}")
+        for group in config.groups:
+            traffic = sum_local_traffic(local_samples, group.id)
+            role = "项目" if group.role == "attribution" else "独立观察，不与项目流量相加"
+            print(f"{group.label}（{role}）：↑ {format_bytes(traffic['up_bytes'])}  ↓ {format_bytes(traffic['down_bytes'])}  合计 {format_bytes(traffic['up_bytes'] + traffic['down_bytes'])}")
+        vps = sum_vps_traffic(vps_samples)
+        if config.vps.enabled:
+            print(f"VPS 网卡（独立账本，入 + 出）：入 {format_bytes(vps['in_bytes'])}  出 {format_bytes(vps['out_bytes'])}  T {format_bytes(vps['total_bytes'])}")
+        else:
+            print("VPS 网卡：配置中未启用")
+        if matching_events:
+            by_type: dict[str, int] = {}
+            for event in matching_events:
+                by_type[event.get("type", "unknown")] = by_type.get(event.get("type", "unknown"), 0) + 1
+            print("事件：" + "，".join(f"{kind} {count}" for kind, count in sorted(by_type.items())))
+        else:
+            print("事件：无")
+        return 0
+    except Exception as exc:
+        print(f"错误：{exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
