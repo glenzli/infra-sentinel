@@ -1,10 +1,33 @@
-# Codex Traffic Sentinel
+# Net Traffic Sentinal
 
-一个只读的 macOS 菜单栏 App，用来观察本机 AI 项目、代理出口和 VPS 双向账单流量。它不会抓包、读取提示词、上传文件、终止 Agent、删除文件或断网。
+一个只读的 macOS 网络流量观察工具，用来对照本机 AI 项目、代理出口和 VPS 双向账单流量。它不会抓包、读取提示词、上传文件、终止 Agent、删除文件或断网。
+
+## 构建与运行
+
+Git 仓库只包含源码，**不包含预编译的 App**。`Codex Traffic Sentinel.app/` 和中间构建目录 `.build/` 已写入 `.gitignore`，不会随普通提交或推送进入仓库。
+
+在 macOS 上构建需要：
+
+- Xcode Command Line Tools 提供的 `clang` 和 `codesign`；
+- Python 3.11 或更高版本。
+
+```sh
+git clone git@gitlab.com:glenzli/net-traffic-sential.git
+cd net-traffic-sential
+./bin/build-menubar-app.sh
+open "Codex Traffic Sentinel.app"
+```
+
+构建脚本会：
+
+1. 编译 `app/` 中的原生 Cocoa 菜单栏程序；
+2. 把 `bin/` 中运行所需的 Python 模块和默认配置复制进 App；
+3. 对 App 做本机 ad-hoc 签名；
+4. 在项目根目录生成 `Codex Traffic Sentinel.app`。
+
+每次源码更新后重新运行 `./bin/build-menubar-app.sh` 即可覆盖本地 App。App 会自行启动唯一的内置采样器；退出 App 时采样器也会退出，不需要手动运行 Python 脚本。
 
 ## 日常使用
-
-直接打开项目根目录的 `Codex Traffic Sentinel.app`。App 会自行启动唯一的内置采样器，退出 App 时采样器也会退出，不需要手动运行脚本。
 
 菜单栏格式类似：
 
@@ -158,6 +181,6 @@ link_overhead_ratio = 0.20
 ## 开发
 
 ```sh
-bin/build-menubar-app.sh
+./bin/build-menubar-app.sh
 python3 -m unittest discover -s tests -v
 ```
