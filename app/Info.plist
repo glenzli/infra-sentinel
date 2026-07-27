@@ -8,6 +8,8 @@
   <string>Traffic Sentinel</string>
   <key>CFBundleExecutable</key>
   <string>TrafficSentinel</string>
+  <key>CFBundleIconFile</key>
+  <string>TrafficSentinel.icns</string>
   <key>CFBundleIdentifier</key>
   <string>com.local.codex-traffic-sentinel-menubar</string>
   <key>CFBundleInfoDictionaryVersion</key>
@@ -16,10 +18,10 @@
   <string>Traffic Sentinel</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
-	<key>CFBundleShortVersionString</key>
-	<string>1.3</string>
-	<key>CFBundleVersion</key>
-	<string>4</string>
+  <key>CFBundleShortVersionString</key>
+  <string>1.3</string>
+  <key>CFBundleVersion</key>
+  <string>5</string>
   <key>LSUIElement</key>
   <true/>
   <key>NSHighResolutionCapable</key>
