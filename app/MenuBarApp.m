@@ -2,25 +2,7 @@
 #import <UserNotifications/UserNotifications.h>
 #import "DashboardController.h"
 #import "Localization.h"
-
-static NSString *FormatBytes(long long value) {
-    NSArray<NSString *> *units = @[ @"B", @"KiB", @"MiB", @"GiB", @"TiB" ];
-    double number = (double)value;
-    for (NSString *unit in units) {
-        if (number < 1024.0 || [unit isEqualToString:units.lastObject]) {
-            return [unit isEqualToString:@"B"]
-                ? [NSString stringWithFormat:@"%lld B", (long long)number]
-                : [NSString stringWithFormat:@"%.1f %@", number, unit];
-        }
-        number /= 1024.0;
-    }
-    return @"0 B";
-}
-
-static NSString *FormatRate(long long value, double seconds) {
-    long long perSecond = seconds > 0.0 ? (long long)((double)value / seconds) : value;
-    return [NSString stringWithFormat:@"%@/s", FormatBytes(perSecond)];
-}
+#import "TrafficFormatting.h"
 
 static NSDictionary *DictionaryValue(id value) {
     return [value isKindOfClass:[NSDictionary class]] ? value : @{};
@@ -31,7 +13,6 @@ static NSDictionary *DictionaryValue(id value) {
 @property(nonatomic, copy) NSString *statePath;
 @property(nonatomic, copy) NSString *configPath;
 @property(nonatomic, copy) NSString *helperPath;
-@property(nonatomic, copy) NSString *hookHelperPath;
 @property(nonatomic, copy) NSString *migrationHelperPath;
 @property(nonatomic, copy) NSString *notificationStatePath;
 @property(nonatomic, copy) NSString *monitorStatus;
@@ -45,8 +26,6 @@ static NSDictionary *DictionaryValue(id value) {
 @property(nonatomic, copy) NSString *lastNotifiedEventID;
 @property(nonatomic, assign) BOOL hasLoadedInitialEvent;
 @property(nonatomic, assign) TSLanguage language;
-- (void)checkCodexIntegrationTrustAndOpenReview:(BOOL)openReview;
-- (void)openCodexHookReview;
 @end
 
 @implementation AppDelegate
@@ -55,14 +34,12 @@ static NSDictionary *DictionaryValue(id value) {
     NSString *storedLanguage = [[NSUserDefaults standardUserDefaults] stringForKey:@"TrafficSentinelLanguage"];
     self.language = TSLanguageFromIdentifier(storedLanguage);
     [self configurePaths];
-    self.menu = [[NSMenu alloc] initWithTitle:@"Codex Traffic Sentinel"];
+    self.menu = [[NSMenu alloc] initWithTitle:@"Traffic Sentinel"];
     self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
     self.statusItem.menu = self.menu;
     BOOL prepared = [self prepareSupportDirectory];
     self.monitorStatus = prepared ? TSLocalized(self.language, @"monitor.starting") : TSLocalized(self.language, @"monitor.init_failed");
-    self.dashboardController = [[DashboardController alloc] initWithStateDirectory:[self.supportPath stringByAppendingPathComponent:@"state"]
-                                                                  integrationTarget:self
-                                                                  integrationAction:@selector(installCodexIntegration:)];
+    self.dashboardController = [[DashboardController alloc] initWithStateDirectory:[self.supportPath stringByAppendingPathComponent:@"state"]];
     [self.dashboardController setLanguage:self.language];
     [self configureNotifications];
     if (prepared) {
@@ -100,7 +77,6 @@ static NSDictionary *DictionaryValue(id value) {
     self.configPath = [self.supportPath stringByAppendingPathComponent:@"config.toml"];
     self.notificationStatePath = [self.supportPath stringByAppendingPathComponent:@"notification-state.json"];
     self.helperPath = [[NSBundle mainBundle] pathForResource:@"sentinel" ofType:@"py" inDirectory:@"Sentinel"];
-    self.hookHelperPath = [[NSBundle mainBundle] pathForResource:@"codex_hook" ofType:@"py" inDirectory:@"Sentinel"];
     self.migrationHelperPath = [[NSBundle mainBundle] pathForResource:@"config_migration" ofType:@"py" inDirectory:@"Sentinel"];
 }
 
@@ -129,7 +105,7 @@ static NSDictionary *DictionaryValue(id value) {
         return NO;
     }
     [migration waitUntilExit];
-    return migration.terminationStatus == 0 && self.helperPath.length > 0 && self.hookHelperPath.length > 0;
+    return migration.terminationStatus == 0 && self.helperPath.length > 0;
 }
 
 - (void)startSentinelIfNeeded {
@@ -217,7 +193,7 @@ static NSDictionary *DictionaryValue(id value) {
 }
 
 - (NSString *)notificationTitleForEvent:(NSDictionary *)event {
-    NSString *group = [event[@"alert_group"] isKindOfClass:[NSString class]] ? event[@"alert_group"] : @"Codex";
+    NSString *group = [event[@"alert_group"] isKindOfClass:[NSString class]] ? event[@"alert_group"] : @"Mihomo";
     NSString *type = [event[@"type"] isKindOfClass:[NSString class]] ? event[@"type"] : @"alert";
     NSString *level = [event[@"level"] isKindOfClass:[NSString class]] ? event[@"level"] : @"warning";
     if ([type isEqualToString:@"recovered"]) {
@@ -243,9 +219,9 @@ static NSDictionary *DictionaryValue(id value) {
     NSString *level = [event[@"level"] isKindOfClass:[NSString class]] ? event[@"level"] : @"warning";
     if ([level isEqualToString:@"critical"]) {
         long long total = [critical[@"up_bytes"] longLongValue] + [critical[@"down_bytes"] longLongValue];
-        return [NSString stringWithFormat:TSLocalized(self.language, @"notification.critical_body"), FormatBytes(total)];
+        return [NSString stringWithFormat:TSLocalized(self.language, @"notification.critical_body"), TSFormatBytes(total)];
     }
-    return [NSString stringWithFormat:TSLocalized(self.language, @"notification.warning_body"), FormatBytes([warning[@"up_bytes"] longLongValue]), FormatBytes([warning[@"down_bytes"] longLongValue])];
+    return [NSString stringWithFormat:TSLocalized(self.language, @"notification.warning_body"), TSFormatBytes([warning[@"up_bytes"] longLongValue]), TSFormatBytes([warning[@"down_bytes"] longLongValue])];
 }
 
 - (void)deliverNotificationForEventIfNeeded:(NSDictionary *)event {
@@ -301,7 +277,6 @@ static NSDictionary *DictionaryValue(id value) {
 
 - (void)addFooterItems {
     [self.menu addItem:[NSMenuItem separatorItem]];
-    [self addActionItem:TSLocalized(self.language, @"menu.install") action:@selector(installCodexIntegration:)];
     [self addActionItem:TSLocalized(self.language, @"menu.restart") action:@selector(restartSentinel:)];
     [self addActionItem:TSLocalized(self.language, @"menu.edit") action:@selector(openConfig:)];
     [self addActionItem:TSLocalized(self.language, @"menu.state") action:@selector(showStateFolder:)];
@@ -340,27 +315,30 @@ static NSDictionary *DictionaryValue(id value) {
         return;
     }
     NSDictionary *vps = DictionaryValue(state[@"vps"]);
-    NSDictionary *busiest = DictionaryValue(state[@"busiest_group"]);
+    NSDictionary *busiest = DictionaryValue(state[@"busiest_service"]);
     NSDictionary *session = DictionaryValue(state[@"session"]);
     NSDictionary *sessionVps = DictionaryValue(session[@"vps"]);
+    NSDictionary *sessionKernel = DictionaryValue(session[@"kernel"]);
     NSDictionary *breakdown = DictionaryValue(session[@"breakdown"]);
     NSString *level = [state[@"level"] isKindOfClass:[NSString class]] ? state[@"level"] : @"none";
     NSString *marker = [level isEqualToString:@"critical"] ? @"⛔" : ([level isEqualToString:@"warning"] ? @"⚠︎" : @"⌁");
-    NSString *vpsTotal = [vps[@"enabled"] boolValue] ? FormatBytes([sessionVps[@"total_bytes"] longLongValue]) : @"—";
+    NSString *total = [vps[@"enabled"] boolValue]
+        ? TSFormatBytes([sessionVps[@"total_bytes"] longLongValue])
+        : TSFormatBytes([sessionKernel[@"total_bytes"] longLongValue]);
     NSString *busiestLabel = busiest.count > 0 ? TSLocalizedGroupLabel(self.language, busiest) : TSLocalized(self.language, @"status.local");
     double observedSeconds = [state[@"observed_seconds"] doubleValue];
-    self.statusItem.button.title = [NSString stringWithFormat:@"%@ T%@ · %@ %@", marker, vpsTotal, busiestLabel, FormatRate([busiest[@"up_bytes"] longLongValue] + [busiest[@"down_bytes"] longLongValue], observedSeconds)];
+    self.statusItem.button.title = [NSString stringWithFormat:@"%@ T%@ · %@ %@", marker, total, busiestLabel, TSFormatRate([busiest[@"up_bytes"] longLongValue] + [busiest[@"down_bytes"] longLongValue], observedSeconds)];
 
     [self addActionItem:TSLocalized(self.language, @"menu.open") action:@selector(showDashboard:)];
     [self addActionItem:TSLocalized(self.language, @"button.reset") action:@selector(resetSession:)];
     NSString *started = [session[@"started_at"] isKindOfClass:[NSString class]] ? session[@"started_at"] : TSLocalized(self.language, @"session.waiting");
     [self addDisabledItem:[NSString stringWithFormat:TSLocalized(self.language, @"session.menu_format"), started]];
-    double multiplier = [breakdown[@"effective_multiplier"] doubleValue];
-    id otherDevices = breakdown[@"other_devices_logical_estimated_bytes"];
-    if ([otherDevices respondsToSelector:@selector(longLongValue)]) {
-        [self addDisabledItem:[NSString stringWithFormat:TSLocalized(self.language, @"estimate.menu_format"), multiplier, FormatBytes([otherDevices longLongValue])]];
+    if ([breakdown[@"empirical_ready"] boolValue]) {
+        [self addDisabledItem:[NSString stringWithFormat:TSLocalized(self.language, @"estimate.menu_format"),
+                               [breakdown[@"observed_multiplier"] doubleValue],
+                               [breakdown[@"billable_overhead_share"] doubleValue] * 100.0]];
     } else {
-        [self addDisabledItem:[NSString stringWithFormat:TSLocalized(self.language, @"estimate.menu_waiting_format"), multiplier]];
+        [self addDisabledItem:TSLocalized(self.language, @"estimate.menu_waiting_format")];
     }
     NSDictionary *event = DictionaryValue(state[@"last_event"]);
     [self deliverNotificationForEventIfNeeded:event];
@@ -388,130 +366,6 @@ static NSDictionary *DictionaryValue(id value) {
         [self startSentinelIfNeeded];
         [self refresh:nil];
     });
-}
-
-- (void)installCodexIntegration:(id)sender {
-    if (self.hookHelperPath.length == 0) {
-        [self.dashboardController showNotice:[NSString stringWithFormat:TSLocalized(self.language, @"notice.install_failed"), TSLocalized(self.language, @"error.unknown")]];
-        return;
-    }
-    [self.dashboardController showNotice:TSLocalized(self.language, @"notice.installing")];
-    NSTask *task = [[NSTask alloc] init];
-    task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/env"];
-    task.arguments = @[ @"python3", self.hookHelperPath, @"--install", @"--support-dir", self.supportPath ];
-    NSMutableDictionary<NSString *, NSString *> *environment = [NSProcessInfo processInfo].environment.mutableCopy;
-    environment[@"PATH"] = @"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
-    environment[@"PYTHONDONTWRITEBYTECODE"] = @"1";
-    task.environment = environment;
-    NSPipe *output = [NSPipe pipe];
-    task.standardOutput = output;
-    task.standardError = output;
-    __weak typeof(self) weakSelf = self;
-    task.terminationHandler = ^(NSTask *finishedTask) {
-        NSData *data = [output.fileHandleForReading readDataToEndOfFile];
-        NSString *details = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            AppDelegate *strongSelf = weakSelf;
-            if (strongSelf == nil) {
-                return;
-            }
-            if (finishedTask.terminationStatus == 0) {
-                [strongSelf checkCodexIntegrationTrustAndOpenReview:YES];
-            } else {
-                NSString *message = [details stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-                [strongSelf.dashboardController showNotice:[NSString stringWithFormat:TSLocalized(strongSelf.language, @"notice.install_failed"), message.length > 0 ? message : TSLocalized(strongSelf.language, @"error.unknown")]];
-            }
-        });
-    };
-    NSError *error = nil;
-    if (![task launchAndReturnError:&error]) {
-        [self.dashboardController showNotice:[NSString stringWithFormat:TSLocalized(self.language, @"notice.install_failed"), error.localizedDescription ?: TSLocalized(self.language, @"error.unknown")]];
-    }
-}
-
-- (void)checkCodexIntegrationTrustAndOpenReview:(BOOL)openReview {
-    NSTask *task = [[NSTask alloc] init];
-    task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/env"];
-    task.arguments = @[ @"python3", self.hookHelperPath, @"--runtime-status", @"--cwd", self.supportPath ];
-    NSMutableDictionary<NSString *, NSString *> *environment = [NSProcessInfo processInfo].environment.mutableCopy;
-    environment[@"PATH"] = @"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
-    environment[@"PYTHONDONTWRITEBYTECODE"] = @"1";
-    task.environment = environment;
-    NSPipe *output = [NSPipe pipe];
-    task.standardOutput = output;
-    task.standardError = output;
-    __weak typeof(self) weakSelf = self;
-    task.terminationHandler = ^(NSTask *finishedTask) {
-        NSData *data = [output.fileHandleForReading readDataToEndOfFile];
-        id parsed = data.length > 0 ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
-        NSDictionary *status = [parsed isKindOfClass:[NSDictionary class]] ? parsed : @{};
-        dispatch_async(dispatch_get_main_queue(), ^{
-            AppDelegate *strongSelf = weakSelf;
-            if (strongSelf == nil) {
-                return;
-            }
-            NSString *state = [status[@"status"] isKindOfClass:[NSString class]] ? status[@"status"] : @"error";
-            if (finishedTask.terminationStatus == 0 && [state isEqualToString:@"trusted"]) {
-                [strongSelf.dashboardController showNotice:TSLocalized(strongSelf.language, @"notice.trusted")];
-                return;
-            }
-            if (finishedTask.terminationStatus == 0 && [state isEqualToString:@"review_required"]) {
-                [strongSelf.dashboardController showNotice:TSLocalized(strongSelf.language, @"notice.review_required")];
-                if (openReview) {
-                    [strongSelf openCodexHookReview];
-                }
-                return;
-            }
-            NSString *message = [status[@"error"] isKindOfClass:[NSString class]]
-                ? status[@"error"]
-                : TSLocalized(strongSelf.language, @"error.unknown");
-            [strongSelf.dashboardController showNotice:[NSString stringWithFormat:TSLocalized(strongSelf.language, @"notice.status_failed"), message]];
-            if (openReview) {
-                [strongSelf openCodexHookReview];
-            }
-        });
-    };
-    NSError *error = nil;
-    if (![task launchAndReturnError:&error]) {
-        [self.dashboardController showNotice:[NSString stringWithFormat:TSLocalized(self.language, @"notice.status_failed"), error.localizedDescription ?: TSLocalized(self.language, @"error.unknown")]];
-        if (openReview) {
-            [self openCodexHookReview];
-        }
-    }
-}
-
-- (void)openCodexHookReview {
-    NSArray<NSString *> *candidates = @[
-        @"/Applications/ChatGPT.app/Contents/Resources/codex",
-        @"/Applications/Codex.app/Contents/Resources/codex",
-    ];
-    NSString *codexPath = nil;
-    for (NSString *candidate in candidates) {
-        if ([[NSFileManager defaultManager] isExecutableFileAtPath:candidate]) {
-            codexPath = candidate;
-            break;
-        }
-    }
-    if (codexPath == nil) {
-        [self.dashboardController showNotice:[NSString stringWithFormat:TSLocalized(self.language, @"notice.review_launch_failed"), TSLocalized(self.language, @"error.unknown")]];
-        return;
-    }
-    NSString *escapedCommand = [NSString stringWithFormat:@"%@ --no-alt-screen", codexPath];
-    NSString *source = [NSString stringWithFormat:
-        @"tell application \"Terminal\"\n"
-         "activate\n"
-         "do script \"%@\"\n"
-         "end tell",
-        escapedCommand
-    ];
-    NSDictionary *errorInfo = nil;
-    NSAppleScript *script = [[NSAppleScript alloc] initWithSource:source];
-    if ([script executeAndReturnError:&errorInfo] == nil && errorInfo != nil) {
-        NSString *message = [errorInfo[NSAppleScriptErrorMessage] isKindOfClass:[NSString class]]
-            ? errorInfo[NSAppleScriptErrorMessage]
-            : TSLocalized(self.language, @"error.unknown");
-        [self.dashboardController showNotice:[NSString stringWithFormat:TSLocalized(self.language, @"notice.review_launch_failed"), message]];
-    }
 }
 
 - (void)changeLanguage:(NSMenuItem *)sender {

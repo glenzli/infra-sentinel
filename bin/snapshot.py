@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Create privacy-bounded evidence snapshots for traffic alert events."""
+"""Create privacy-bounded Mihomo attribution snapshots for traffic alerts."""
 
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
-import subprocess
 import sys
 import uuid
 from typing import Any
@@ -14,45 +13,12 @@ from typing import Any
 from sentinel import Config, ensure_state_dir, iso_now, latest_jsonl, read_config
 
 
-MAX_CONNECTIONS = 100
-
-
-def connection_summary(pids: list[int]) -> list[dict[str, Any]]:
-    """Record only endpoint summaries for alert-correlated Codex PIDs."""
-    summaries: list[dict[str, Any]] = []
-    for pid in sorted(set(pids)):
-        try:
-            completed = subprocess.run(
-                ["/usr/sbin/lsof", "-nP", "-a", "-p", str(pid), "-iTCP", "-sTCP:ESTABLISHED", "-Fpcn"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            continue
-        current: dict[str, Any] = {"pid": pid, "process": None, "connections": []}
-        for line in completed.stdout.splitlines():
-            marker, value = line[0], line[1:]
-            if marker == "p":
-                current["pid"] = int(value) if value.isdigit() else pid
-            elif marker == "c":
-                current["process"] = value
-            elif marker == "n" and len(current["connections"]) < MAX_CONNECTIONS:
-                current["connections"].append(value)
-        if current["connections"]:
-            summaries.append(current)
-    return summaries
-
-
 def create_snapshot(config: Config, event: dict[str, Any]) -> Path:
-    """Persist only process and network metadata. No workspace traversal occurs."""
+    """Persist aggregate domains and counters without packet or content capture."""
     ensure_state_dir(config)
-    alert_group = str(event.get("alert_group", config.monitor.alert_group))
-    group_processes = event.get("sample", {}).get("processes", {}).get(alert_group, [])
-    pids = [item["pid"] for item in group_processes if isinstance(item.get("pid"), int)]
+    sample = event.get("sample", {})
     snapshot = {
-        "schema": 1,
+        "schema": 2,
         "created_at": iso_now(),
         "event": {
             "id": event.get("id"),
@@ -62,17 +28,18 @@ def create_snapshot(config: Config, event: dict[str, Any]) -> Path:
         },
         "privacy": {
             "packet_capture": False,
-            "file_contents_read": False,
+            "request_contents_read": False,
             "prompts_recorded": False,
-            "workspace_traversal": False,
+            "paths_recorded": False,
+            "active_domains_only": True,
         },
-        "alert_group": alert_group,
-        "process_deltas": group_processes,
-        "connections": connection_summary(pids),
-        "active_processes": [
-            {"pid": item.get("pid"), "name": item.get("name")}
-            for item in group_processes
-        ],
+        "mihomo": {
+            "kernel": sample.get("kernel", {}),
+            "services": sample.get("services", []),
+            "routes": sample.get("routes", {}),
+            "attribution": sample.get("attribution", {}),
+            "active_connections": sample.get("active_connections", 0),
+        },
     }
     target = config.state_dir / "snapshots" / f"{event.get('id', uuid.uuid4().hex)}.json"
     temporary = target.with_suffix(".tmp")
@@ -84,7 +51,7 @@ def create_snapshot(config: Config, event: dict[str, Any]) -> Path:
 def manual_event(config: Config) -> dict[str, Any]:
     sample = latest_jsonl(config.state_dir / "samples.jsonl")
     if sample is None:
-        raise RuntimeError("尚无 samples.jsonl；请先打开 Codex Traffic Sentinel App")
+        raise RuntimeError("尚无 samples.jsonl；请先打开 Traffic Sentinel App")
     return {
         "id": f"manual-{uuid.uuid4().hex}",
         "type": "manual",
@@ -95,7 +62,7 @@ def manual_event(config: Config) -> dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="生成不含内容与提示词的 Codex 流量证据快照")
+    parser = argparse.ArgumentParser(description="生成不含请求内容的 Mihomo 流量证据快照")
     parser.add_argument("--config", type=Path, help="TOML 配置文件")
     args = parser.parse_args()
     try:

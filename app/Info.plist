@@ -5,21 +5,21 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>Codex Traffic Sentinel</string>
+  <string>Traffic Sentinel</string>
   <key>CFBundleExecutable</key>
-  <string>CodexTrafficSentinel</string>
+  <string>TrafficSentinel</string>
   <key>CFBundleIdentifier</key>
   <string>com.local.codex-traffic-sentinel-menubar</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>Codex Traffic Sentinel</string>
+  <string>Traffic Sentinel</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.2</string>
+	<string>1.3</string>
 	<key>CFBundleVersion</key>
-	<string>3</string>
+	<string>4</string>
   <key>LSUIElement</key>
   <true/>
   <key>NSHighResolutionCapable</key>

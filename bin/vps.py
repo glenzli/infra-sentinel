@@ -8,15 +8,15 @@ from datetime import datetime
 import json
 from pathlib import Path
 import re
-import subprocess
 import time
 from typing import Any, Callable, Iterable
 
+from remote_ssh import run_read_only_script
 
-VPS_SAMPLE_SCHEMA = 2
-VPS_BASELINE_SCHEMA = 2
-SUPPORTED_VPS_SAMPLE_SCHEMAS = {1, VPS_SAMPLE_SCHEMA}
-HOST_ALIAS_RE = re.compile(r"[A-Za-z0-9._-]+\Z")
+
+VPS_SAMPLE_SCHEMA = 3
+VPS_BASELINE_SCHEMA = 3
+SUPPORTED_VPS_SAMPLE_SCHEMAS = {1, 2, VPS_SAMPLE_SCHEMA}
 INTERFACE_RE = re.compile(r"[A-Za-z0-9_.:-]+\Z")
 
 # This is deliberately static. The configured interface is passed as a shell
@@ -41,8 +41,15 @@ case "$interface" in
 esac
 rx_path=/sys/class/net/$interface/statistics/rx_bytes
 tx_path=/sys/class/net/$interface/statistics/tx_bytes
-[ -r "$rx_path" ] && [ -r "$tx_path" ] || { echo "interface counters unavailable" >&2; exit 4; }
-printf '%s\t%s\t%s\n' "$interface" "$(cat "$rx_path")" "$(cat "$tx_path")"
+rx_packets_path=/sys/class/net/$interface/statistics/rx_packets
+tx_packets_path=/sys/class/net/$interface/statistics/tx_packets
+[ -r "$rx_path" ] && [ -r "$tx_path" ] && [ -r "$rx_packets_path" ] && [ -r "$tx_packets_path" ] || {
+  echo "interface counters unavailable" >&2
+  exit 4
+}
+printf '%s\t%s\t%s\t%s\t%s\n' \
+  "$interface" "$(cat "$rx_path")" "$(cat "$tx_path")" \
+  "$(cat "$rx_packets_path")" "$(cat "$tx_packets_path")"
 """
 
 @dataclass(frozen=True)
@@ -74,39 +81,21 @@ def billing_cycle_start_epoch(day: int, now: float | None = None) -> float:
 
 def read_vps_counters(config: VpsConfig) -> dict[str, Any]:
     """Read one counter snapshot through the user's existing SSH host alias."""
-    if not HOST_ALIAS_RE.fullmatch(config.ssh_host):
-        raise ValueError("[vps] ssh_host 必须是 ssh config 中的主机别名")
     if config.interface != "auto" and not INTERFACE_RE.fullmatch(config.interface):
         raise ValueError("[vps] interface 只能是 auto 或合法网卡名")
-    command = [
-        "/usr/bin/ssh",
-        "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=yes",
-        "-o", "ConnectTimeout=10",
-        "-o", "ConnectionAttempts=1",
-        "-o", "ControlMaster=no",
-        "-o", "ControlPersist=no",
-        "-o", "ForwardAgent=no",
-        "-o", "ClearAllForwardings=yes",
-        config.ssh_host,
-        "/bin/sh", "-s", "--", config.interface,
-    ]
     try:
-        completed = subprocess.run(
-            command,
-            input=REMOTE_COUNTER_SCRIPT,
-            text=True,
-            capture_output=True,
-            timeout=15,
-            check=False,
+        completed = run_read_only_script(
+            config.ssh_host,
+            REMOTE_COUNTER_SCRIPT,
+            (config.interface,),
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError(f"VPS SSH 无法完成：{exc}") from exc
+    except (ValueError, RuntimeError) as exc:
+        raise type(exc)(f"[vps] {exc}") from exc
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip().replace("\n", " ")
         raise RuntimeError(f"VPS SSH 退出码 {completed.returncode}：{detail[:300]}")
     for line in completed.stdout.splitlines():
-        match = re.fullmatch(r"([A-Za-z0-9_.:-]+)\t(\d+)\t(\d+)", line.strip())
+        match = re.fullmatch(r"([A-Za-z0-9_.:-]+)\t(\d+)\t(\d+)\t(\d+)\t(\d+)", line.strip())
         if match:
             epoch = time.time()
             return {
@@ -115,6 +104,8 @@ def read_vps_counters(config: VpsConfig) -> dict[str, Any]:
                 "interface": match.group(1),
                 "in_bytes": int(match.group(2)),
                 "out_bytes": int(match.group(3)),
+                "in_packets": int(match.group(4)),
+                "out_packets": int(match.group(5)),
             }
     raise RuntimeError("VPS SSH 未返回可识别的网卡计数")
 
@@ -130,6 +121,15 @@ class VpsCounterTracker:
         same_interface = prior is not None and prior.get("interface") == raw["interface"]
         in_delta = raw["in_bytes"] - int(prior["in_bytes"]) if same_interface and raw["in_bytes"] >= int(prior["in_bytes"]) else 0
         out_delta = raw["out_bytes"] - int(prior["out_bytes"]) if same_interface and raw["out_bytes"] >= int(prior["out_bytes"]) else 0
+        packets_ready = bool(
+            same_interface
+            and "in_packets" in prior
+            and "out_packets" in prior
+            and raw["in_packets"] >= int(prior["in_packets"])
+            and raw["out_packets"] >= int(prior["out_packets"])
+        )
+        in_packets_delta = raw["in_packets"] - int(prior["in_packets"]) if packets_ready else 0
+        out_packets_delta = raw["out_packets"] - int(prior["out_packets"]) if packets_ready else 0
         try:
             interval_started_epoch = float(prior["epoch"]) if same_interface else None
         except (KeyError, TypeError, ValueError):
@@ -138,6 +138,8 @@ class VpsCounterTracker:
             "interface": raw["interface"],
             "in_bytes": int(raw["in_bytes"]),
             "out_bytes": int(raw["out_bytes"]),
+            "in_packets": int(raw["in_packets"]),
+            "out_packets": int(raw["out_packets"]),
             "epoch": float(raw["epoch"]),
         }
         return {
@@ -147,6 +149,9 @@ class VpsCounterTracker:
             "interface": raw["interface"],
             "in_bytes": in_delta,
             "out_bytes": out_delta,
+            "in_packets": in_packets_delta,
+            "out_packets": out_packets_delta,
+            "packet_counters_ready": packets_ready,
             "interval_started_epoch": interval_started_epoch,
         }
 
@@ -207,7 +212,7 @@ class VpsMonitor:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return VpsCounterTracker()
-        counter = payload.get("counter") if payload.get("schema") in {1, VPS_BASELINE_SCHEMA} else None
+        counter = payload.get("counter") if payload.get("schema") in {1, 2, VPS_BASELINE_SCHEMA} else None
         if not isinstance(counter, dict):
             return VpsCounterTracker()
         try:
@@ -216,8 +221,11 @@ class VpsMonitor:
                 "in_bytes": int(counter["in_bytes"]),
                 "out_bytes": int(counter["out_bytes"]),
             }
-            if payload.get("schema") == VPS_BASELINE_SCHEMA:
+            if payload.get("schema") in {2, VPS_BASELINE_SCHEMA}:
                 restored["epoch"] = float(counter["epoch"])
+            if payload.get("schema") == VPS_BASELINE_SCHEMA:
+                restored["in_packets"] = int(counter["in_packets"])
+                restored["out_packets"] = int(counter["out_packets"])
             return VpsCounterTracker(restored)
         except (KeyError, TypeError, ValueError):
             return VpsCounterTracker()

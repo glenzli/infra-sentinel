@@ -1,4 +1,4 @@
-"""Empirical VPS billing estimates and minute-normalized local traffic trends."""
+"""Aligned VPS/Xray billing analysis and minute-normalized local traffic trends."""
 
 from __future__ import annotations
 
@@ -7,53 +7,86 @@ from typing import Any, Iterable
 
 
 TREND_WINDOW_MINUTES = 15
+TYPICAL_TCP_FRAME_OVERHEAD_BYTES = 66
 
 
 @dataclass(frozen=True)
 class TrafficEstimationConfig:
-    proxy_group: str | None
     vps_billing_legs: float = 2.0
-    link_overhead_ratio: float = 0.20
-
-    @property
-    def effective_multiplier(self) -> float:
-        return self.vps_billing_legs * (1.0 + self.link_overhead_ratio)
 
 
 def estimate_traffic(
-    proxy_external_bytes: int,
-    project_bytes: int,
     vps_billable_bytes: int,
+    vps_packet_count: int,
+    packet_covered_bytes: int,
+    xray_logical_bytes: int,
     vps_ready: bool,
+    xray_ready: bool,
     config: TrafficEstimationConfig,
 ) -> dict[str, Any]:
-    """Split local and remote traffic using a conservative empirical ceiling."""
-    multiplier = config.effective_multiplier
-    local_other = max(0, proxy_external_bytes - project_bytes)
-    local_vps_ceiling = int(round(proxy_external_bytes * multiplier))
-    other_billable = max(0, vps_billable_bytes - local_vps_ceiling) if vps_ready else None
-    other_logical = int(round(other_billable / multiplier)) if other_billable is not None else None
-    return {
-        "method": "ceiling_conservative",
+    """Measure bill expansion and estimate packet versus connection overhead."""
+    empirical_ready = bool(vps_ready and xray_ready and xray_logical_bytes > 0)
+    result: dict[str, Any] = {
+        "method": "xray_empirical" if empirical_ready else "waiting_for_aligned_xray",
         "vps_billing_legs": config.vps_billing_legs,
-        "link_overhead_ratio": config.link_overhead_ratio,
-        "effective_multiplier": multiplier,
-        "project_total_bytes": project_bytes,
-        "local_other_estimated_bytes": local_other,
-        "local_vps_billable_ceiling_bytes": local_vps_ceiling,
-        "other_devices_billable_estimated_bytes": other_billable,
-        "other_devices_logical_estimated_bytes": other_logical,
+        "xray_logical_bytes": xray_logical_bytes,
+        "empirical_ready": empirical_ready,
+        "observed_multiplier": None,
+        "ideal_billable_bytes": None,
+        "billable_overhead_bytes": None,
+        "billable_overhead_ratio": None,
+        "billable_overhead_share": None,
+        "packet_breakdown_ready": False,
+        "average_packet_bytes": None,
+        "packet_overhead_estimated_bytes": None,
+        "packet_overhead_share_of_bill": None,
+        "connection_overhead_estimated_bytes": None,
+        "connection_overhead_share_of_bill": None,
     }
+    if not empirical_ready:
+        return result
+
+    ideal_billable = int(round(xray_logical_bytes * config.vps_billing_legs))
+    overhead_bytes = max(0, vps_billable_bytes - ideal_billable)
+    overhead_share = overhead_bytes / vps_billable_bytes if vps_billable_bytes > 0 else 0.0
+    result.update({
+        "observed_multiplier": vps_billable_bytes / xray_logical_bytes,
+        "ideal_billable_bytes": ideal_billable,
+        "billable_overhead_bytes": overhead_bytes,
+        "billable_overhead_ratio": overhead_bytes / ideal_billable if ideal_billable > 0 else 0.0,
+        "billable_overhead_share": overhead_share,
+    })
+
+    if vps_packet_count <= 0 or packet_covered_bytes <= 0:
+        return result
+
+    average_packet_bytes = packet_covered_bytes / vps_packet_count
+    sampled_packet_share = min(
+        1.0,
+        (vps_packet_count * TYPICAL_TCP_FRAME_OVERHEAD_BYTES) / packet_covered_bytes,
+    )
+    packet_share = min(overhead_share, sampled_packet_share)
+    packet_bytes = min(overhead_bytes, int(round(vps_billable_bytes * packet_share)))
+    connection_bytes = max(0, overhead_bytes - packet_bytes)
+    result.update({
+        "packet_breakdown_ready": True,
+        "average_packet_bytes": average_packet_bytes,
+        "packet_overhead_estimated_bytes": packet_bytes,
+        "packet_overhead_share_of_bill": packet_bytes / vps_billable_bytes if vps_billable_bytes > 0 else 0.0,
+        "connection_overhead_estimated_bytes": connection_bytes,
+        "connection_overhead_share_of_bill": connection_bytes / vps_billable_bytes if vps_billable_bytes > 0 else 0.0,
+    })
+    return result
 
 
 def minute_rate_trend(
     history: Iterable[dict[str, Any]],
-    group_ids: Iterable[str],
+    service_ids: Iterable[str],
     window_minutes: int = TREND_WINDOW_MINUTES,
 ) -> dict[str, Any]:
     """Aggregate uneven local samples into comparable bytes-per-minute rates."""
     points = [point for point in history if isinstance(point.get("epoch"), (int, float))]
-    ids = tuple(group_ids)
+    ids = tuple(service_ids)
     if not points:
         return {"unit": "bytes_per_minute", "window_minutes": window_minutes, "buckets": [], "peak_bytes_per_minute": 0}
     latest_epoch = max(float(point["epoch"]) for point in points)
@@ -68,16 +101,20 @@ def minute_rate_trend(
             bucket_epoch,
             {
                 "observed_seconds": 0.0,
-                "groups": {group_id: 0 for group_id in ids},
-                "proxy_external": 0,
+                "services": {service_id: 0 for service_id in ids},
+                "mihomo_total": 0,
+                "proxy_observed": 0,
+                "unattributed": 0,
             },
         )
         observed = max(0.0, float(point.get("observed_seconds", 0.0)))
         bucket["observed_seconds"] += observed
-        raw_groups = point.get("groups", {})
-        for group_id in ids:
-            bucket["groups"][group_id] += int(raw_groups.get(group_id, 0))
-        bucket["proxy_external"] += int(point.get("proxy_external", 0))
+        raw_services = point.get("services", {})
+        for service_id in ids:
+            bucket["services"][service_id] += int(raw_services.get(service_id, 0))
+        bucket["mihomo_total"] += int(point.get("mihomo_total", 0))
+        bucket["proxy_observed"] += int(point.get("proxy_observed", 0))
+        bucket["unattributed"] += int(point.get("unattributed", 0))
 
     normalized: list[dict[str, Any]] = []
     peak = 0
@@ -85,16 +122,20 @@ def minute_rate_trend(
         observed = float(bucket["observed_seconds"])
         if observed <= 0:
             continue
-        groups = {
-            group_id: int(round(int(value) * 60.0 / observed))
-            for group_id, value in bucket["groups"].items()
+        services = {
+            service_id: int(round(int(value) * 60.0 / observed))
+            for service_id, value in bucket["services"].items()
         }
-        proxy_rate = int(round(int(bucket["proxy_external"]) * 60.0 / observed))
-        peak = max([peak, proxy_rate, *groups.values()])
+        mihomo_rate = int(round(int(bucket["mihomo_total"]) * 60.0 / observed))
+        proxy_rate = int(round(int(bucket["proxy_observed"]) * 60.0 / observed))
+        unattributed_rate = int(round(int(bucket["unattributed"]) * 60.0 / observed))
+        peak = max([peak, mihomo_rate, proxy_rate, unattributed_rate, *services.values()])
         normalized.append({
             "epoch": epoch,
-            "groups": groups,
-            "proxy_external": proxy_rate,
+            "services": services,
+            "mihomo_total": mihomo_rate,
+            "proxy_observed": proxy_rate,
+            "unattributed": unattributed_rate,
         })
     return {
         "unit": "bytes_per_minute",

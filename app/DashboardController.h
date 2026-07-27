@@ -3,9 +3,7 @@
 
 @interface DashboardController : NSObject
 
-- (instancetype)initWithStateDirectory:(NSString *)stateDirectory
-                      integrationTarget:(id)integrationTarget
-                      integrationAction:(SEL)integrationAction;
+- (instancetype)initWithStateDirectory:(NSString *)stateDirectory;
 - (void)setLanguage:(TSLanguage)language;
 - (void)updateWithState:(NSDictionary *)state;
 - (void)showDashboard:(id)sender;

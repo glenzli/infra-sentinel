@@ -1,4 +1,4 @@
-"""A resettable, aligned observation session for the dashboard."""
+"""Resettable Mihomo-domain and remote-billing observation sessions."""
 
 from __future__ import annotations
 
@@ -8,16 +8,16 @@ from pathlib import Path
 import time
 from typing import Any
 
-from proxy_segments import CATEGORIES
 from traffic_estimation import TrafficEstimationConfig, estimate_traffic, minute_rate_trend
 from vps import VPS_SAMPLE_SCHEMA
 
 
-SESSION_SCHEMA = 2
+SESSION_SCHEMA = 4
 RESET_REQUEST_SCHEMA = 1
 HISTORY_LIMIT = 2_000
 HISTORY_WINDOW_SECONDS = 15 * 60
 RESET_REQUEST_NAME = "session-reset.request.json"
+ROUTES = ("proxy", "direct", "blocked", "unknown", "unattributed")
 
 
 def iso_now(epoch: float | None = None) -> str:
@@ -41,35 +41,67 @@ def consume_reset_request(state_dir: Path) -> dict[str, Any] | None:
 
 
 class SessionMeter:
-    """Persist one user-started comparison session without changing bill cycles."""
+    """Persist one user-started comparison across Mihomo, Xray, and VPS."""
 
-    def __init__(self, state_dir: Path, group_ids: tuple[str, ...]) -> None:
+    def __init__(self, state_dir: Path) -> None:
         self.state_dir = state_dir
-        self.group_ids = group_ids
         self.started_epoch: float | None = None
         self.started_reason = ""
-        self.groups: dict[str, dict[str, int]] = {}
-        self.proxy_categories: dict[str, dict[str, int]] = {}
-        self.vps = {"in_bytes": 0, "out_bytes": 0}
+        self.kernel = self._empty_traffic()
+        self.services: dict[str, dict[str, Any]] = {}
+        self.routes = self._empty_routes()
+        self.attribution_observed_bytes = 0
+        self.attribution_unattributed_bytes = 0
+        self.vps = self._empty_vps()
         self.vps_baselined_at: float | None = None
         self.last_vps_sample_epoch: float | None = None
         self.vps_intervals = 0
+        self.vps_packet_intervals = 0
         self.history: list[dict[str, Any]] = []
-        self._clear()
         self._load()
 
     @property
     def path(self) -> Path:
         return self.state_dir / "session.json"
 
+    @staticmethod
+    def _empty_traffic() -> dict[str, int]:
+        return {"up_bytes": 0, "down_bytes": 0}
+
+    @classmethod
+    def _empty_routes(cls) -> dict[str, dict[str, int]]:
+        return {route: cls._empty_traffic() for route in ROUTES}
+
+    @staticmethod
+    def _empty_vps() -> dict[str, int]:
+        return {
+            "in_bytes": 0,
+            "out_bytes": 0,
+            "in_packets": 0,
+            "out_packets": 0,
+            "packet_covered_bytes": 0,
+        }
+
     def _clear(self) -> None:
-        self.groups = {group_id: {"up_bytes": 0, "down_bytes": 0} for group_id in self.group_ids}
-        self.proxy_categories = {category: {"up_bytes": 0, "down_bytes": 0} for category in CATEGORIES}
-        self.vps = {"in_bytes": 0, "out_bytes": 0}
+        self.kernel = self._empty_traffic()
+        self.services = {}
+        self.routes = self._empty_routes()
+        self.attribution_observed_bytes = 0
+        self.attribution_unattributed_bytes = 0
+        self.vps = self._empty_vps()
         self.vps_baselined_at = None
         self.last_vps_sample_epoch = None
         self.vps_intervals = 0
+        self.vps_packet_intervals = 0
         self.history = []
+
+    @staticmethod
+    def _traffic(raw: Any) -> dict[str, int]:
+        raw = raw if isinstance(raw, dict) else {}
+        return {
+            "up_bytes": max(0, int(raw.get("up_bytes", 0))),
+            "down_bytes": max(0, int(raw.get("down_bytes", 0))),
+        }
 
     def _load(self) -> None:
         try:
@@ -82,18 +114,33 @@ class SessionMeter:
             started = payload.get("started_epoch")
             self.started_epoch = float(started) if started is not None else None
             self.started_reason = str(payload.get("started_reason", ""))
-            saved_groups = payload.get("groups", {})
-            for group_id in self.group_ids:
-                current = saved_groups.get(group_id, {})
-                self.groups[group_id] = {"up_bytes": int(current.get("up_bytes", 0)), "down_bytes": int(current.get("down_bytes", 0))}
-            saved_categories = payload.get("proxy_categories", {})
-            for category in CATEGORIES:
-                current = saved_categories.get(category, {})
-                self.proxy_categories[category] = {"up_bytes": int(current.get("up_bytes", 0)), "down_bytes": int(current.get("down_bytes", 0))}
+            self.kernel = self._traffic(payload.get("kernel"))
+            self.services = {}
+            for service_id, raw_service in payload.get("services", {}).items():
+                if not isinstance(raw_service, dict):
+                    continue
+                traffic = self._traffic(raw_service)
+                self.services[str(service_id)] = {
+                    "id": str(service_id),
+                    "label": str(raw_service.get("label", service_id)),
+                    **traffic,
+                }
+            self.routes = self._empty_routes()
+            for route in ROUTES:
+                self.routes[route] = self._traffic(payload.get("routes", {}).get(route))
+            attribution = payload.get("attribution", {})
+            self.attribution_observed_bytes = max(0, int(attribution.get("observed_bytes", 0)))
+            self.attribution_unattributed_bytes = max(0, int(attribution.get("unattributed_bytes", 0)))
             saved_vps = payload.get("vps", {})
-            self.vps = {"in_bytes": int(saved_vps.get("in_bytes", 0)), "out_bytes": int(saved_vps.get("out_bytes", 0))}
-            default_intervals = 1 if self.vps["in_bytes"] + self.vps["out_bytes"] > 0 else 0
-            self.vps_intervals = int(payload.get("vps_intervals", default_intervals))
+            self.vps = {
+                "in_bytes": max(0, int(saved_vps.get("in_bytes", 0))),
+                "out_bytes": max(0, int(saved_vps.get("out_bytes", 0))),
+                "in_packets": max(0, int(saved_vps.get("in_packets", 0))),
+                "out_packets": max(0, int(saved_vps.get("out_packets", 0))),
+                "packet_covered_bytes": max(0, int(saved_vps.get("packet_covered_bytes", 0))),
+            }
+            self.vps_intervals = max(0, int(payload.get("vps_intervals", 0)))
+            self.vps_packet_intervals = max(0, int(payload.get("vps_packet_intervals", 0)))
             baseline = payload.get("vps_baselined_at")
             self.vps_baselined_at = float(baseline) if baseline is not None else None
             latest = payload.get("last_vps_sample_epoch")
@@ -110,10 +157,16 @@ class SessionMeter:
             "schema": SESSION_SCHEMA,
             "started_epoch": self.started_epoch,
             "started_reason": self.started_reason,
-            "groups": self.groups,
-            "proxy_categories": self.proxy_categories,
+            "kernel": self.kernel,
+            "services": self.services,
+            "routes": self.routes,
+            "attribution": {
+                "observed_bytes": self.attribution_observed_bytes,
+                "unattributed_bytes": self.attribution_unattributed_bytes,
+            },
             "vps": self.vps,
             "vps_intervals": self.vps_intervals,
+            "vps_packet_intervals": self.vps_packet_intervals,
             "vps_baselined_at": self.vps_baselined_at,
             "last_vps_sample_epoch": self.last_vps_sample_epoch,
             "history": self.history,
@@ -140,19 +193,40 @@ class SessionMeter:
             pass
         self._save()
 
-    def record(self, sample: dict[str, Any], proxy_sample: dict[str, Any], vps_state: dict[str, Any]) -> None:
+    @staticmethod
+    def _add(target: dict[str, int], source: Any) -> None:
+        source = source if isinstance(source, dict) else {}
+        target["up_bytes"] += max(0, int(source.get("up_bytes", 0)))
+        target["down_bytes"] += max(0, int(source.get("down_bytes", 0)))
+
+    def record(self, sample: dict[str, Any], vps_state: dict[str, Any]) -> None:
         if self.started_epoch is None:
             self.reset(float(sample["epoch"]), "automatic")
             self.set_vps_baseline(vps_state)
             return
-        for group_id in self.group_ids:
-            traffic = sample.get("groups", {}).get(group_id, {})
-            self.groups[group_id]["up_bytes"] += int(traffic.get("up_bytes", 0))
-            self.groups[group_id]["down_bytes"] += int(traffic.get("down_bytes", 0))
-        for category in CATEGORIES:
-            traffic = proxy_sample.get("categories", {}).get(category, {})
-            self.proxy_categories[category]["up_bytes"] += int(traffic.get("up_bytes", 0))
-            self.proxy_categories[category]["down_bytes"] += int(traffic.get("down_bytes", 0))
+
+        self._add(self.kernel, sample.get("kernel"))
+        interval_services: dict[str, int] = {}
+        for raw_service in sample.get("services", []):
+            if not isinstance(raw_service, dict):
+                continue
+            service_id = str(raw_service.get("id", "unknown_host"))
+            service = self.services.setdefault(service_id, {
+                "id": service_id,
+                "label": str(raw_service.get("label", service_id)),
+                "up_bytes": 0,
+                "down_bytes": 0,
+            })
+            self._add(service, raw_service)
+            interval_services[service_id] = (
+                max(0, int(raw_service.get("up_bytes", 0)))
+                + max(0, int(raw_service.get("down_bytes", 0)))
+            )
+        for route in ROUTES:
+            self._add(self.routes[route], sample.get("routes", {}).get(route))
+        attribution = sample.get("attribution", {})
+        self.attribution_observed_bytes += max(0, int(attribution.get("observed_bytes", 0)))
+        self.attribution_unattributed_bytes += max(0, int(attribution.get("unattributed_bytes", 0)))
 
         last = vps_state.get("last_sample", {})
         try:
@@ -163,74 +237,140 @@ class SessionMeter:
             interval_start = None
         if vps_epoch is not None and vps_epoch != self.last_vps_sample_epoch:
             self.last_vps_sample_epoch = vps_epoch
-            if self.vps_baselined_at is None or (self.started_epoch is not None and interval_start is not None and interval_start >= self.started_epoch):
-                self.vps["in_bytes"] += int(last.get("in_bytes", 0))
-                self.vps["out_bytes"] += int(last.get("out_bytes", 0))
+            if self.vps_baselined_at is None or (
+                self.started_epoch is not None
+                and interval_start is not None
+                and interval_start >= self.started_epoch
+            ):
+                interval_in = max(0, int(last.get("in_bytes", 0)))
+                interval_out = max(0, int(last.get("out_bytes", 0)))
+                self.vps["in_bytes"] += interval_in
+                self.vps["out_bytes"] += interval_out
                 self.vps_intervals += 1
+                if last.get("packet_counters_ready"):
+                    self.vps["in_packets"] += max(0, int(last.get("in_packets", 0)))
+                    self.vps["out_packets"] += max(0, int(last.get("out_packets", 0)))
+                    self.vps["packet_covered_bytes"] += interval_in + interval_out
+                    self.vps_packet_intervals += 1
             self.vps_baselined_at = vps_epoch
 
-        external = proxy_sample.get("categories", {}).get("external", {})
+        kernel = sample.get("kernel", {})
+        routes = sample.get("routes", {})
         self.history.append({
             "epoch": float(sample["epoch"]),
             "observed_seconds": float(sample.get("observed_seconds", 0.0)),
-            "groups": {group_id: int(sample.get("groups", {}).get(group_id, {}).get("up_bytes", 0)) + int(sample.get("groups", {}).get(group_id, {}).get("down_bytes", 0)) for group_id in self.group_ids},
-            "proxy_external": int(external.get("up_bytes", 0)) + int(external.get("down_bytes", 0)),
+            "services": interval_services,
+            "mihomo_total": max(0, int(kernel.get("total_bytes", 0))),
+            "proxy_observed": max(0, int(routes.get("proxy", {}).get("total_bytes", 0))),
+            "unattributed": max(0, int(attribution.get("unattributed_bytes", 0))),
         })
         cutoff = float(sample["epoch"]) - HISTORY_WINDOW_SECONDS
-        self.history = [point for point in self.history[-HISTORY_LIMIT:] if float(point.get("epoch", 0)) >= cutoff]
+        self.history = [
+            point
+            for point in self.history[-HISTORY_LIMIT:]
+            if float(point.get("epoch", 0)) >= cutoff
+        ]
         self._save()
 
     def snapshot(
         self,
-        labels: dict[str, str],
-        roles: dict[str, str],
         vps_enabled: bool,
         estimation_config: TrafficEstimationConfig,
+        xray_stats: dict[str, Any] | None = None,
         now: float | None = None,
     ) -> dict[str, Any]:
-        groups = []
-        for group_id in self.group_ids:
-            traffic = self.groups[group_id]
-            groups.append({
-                "id": group_id,
-                "label": labels.get(group_id, group_id),
-                "role": roles.get(group_id, "attribution"),
+        services = []
+        for service in self.services.values():
+            up_bytes = int(service["up_bytes"])
+            down_bytes = int(service["down_bytes"])
+            services.append({
+                "id": service["id"],
+                "label": service["label"],
+                "up_bytes": up_bytes,
+                "down_bytes": down_bytes,
+                "total_bytes": up_bytes + down_bytes,
+            })
+        services.sort(key=lambda service: int(service["total_bytes"]), reverse=True)
+        attributed_services = [service for service in services if service["id"] != "unattributed"]
+        visible_services = attributed_services[:3]
+        if len(attributed_services) > 3:
+            visible_services.append({
+                "id": "other_domains",
+                "label": "Other domains",
+                "up_bytes": 0,
+                "down_bytes": 0,
+                "total_bytes": sum(int(service["total_bytes"]) for service in attributed_services[3:]),
+            })
+
+        route_rows = []
+        for route in ROUTES:
+            traffic = self.routes[route]
+            route_rows.append({
+                "id": route,
                 **traffic,
                 "total_bytes": traffic["up_bytes"] + traffic["down_bytes"],
             })
-        proxy_categories = []
-        for category in CATEGORIES:
-            traffic = self.proxy_categories[category]
-            proxy_categories.append({"id": category, **traffic, "total_bytes": traffic["up_bytes"] + traffic["down_bytes"]})
-        proxy_external_total = self.proxy_categories["external"]["up_bytes"] + self.proxy_categories["external"]["down_bytes"]
+        route_by_id = {row["id"]: row for row in route_rows}
+        kernel_total = self.kernel["up_bytes"] + self.kernel["down_bytes"]
+        proxy_observed = int(route_by_id["proxy"]["total_bytes"])
+        unattributed = int(route_by_id["unattributed"]["total_bytes"])
+        domain_attributed = max(0, kernel_total - unattributed)
         vps_total = self.vps["in_bytes"] + self.vps["out_bytes"]
-        project_groups = sorted((group for group in groups if group["role"] == "attribution"), key=lambda group: group["total_bytes"], reverse=True)
-        project_total = sum(group["total_bytes"] for group in project_groups)
-        visible_projects = project_groups[:3]
-        if len(project_groups) > 3:
-            remaining_total = sum(group["total_bytes"] for group in project_groups[3:])
-            visible_projects.append({"id": "other_monitored", "label": "其他项目", "role": "attribution", "up_bytes": 0, "down_bytes": 0, "total_bytes": remaining_total})
         vps_ready = bool(vps_enabled and self.vps_intervals > 0)
-        estimates = estimate_traffic(proxy_external_total, project_total, vps_total, vps_ready, estimation_config)
-        duration_seconds = max(0, int((now if now is not None else time.time()) - self.started_epoch)) if self.started_epoch is not None else 0
+        xray_state = xray_stats or {}
+        xray_logical_total = int(xray_state.get("total_bytes", 0))
+        xray_ready = bool(xray_state.get("ready") and int(xray_state.get("intervals", 0)) > 0)
+        vps_packet_count = self.vps["in_packets"] + self.vps["out_packets"]
+        estimates = estimate_traffic(
+            vps_total,
+            vps_packet_count,
+            self.vps["packet_covered_bytes"],
+            xray_logical_total,
+            vps_ready,
+            xray_ready,
+            estimation_config,
+        )
+        duration_seconds = (
+            max(0, int((now if now is not None else time.time()) - self.started_epoch))
+            if self.started_epoch is not None
+            else 0
+        )
         return {
             "started_at": iso_now(self.started_epoch) if self.started_epoch is not None else None,
             "started_epoch": self.started_epoch,
             "started_reason": self.started_reason,
-            "groups": groups,
-            "proxy_categories": proxy_categories,
-            "proxy_external_total_bytes": proxy_external_total,
+            "kernel": {
+                **self.kernel,
+                "total_bytes": kernel_total,
+            },
+            "services": services,
+            "visible_services": visible_services,
+            "routes": route_rows,
+            "proxy_observed_total_bytes": proxy_observed,
+            "proxy_upper_bound_bytes": proxy_observed + unattributed,
+            "domain_attributed_bytes": domain_attributed,
+            "attribution": {
+                "observed_bytes": self.attribution_observed_bytes,
+                "unattributed_bytes": self.attribution_unattributed_bytes,
+                "coverage": (
+                    self.attribution_observed_bytes / kernel_total
+                    if kernel_total > 0
+                    else 1.0
+                ),
+            },
             "vps": {
                 **self.vps,
                 "total_bytes": vps_total,
+                "total_packets": vps_packet_count,
+                "packet_intervals": self.vps_packet_intervals,
                 "baselined_at": iso_now(self.vps_baselined_at) if self.vps_baselined_at is not None else None,
                 "intervals": self.vps_intervals,
             },
             "vps_ready": vps_ready,
             "duration_seconds": duration_seconds,
-            "breakdown": {
-                "visible_projects": visible_projects,
-                **estimates,
-            },
-            "trend": minute_rate_trend(self.history, (group["id"] for group in project_groups)),
+            "breakdown": estimates,
+            "trend": minute_rate_trend(
+                self.history,
+                (service["id"] for service in attributed_services[:3]),
+            ),
         }

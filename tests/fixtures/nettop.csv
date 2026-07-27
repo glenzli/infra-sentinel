@@ -1,5 +1,0 @@
-time,process_name,pid,bytes_in,bytes_out
-2026-07-26T12:00:00+08:00,Codex (Service),451,1048576,2097152
-2026-07-26T12:00:00+08:00,codex-code-mode-host,452,512,1024
-2026-07-26T12:00:00+08:00,verge-mihomo,87,4096,8192
-2026-07-26T12:00:00+08:00,unrelated-process,999,777,888

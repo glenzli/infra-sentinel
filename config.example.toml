@@ -1,6 +1,7 @@
 # The App copies this file to its own config.toml on first launch.
-# Rules are applied in this order. A process is assigned to the first matching
-# group only, so project figures never count one PID twice.
+# Local traffic needs no configuration: the App discovers Clash Verge /
+# Mihomo's loopback-only Unix socket and attributes active traffic by domain.
+# This file only controls thresholds, optional remote observers, and retention.
 
 [monitor]
 sample_seconds = 5
@@ -8,35 +9,6 @@ warning_window_seconds = 300
 warning_bytes = 268435456       # 250 MiB in either direction
 critical_window_seconds = 600
 critical_bytes = 1073741824     # 1 GiB combined upload + download
-alert_group = "codex"           # one project group id
-
-[codex_activity]
-# Optional Codex lifecycle hooks add model, subagent, and tool counters without
-# storing prompts, command text, paths, or tool output. Use the App's
-# “Install / refresh Codex statistics” action once, then trust the hooks in
-# Codex. Per-model traffic is marked as estimated when models overlap.
-enabled = true
-process_group = "codex"
-warning_active_subagents = 4
-warning_total_subagents = 10
-
-[[process_groups]]
-id = "codex"
-label = "Codex"
-role = "attribution"
-patterns = ["Codex (Service)", "codex", "codex-code-mode-host"]
-
-[[process_groups]]
-id = "antigravity"
-label = "Antigravity"
-role = "attribution"
-patterns = ["Antigravity"]
-
-[[process_groups]]
-id = "proxy"
-label = "本地代理"
-role = "observer"
-patterns = ["verge-mihomo"]
 
 [vps]
 # This reads the existing host alias from ~/.ssh/config. It never stores a key,
@@ -47,13 +19,24 @@ interface = "auto"              # or an explicit interface such as "eth0"
 poll_seconds = 300               # five minutes; changing this needs an App restart
 billing_cycle_start_day = 1      # the provider billing cycle's day of month
 
+[xray_stats]
+# Optional per-user logical traffic from Xray's loopback-only StatsService.
+# Empty ssh_host reuses [vps].ssh_host. Each poll is a separate, short-lived
+# read-only SSH connection; no API port is exposed on the public interface.
+enabled = false
+ssh_host = ""
+api_server = "127.0.0.1:10085"
+binary_path = "/usr/local/bin/xray"
+poll_seconds = 300
+# These are Xray client `email` labels, not real email addresses. Empty users
+# still discovers active labels dynamically. Listed labels remain visible at 0.
+users = []
+flagged_users = ["legacy-unknown"]
+
 [estimation]
-# The observer whose non-loopback sockets represent this Mac's proxy traffic.
-proxy_group = "proxy"
-# Provider billing counts both VPS directions. The measured link overhead is
-# applied once to the two-leg topology: 2 × (1 + 20%) = a 2.4× ceiling.
+# Provider billing counts both VPS directions. Actual bill expansion is
+# measured from aligned VPS interface and Xray logical-user counters.
 vps_billing_legs = 2.0
-link_overhead_ratio = 0.20
 
 [state]
 # JSONL and ordinary logs rotate once they reach this size; the newest

@@ -1,5 +1,4 @@
 #import "DashboardController.h"
-#import "CodexActivityPanel.h"
 #import "TrafficOverviewPanel.h"
 
 static NSDictionary *DashboardDictionary(id value) {
@@ -83,10 +82,9 @@ static void DrawDashboardText(NSString *text, NSRect rect, NSFont *font, NSColor
                       [NSFont systemFontOfSize:12], [NSColor secondaryLabelColor],
                       NSLineBreakByTruncatingTail);
 
-    TSDrawTrafficSummaryPanel(NSMakeRect(28, 538, width - 56, 312), session, self.language);
-    TSDrawCodexActivityPanel(NSMakeRect(28, 340, width - 56, 182),
-                            DashboardDictionary(state[@"codex_activity"]), self.language);
-    TSDrawTrafficTrendPanel(NSMakeRect(28, 58, width - 56, 266), session, self.language);
+    TSDrawTrafficSummaryPanel(NSMakeRect(28, 400, width - 56, 330), session,
+                              DashboardDictionary(state[@"xray_stats"]), self.language);
+    TSDrawTrafficTrendPanel(NSMakeRect(28, 58, width - 56, 326), session, self.language);
 
     NSString *footer = self.notice.length > 0
         ? self.notice
@@ -104,22 +102,15 @@ static void DrawDashboardText(NSString *text, NSRect rect, NSFont *font, NSColor
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) TrafficDashboardView *dashboardView;
 @property(nonatomic, strong) NSButton *resetButton;
-@property(nonatomic, strong) NSButton *integrationButton;
-@property(nonatomic, weak) id integrationTarget;
-@property(nonatomic, assign) SEL integrationAction;
 @property(nonatomic, assign) TSLanguage language;
 @end
 
 @implementation DashboardController
 
-- (instancetype)initWithStateDirectory:(NSString *)stateDirectory
-                      integrationTarget:(id)integrationTarget
-                      integrationAction:(SEL)integrationAction {
+- (instancetype)initWithStateDirectory:(NSString *)stateDirectory {
     self = [super init];
     if (self) {
         _stateDirectory = [stateDirectory copy];
-        _integrationTarget = integrationTarget;
-        _integrationAction = integrationAction;
         _language = TSDefaultLanguage();
     }
     return self;
@@ -129,26 +120,17 @@ static void DrawDashboardText(NSString *text, NSRect rect, NSFont *font, NSColor
     if (self.window != nil) {
         return;
     }
-    NSRect frame = NSMakeRect(0, 0, 860, 960);
+    NSRect frame = NSMakeRect(0, 0, 860, 820);
     self.window = [[NSWindow alloc] initWithContentRect:frame
                                               styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable)
                                                 backing:NSBackingStoreBuffered
                                                   defer:NO];
     self.window.title = TSLocalized(self.language, @"window.title");
-    self.window.minSize = NSMakeSize(760, 960);
+    self.window.minSize = NSMakeSize(760, 820);
     self.window.releasedWhenClosed = NO;
     self.dashboardView = [[TrafficDashboardView alloc] initWithFrame:frame];
     self.dashboardView.language = self.language;
     self.window.contentView = self.dashboardView;
-
-    self.integrationButton = [NSButton buttonWithTitle:TSLocalized(self.language, @"button.install")
-                                                 target:self.integrationTarget
-                                                 action:self.integrationAction];
-    self.integrationButton.bezelStyle = NSBezelStyleRounded;
-    self.integrationButton.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
-    self.integrationButton.frame = NSMakeRect(frame.size.width - 380, frame.size.height - 59, 156, 30);
-    self.integrationButton.autoresizingMask = NSViewMinXMargin | NSViewMinYMargin;
-    [self.dashboardView addSubview:self.integrationButton];
 
     self.resetButton = [NSButton buttonWithTitle:TSLocalized(self.language, @"button.reset")
                                            target:self
@@ -165,7 +147,6 @@ static void DrawDashboardText(NSString *text, NSRect rect, NSFont *font, NSColor
     self.window.title = TSLocalized(language, @"window.title");
     self.dashboardView.language = language;
     self.resetButton.title = TSLocalized(language, @"button.reset");
-    self.integrationButton.title = TSLocalized(language, @"button.install");
 }
 
 - (void)updateWithState:(NSDictionary *)state {
@@ -184,7 +165,21 @@ static void DrawDashboardText(NSString *text, NSRect rect, NSFont *font, NSColor
     self.dashboardView.notice = notice;
 }
 
+- (BOOL)confirmSessionReset {
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.alertStyle = NSAlertStyleWarning;
+    alert.messageText = TSLocalized(self.language, @"reset.confirm_title");
+    alert.informativeText = TSLocalized(self.language, @"reset.confirm_message");
+    [alert addButtonWithTitle:TSLocalized(self.language, @"reset.confirm_action")];
+    [alert addButtonWithTitle:TSLocalized(self.language, @"reset.cancel_action")];
+    [NSApp activateIgnoringOtherApps:YES];
+    return [alert runModal] == NSAlertFirstButtonReturn;
+}
+
 - (void)requestSessionReset:(id)sender {
+    if (![self confirmSessionReset]) {
+        return;
+    }
     NSDictionary *request = @{
         @"schema": @1,
         @"id": [NSUUID UUID].UUIDString,

@@ -3,4 +3,5 @@ config.toml
 __pycache__/
 *.py[cod]
 Codex Traffic Sentinel.app/
+Traffic Sentinel.app/
 .build/

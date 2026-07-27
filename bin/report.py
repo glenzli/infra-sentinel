@@ -23,13 +23,27 @@ def records(config: Config, prefix: str) -> Iterable[dict[str, Any]]:
         yield from iter_jsonl(path)
 
 
-def sum_local_traffic(samples: Iterable[dict[str, Any]], group_id: str) -> dict[str, int]:
-    result = {"up_bytes": 0, "down_bytes": 0, "sample_count": 0}
+def sum_local_traffic(samples: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "up_bytes": 0,
+        "down_bytes": 0,
+        "sample_count": 0,
+        "services": {},
+    }
     for sample in samples:
-        traffic = sample.get("groups", {}).get(group_id, {})
+        traffic = sample.get("kernel", {})
         result["up_bytes"] += int(traffic.get("up_bytes", 0))
         result["down_bytes"] += int(traffic.get("down_bytes", 0))
         result["sample_count"] += 1
+        for service in sample.get("services", []):
+            if not isinstance(service, dict):
+                continue
+            service_id = str(service.get("id", "unknown_host"))
+            current = result["services"].setdefault(
+                service_id,
+                {"label": str(service.get("label", service_id)), "bytes": 0},
+            )
+            current["bytes"] += int(service.get("total_bytes", 0))
     return result
 
 
@@ -44,7 +58,7 @@ def sum_vps_traffic(samples: Iterable[dict[str, Any]]) -> dict[str, int]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="汇总 Codex Traffic Sentinel 的本地记录")
+    parser = argparse.ArgumentParser(description="汇总 Traffic Sentinel 的 Mihomo 与 VPS 记录")
     parser.add_argument("--config", type=Path, help="TOML 配置文件")
     parser.add_argument("--hours", type=float, default=24, help="最近多少小时；默认 24")
     parser.add_argument("--since", help="开始时间，ISO 8601，例如 2026-07-26T09:00:00+08:00")
@@ -61,10 +75,10 @@ def main() -> int:
         matching_events = [event for event in records(config, "events") if isinstance(event.get("timestamp"), str) and event.get("sample", {}).get("schema") == SAMPLE_SCHEMA and since <= parse_timestamp(event["timestamp"]) <= until]
         print(f"时间段：{datetime.fromtimestamp(since).astimezone().isoformat(timespec='seconds')} 至 {datetime.fromtimestamp(until).astimezone().isoformat(timespec='seconds')}")
         print(f"本机采样数：{len(local_samples)}")
-        for group in config.groups:
-            traffic = sum_local_traffic(local_samples, group.id)
-            role = "项目" if group.role == "attribution" else "独立观察，不与项目流量相加"
-            print(f"{group.label}（{role}）：↑ {format_bytes(traffic['up_bytes'])}  ↓ {format_bytes(traffic['down_bytes'])}  合计 {format_bytes(traffic['up_bytes'] + traffic['down_bytes'])}")
+        traffic = sum_local_traffic(local_samples)
+        print(f"Mihomo 本机总量：↑ {format_bytes(traffic['up_bytes'])}  ↓ {format_bytes(traffic['down_bytes'])}  合计 {format_bytes(traffic['up_bytes'] + traffic['down_bytes'])}")
+        for service in sorted(traffic["services"].values(), key=lambda item: item["bytes"], reverse=True)[:10]:
+            print(f"  {service['label']}：{format_bytes(service['bytes'])}")
         vps = sum_vps_traffic(vps_samples)
         if config.vps.enabled:
             print(f"VPS 网卡（独立账本，入 + 出）：入 {format_bytes(vps['in_bytes'])}  出 {format_bytes(vps['out_bytes'])}  T {format_bytes(vps['total_bytes'])}")
