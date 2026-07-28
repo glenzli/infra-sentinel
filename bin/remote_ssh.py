@@ -7,7 +7,7 @@ import subprocess
 from typing import Sequence
 
 
-HOST_ALIAS_RE = re.compile(r"[A-Za-z0-9._-]+\Z")
+HOST_ALIAS_RE = re.compile(r"(?!-)[A-Za-z0-9._-]+\Z")
 
 
 def run_read_only_script(

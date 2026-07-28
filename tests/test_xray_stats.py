@@ -31,7 +31,7 @@ def config() -> XrayStatsConfig:
         "127.0.0.1:10085",
         "/usr/local/bin/xray",
         300,
-        ("mac", "android", "unused"),
+        ("workstation", "phone", "unused"),
         ("legacy-unknown",),
     )
 
@@ -40,15 +40,15 @@ class XrayStatsParserTests(unittest.TestCase):
     def test_extracts_only_user_uplink_and_downlink(self) -> None:
         output = json.dumps({
             "stat": [
-                {"name": "user>>>mac>>>traffic>>>uplink", "value": 120},
-                {"name": "user>>>mac>>>traffic>>>downlink", "value": "340"},
+                {"name": "user>>>workstation>>>traffic>>>uplink", "value": 120},
+                {"name": "user>>>workstation>>>traffic>>>downlink", "value": "340"},
                 {"name": "inbound>>>vless>>>traffic>>>uplink", "value": 999},
-                {"name": "user>>>android>>>traffic>>>uplink", "value": 7},
+                {"name": "user>>>phone>>>traffic>>>uplink", "value": 7},
             ]
         })
         self.assertEqual(parse_xray_stats(output), {
-            "mac": {"up_bytes": 120, "down_bytes": 340},
-            "android": {"up_bytes": 7, "down_bytes": 0},
+            "workstation": {"up_bytes": 120, "down_bytes": 340},
+            "phone": {"up_bytes": 7, "down_bytes": 0},
         })
 
     def test_rejects_non_json_response(self) -> None:
@@ -58,19 +58,34 @@ class XrayStatsParserTests(unittest.TestCase):
 
 class XrayStatsTrackerTests(unittest.TestCase):
     @staticmethod
-    def raw(epoch: float, mac_up: int, mac_down: int) -> dict[str, object]:
+    def raw(
+        epoch: float,
+        workstation_up: int,
+        workstation_down: int,
+    ) -> dict[str, object]:
         return {
             "timestamp": "2026-07-28T12:00:00+08:00",
             "epoch": epoch,
-            "users": {"mac": {"up_bytes": mac_up, "down_bytes": mac_down}},
+            "users": {
+                "workstation": {
+                    "up_bytes": workstation_up,
+                    "down_bytes": workstation_down,
+                }
+            },
         }
 
     def test_first_read_is_baseline_then_counts_deltas(self) -> None:
         tracker = XrayStatsTracker()
         first = tracker.apply(self.raw(100, 1_000, 2_000))
         second = tracker.apply(self.raw(400, 1_150, 2_250))
-        self.assertEqual(first["users"]["mac"], {"up_bytes": 0, "down_bytes": 0})
-        self.assertEqual(second["users"]["mac"], {"up_bytes": 150, "down_bytes": 250})
+        self.assertEqual(
+            first["users"]["workstation"],
+            {"up_bytes": 0, "down_bytes": 0},
+        )
+        self.assertEqual(
+            second["users"]["workstation"],
+            {"up_bytes": 150, "down_bytes": 250},
+        )
         self.assertEqual(second["interval_started_epoch"], 100.0)
 
     def test_xray_restart_never_replays_counters(self) -> None:
@@ -78,8 +93,14 @@ class XrayStatsTrackerTests(unittest.TestCase):
         tracker.apply(self.raw(100, 1_000, 2_000))
         reset = tracker.apply(self.raw(400, 10, 20))
         after = tracker.apply(self.raw(700, 40, 80))
-        self.assertEqual(reset["users"]["mac"], {"up_bytes": 0, "down_bytes": 0})
-        self.assertEqual(after["users"]["mac"], {"up_bytes": 30, "down_bytes": 60})
+        self.assertEqual(
+            reset["users"]["workstation"],
+            {"up_bytes": 0, "down_bytes": 0},
+        )
+        self.assertEqual(
+            after["users"]["workstation"],
+            {"up_bytes": 30, "down_bytes": 60},
+        )
 
 
 class XrayStatsMonitorTests(unittest.TestCase):
@@ -92,7 +113,12 @@ class XrayStatsMonitorTests(unittest.TestCase):
             return {
                 "timestamp": f"sample-{index}",
                 "epoch": base + index * 300,
-                "users": {"mac": {"up_bytes": up_bytes, "down_bytes": down_bytes}},
+                "users": {
+                    "workstation": {
+                        "up_bytes": up_bytes,
+                        "down_bytes": down_bytes,
+                    }
+                },
             }
 
         return read
@@ -113,7 +139,7 @@ class XrayStatsMonitorTests(unittest.TestCase):
             self.assertTrue(second["ready"])
             self.assertEqual(second["total_bytes"], 400)
             rows = {row["id"]: row for row in second["users"]}
-            self.assertEqual(rows["mac"]["total_bytes"], 400)
+            self.assertEqual(rows["workstation"]["total_bytes"], 400)
             self.assertEqual(rows["unused"]["total_bytes"], 0)
             self.assertTrue(rows["legacy-unknown"]["flagged"])
 
@@ -131,7 +157,12 @@ class XrayStatsMonitorTests(unittest.TestCase):
                 return {
                     "timestamp": "sample",
                     "epoch": epoch,
-                    "users": {"mac": {"up_bytes": value, "down_bytes": 0}},
+                    "users": {
+                        "workstation": {
+                            "up_bytes": value,
+                            "down_bytes": 0,
+                        }
+                    },
                 }
 
             monitor = XrayStatsMonitor(config(), Path(temporary), LogState(), reader=reader)

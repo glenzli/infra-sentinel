@@ -1,12 +1,32 @@
 # Net Traffic Sentinal
 
-一个只读的 macOS Mihomo / Clash Verge 流量分析工具。它直接读取代理内核的累计计数，按域名和实际代理链归因，并可选地与 Xray 用户逻辑流量、VPS 双向账单流量对账。
+一个只读的 macOS Mihomo / Clash Meta 流量分析工具，目前以 Clash Verge 为主要兼容目标。它直接读取代理内核的累计计数，按域名和实际代理链归因，并可选地与 Xray 用户逻辑流量、VPS 双向账单流量对账。
 
 它不会抓包、读取请求内容或提示词、记录 URL 路径、终止进程、删除业务文件或断网。
 
+![Traffic Sentinel English dashboard](assets/dashboard-en.png)
+
+> English 仪表板示例。图中的设备标签来自使用者自己的 Xray 配置，并非程序内置或写死。
+
+## 当前支持边界
+
+本机监控采用一条明确、收敛的实现路径：
+
+- 运行于 macOS，自动发现当前用户拥有的 Mihomo / Clash Meta Unix Socket；
+- 优先检查 Clash Verge 的常见 Socket 路径，再在 `/tmp` 下查找名称包含 `mihomo` 的 Socket；
+- 只读访问兼容的 `/connections` 接口，不连接任意 TCP 控制器，也不要求保存控制器密钥；
+- 单次响应设有 64 MiB 安全上限，避免异常内核或错误 Socket 无限制占用内存。
+
+可选的远端对账路径为：
+
+- 通过本机 `~/.ssh/config` 中已有的别名读取 Linux VPS 的 `/sys/class/net` 网卡计数；
+- 如需按代理用户对账，再启用仅监听远端 `127.0.0.1` 的 Xray StatsService。
+
+当前不以其他 Clash 内核、仅提供 TCP 控制器的部署、sing-box、非 Linux VPS 网卡统计或非 Xray 服务端为兼容目标。接口完全兼容时可能可以工作，但尚未纳入支持与测试范围。
+
 ## 核心口径
 
-本机不再使用 `nettop`，也不依赖 Codex、Antigravity 或其他应用进程名。App 会自动发现 Clash Verge 启动的本机 Unix Socket，并读取 Mihomo `/connections`：
+本机不再使用 `nettop`，也不依赖 Codex、Antigravity 或其他应用进程名。App 会自动发现当前用户的 Mihomo Unix Socket，并读取 `/connections`：
 
 - `Mihomo 本机总量`：`uploadTotal + downloadTotal` 的相邻增量，是代理内核处理的精确累计；
 - `域名流量归因`：持续跟踪活跃连接 ID，将连接字节按域名聚合；
@@ -106,7 +126,7 @@ ssh_host = "" # 留空时复用 [vps].ssh_host
 api_server = "127.0.0.1:10085"
 binary_path = "/usr/local/bin/xray"
 poll_seconds = 300
-users = ["mac", "android", "pc", "legacy-unknown"]
+users = []
 flagged_users = ["legacy-unknown"]
 
 [estimation]
@@ -117,7 +137,7 @@ max_log_bytes = 10485760
 backups = 5
 ```
 
-`ssh_host` 只引用 `~/.ssh/config` 中已有的别名。工具不保存密钥、密码或主机地址；每次到期时建立一条短暂、非交互、无 Agent 转发、无连接复用的只读 SSH。
+`ssh_host` 只引用 `~/.ssh/config` 中已有且不以 `-` 开头的别名。工具不保存密钥、密码或主机地址；每次到期时建立一条短暂、非交互、无 Agent 转发、无连接复用的只读 SSH。
 
 VPS 读取：
 
@@ -128,7 +148,9 @@ VPS 读取：
 /sys/class/net/<interface>/statistics/tx_packets
 ```
 
-Xray StatsService 必须只监听回环地址。每个 VLESS 用户可以通过 `email` 字段设置 `mac`、`android`、`pc` 等统计标签：
+Xray StatsService 必须只监听回环地址。每个 VLESS 用户都可以通过 `email` 字段设置任意统计标签，例如 `workstation`、`phone` 或 `tablet`。这些只是 Xray 标签，不要求是真实邮箱，也没有任何设备名写死在程序中。
+
+推荐保持 `users = []`，程序会自动发现 Xray 返回的全部活跃标签。如果填写 `users`，它只控制固定展示顺序，并让暂时为零的标签仍然可见；不会限制动态发现的其他标签。
 
 ```json
 {

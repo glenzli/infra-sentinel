@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterable
 import hashlib
 import ipaddress
 import json
+import os
 from pathlib import Path
 import socket
 import stat
@@ -16,6 +17,7 @@ from typing import Any
 MIHOMO_SAMPLE_SCHEMA = 1
 MIHOMO_TRACKER_SCHEMA = 1
 DEFAULT_POLL_SECONDS = 0.25
+DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 DEFAULT_SOCKET_CANDIDATES = (
     Path("/tmp/verge/verge-mihomo.sock"),
     Path("/tmp/clash-verge/verge-mihomo.sock"),
@@ -82,7 +84,8 @@ def iso_now(epoch: float) -> str:
 
 def _is_socket(path: Path) -> bool:
     try:
-        return stat.S_ISSOCK(path.stat().st_mode)
+        metadata = path.stat()
+        return stat.S_ISSOCK(metadata.st_mode) and metadata.st_uid == os.geteuid()
     except OSError:
         return False
 
@@ -125,8 +128,16 @@ def _decode_chunked(body: bytes) -> bytes:
 class MihomoApiClient:
     """Read-only client for Clash Verge's local Unix-domain controller."""
 
-    def __init__(self, socket_path: Path | None = None) -> None:
+    def __init__(
+        self,
+        socket_path: Path | None = None,
+        *,
+        max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
+    ) -> None:
+        if max_response_bytes <= 0:
+            raise ValueError("Mihomo API 响应上限必须大于 0")
         self.socket_path = socket_path
+        self.max_response_bytes = int(max_response_bytes)
 
     def _request(self, path: str) -> dict[str, Any]:
         socket_path = self.socket_path if self.socket_path is not None and _is_socket(self.socket_path) else discover_mihomo_socket()
@@ -143,10 +154,18 @@ class MihomoApiClient:
             ).encode("ascii")
             connection.sendall(request)
             parts: list[bytes] = []
+            received_bytes = 0
             while True:
                 part = connection.recv(262_144)
                 if not part:
                     break
+                received_bytes += len(part)
+                if received_bytes > self.max_response_bytes:
+                    self.socket_path = None
+                    raise RuntimeError(
+                        "Mihomo API 响应超过安全上限"
+                        f"（{self.max_response_bytes} 字节）"
+                    )
                 parts.append(part)
         except OSError as exc:
             self.socket_path = None

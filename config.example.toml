@@ -1,6 +1,7 @@
 # The App copies this file to its own config.toml on first launch.
-# Local traffic needs no configuration: the App discovers Clash Verge /
-# Mihomo's loopback-only Unix socket and attributes active traffic by domain.
+# Local traffic needs no configuration: the App discovers a current-user-owned
+# Clash Verge / Mihomo Unix socket and reads its compatible /connections API.
+# TCP-only controllers and other proxy-core APIs are outside the support scope.
 # This file only controls thresholds, optional remote observers, and retention.
 
 [monitor]
@@ -12,7 +13,8 @@ critical_bytes = 1073741824     # 1 GiB combined upload + download
 
 [vps]
 # This reads the existing host alias from ~/.ssh/config. It never stores a key,
-# password, or host address; it opens a new short SSH session only when due.
+# password, or host address; aliases beginning with "-" are rejected. The
+# remote counter reader currently targets Linux /sys/class/net.
 enabled = false
 ssh_host = "my-vps"
 interface = "auto"              # or an explicit interface such as "eth0"
@@ -28,8 +30,9 @@ ssh_host = ""
 api_server = "127.0.0.1:10085"
 binary_path = "/usr/local/bin/xray"
 poll_seconds = 300
-# These are Xray client `email` labels, not real email addresses. Empty users
-# still discovers active labels dynamically. Listed labels remain visible at 0.
+# These are arbitrary Xray client `email` labels, not real email addresses or
+# hard-coded device names. An empty users list discovers all active labels;
+# listed labels only remain visible at 0 and do not hide newly observed labels.
 users = []
 flagged_users = ["legacy-unknown"]
 

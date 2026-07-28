@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import stat
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "bin"))
 
 from mihomo_traffic import (  # noqa: E402
+    MihomoApiClient,
     MihomoTrafficTracker,
+    _is_socket,
     classify_host,
     classify_route,
     combine_samples,
@@ -31,7 +36,7 @@ def connection(
         "id": connection_id,
         "upload": upload,
         "download": download,
-        "chains": chains or ["DMIT-LAX", "Proxy"],
+        "chains": chains or ["Proxy-A", "Proxy"],
         "metadata": {"host": host, "destinationIP": "203.0.113.1"},
     }
 
@@ -69,8 +74,81 @@ class DomainClassificationTests(unittest.TestCase):
     def test_route_uses_the_actual_mihomo_chain(self) -> None:
         self.assertEqual(classify_route(["DIRECT"]), "direct")
         self.assertEqual(classify_route(["REJECT-DROP"]), "blocked")
-        self.assertEqual(classify_route(["DMIT-LAX", "Proxy"]), "proxy")
+        self.assertEqual(classify_route(["Proxy-A", "Proxy"]), "proxy")
         self.assertEqual(classify_route([]), "unknown")
+
+
+class FakeUnixSocket:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self.chunks = iter(chunks)
+        self.closed = False
+
+    def settimeout(self, _: float) -> None:
+        pass
+
+    def connect(self, _: str) -> None:
+        pass
+
+    def sendall(self, _: bytes) -> None:
+        pass
+
+    def recv(self, _: int) -> bytes:
+        return next(self.chunks, b"")
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class MihomoApiClientTests(unittest.TestCase):
+    def test_rejects_socket_owned_by_another_user(self) -> None:
+        socket_stat = SimpleNamespace(st_mode=stat.S_IFSOCK, st_uid=502)
+        with (
+            patch.object(Path, "stat", return_value=socket_stat),
+            patch("mihomo_traffic.os.geteuid", return_value=501),
+        ):
+            self.assertFalse(_is_socket(Path("/tmp/other-user-mihomo.sock")))
+
+    def test_accepts_socket_owned_by_current_user(self) -> None:
+        socket_stat = SimpleNamespace(st_mode=stat.S_IFSOCK, st_uid=501)
+        with (
+            patch.object(Path, "stat", return_value=socket_stat),
+            patch("mihomo_traffic.os.geteuid", return_value=501),
+        ):
+            self.assertTrue(_is_socket(Path("/tmp/current-user-mihomo.sock")))
+
+    def test_rejects_response_above_configured_safety_limit(self) -> None:
+        fake_socket = FakeUnixSocket([b"x" * 40, b"y" * 40])
+        client = MihomoApiClient(
+            Path("/tmp/test-mihomo.sock"),
+            max_response_bytes=64,
+        )
+        with (
+            patch("mihomo_traffic._is_socket", return_value=True),
+            patch("mihomo_traffic.socket.socket", return_value=fake_socket),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "响应超过"):
+                client._request("/connections")
+        self.assertTrue(fake_socket.closed)
+
+    def test_accepts_valid_response_below_safety_limit(self) -> None:
+        body = b'{"uploadTotal":0,"downloadTotal":0,"connections":[]}'
+        response = (
+            b"HTTP/1.1 200 OK\r\n"
+            + f"Content-Length: {len(body)}\r\n".encode("ascii")
+            + b"Content-Type: application/json\r\nConnection: close\r\n\r\n"
+            + body
+        )
+        fake_socket = FakeUnixSocket([response])
+        client = MihomoApiClient(
+            Path("/tmp/test-mihomo.sock"),
+            max_response_bytes=1024,
+        )
+        with (
+            patch("mihomo_traffic._is_socket", return_value=True),
+            patch("mihomo_traffic.socket.socket", return_value=fake_socket),
+        ):
+            self.assertEqual(client.connections()["connections"], [])
+        self.assertTrue(fake_socket.closed)
 
 
 class MihomoTrafficTrackerTests(unittest.TestCase):
