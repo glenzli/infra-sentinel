@@ -82,24 +82,52 @@ def iso_now(epoch: float) -> str:
     return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
 
 
-def _is_socket(path: Path) -> bool:
+def _is_trusted_mihomo_socket(path: Path) -> bool:
+    """Trust user-owned sockets and Clash Verge's constrained root service socket."""
     try:
-        metadata = path.stat()
-        return stat.S_ISSOCK(metadata.st_mode) and metadata.st_uid == os.geteuid()
+        metadata = path.lstat()
     except OSError:
         return False
+    if not stat.S_ISSOCK(metadata.st_mode):
+        return False
+    if metadata.st_uid == os.geteuid():
+        return True
+    if metadata.st_uid != 0 or path not in DEFAULT_SOCKET_CANDIDATES:
+        return False
+
+    try:
+        parent_metadata = path.parent.lstat()
+    except OSError:
+        return False
+    if (
+        not stat.S_ISDIR(parent_metadata.st_mode)
+        or parent_metadata.st_uid != 0
+        or parent_metadata.st_mode & stat.S_IWOTH
+    ):
+        return False
+
+    group_ids = {os.getegid(), *os.getgroups()}
+    can_search_parent = bool(parent_metadata.st_mode & stat.S_IXOTH) or (
+        parent_metadata.st_gid in group_ids
+        and bool(parent_metadata.st_mode & stat.S_IXGRP)
+    )
+    can_connect_socket = bool(metadata.st_mode & stat.S_IWOTH) or (
+        metadata.st_gid in group_ids
+        and bool(metadata.st_mode & stat.S_IWGRP)
+    )
+    return can_search_parent and can_connect_socket
 
 
 def discover_mihomo_socket() -> Path:
-    """Find a loopback-only Mihomo controller without user configuration."""
+    """Find a locally permission-bounded Mihomo controller without configuration."""
     for candidate in DEFAULT_SOCKET_CANDIDATES:
-        if _is_socket(candidate):
+        if _is_trusted_mihomo_socket(candidate):
             return candidate
     dynamic: list[Path] = []
     for pattern in ("/tmp/*/*mihomo*.sock", "/tmp/*mihomo*.sock"):
         dynamic.extend(Path("/").glob(pattern.removeprefix("/")))
     for candidate in sorted(set(dynamic), key=str):
-        if _is_socket(candidate):
+        if _is_trusted_mihomo_socket(candidate):
             return candidate
     raise RuntimeError("未找到 Mihomo 本机控制接口；请先启动 Clash Verge / Mihomo")
 
@@ -140,7 +168,12 @@ class MihomoApiClient:
         self.max_response_bytes = int(max_response_bytes)
 
     def _request(self, path: str) -> dict[str, Any]:
-        socket_path = self.socket_path if self.socket_path is not None and _is_socket(self.socket_path) else discover_mihomo_socket()
+        socket_path = (
+            self.socket_path
+            if self.socket_path is not None
+            and _is_trusted_mihomo_socket(self.socket_path)
+            else discover_mihomo_socket()
+        )
         self.socket_path = socket_path
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         connection.settimeout(3.0)

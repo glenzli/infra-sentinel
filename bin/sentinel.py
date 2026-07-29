@@ -31,6 +31,7 @@ from mihomo_traffic import (
     load_tracker,
     save_tracker,
 )
+from sample_timing import annotate_sample_timing, sample_is_realtime
 from session import SessionMeter, consume_reset_request
 from traffic_estimation import TrafficEstimationConfig
 from vps import VpsConfig, VpsMonitor
@@ -243,7 +244,11 @@ def latest_jsonl(path: Path) -> dict[str, Any] | None:
 def latest_delta_event(path: Path) -> dict[str, Any] | None:
     latest = None
     for record in iter_jsonl(path):
-        if record.get("sample", {}).get("schema") == SAMPLE_SCHEMA:
+        sample = record.get("sample", {})
+        if (
+            sample.get("schema") == SAMPLE_SCHEMA
+            and sample_is_realtime(sample)
+        ):
             latest = record
     return latest
 
@@ -259,11 +264,18 @@ def load_recent_samples(config: Config, now: float) -> deque[dict[str, Any]]:
     )
 
 
-def totals_for_window(samples: Iterable[dict[str, Any]], now: float, seconds: int) -> dict[str, int]:
+def totals_for_window(
+    samples: Iterable[dict[str, Any]],
+    now: float,
+    seconds: int,
+    expected_interval_seconds: float = 5.0,
+) -> dict[str, int]:
     cutoff = now - seconds
     result = {"up_bytes": 0, "down_bytes": 0}
     for sample in samples:
         if float(sample.get("epoch", 0)) < cutoff:
+            continue
+        if not sample_is_realtime(sample, expected_interval_seconds):
             continue
         kernel = sample.get("kernel", {})
         result["up_bytes"] += int(kernel.get("up_bytes", 0))
@@ -378,6 +390,7 @@ def write_menubar_state(
         "updated_at": sample["timestamp"],
         "epoch": sample["epoch"],
         "observed_seconds": sample["observed_seconds"],
+        "interval_kind": sample.get("interval_kind", "realtime"),
         "level": level,
         "busiest_service": busiest_service(sample),
         "alert_group": {"id": "mihomo", "label": "Mihomo"},
@@ -435,6 +448,7 @@ def handle_sample(
 ) -> dict[str, Any]:
     sample = collect_interval(client, tracker, config.monitor.sample_seconds)
     sample["schema"] = SAMPLE_SCHEMA
+    annotate_sample_timing(sample, config.monitor.sample_seconds)
     save_tracker(config.state_dir / "mihomo-baseline.json", tracker)
     history.append(sample)
     cutoff = sample["epoch"] - config.monitor.critical_window_seconds
@@ -446,11 +460,13 @@ def handle_sample(
         history,
         float(sample["epoch"]),
         config.monitor.warning_window_seconds,
+        config.monitor.sample_seconds,
     )
     critical = totals_for_window(
         history,
         float(sample["epoch"]),
         config.monitor.critical_window_seconds,
+        config.monitor.sample_seconds,
     )
     transition = alerts.evaluate(warning, critical, config)
     if transition is not None:
@@ -542,7 +558,10 @@ def main() -> int:
         alerts = AlertEngine()
         vps_monitor = VpsMonitor(config.vps, config.state_dir, config.state)
         xray_monitor = XrayStatsMonitor(config.xray_stats, config.state_dir, config.state)
-        session_meter = SessionMeter(config.state_dir)
+        session_meter = SessionMeter(
+            config.state_dir,
+            expected_interval_seconds=config.monitor.sample_seconds,
+        )
         xray_monitor.align_session(session_meter.started_epoch)
         lock = acquire_watch_lock(config)
         if lock is None:

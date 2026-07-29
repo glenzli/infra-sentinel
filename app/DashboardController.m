@@ -1,4 +1,5 @@
 #import "DashboardController.h"
+#import "MonitorHealth.h"
 #import "TrafficOverviewPanel.h"
 
 static NSDictionary *DashboardDictionary(id value) {
@@ -66,6 +67,7 @@ static void DrawDashboardText(NSString *text, NSRect rect, NSFont *font, NSColor
     NSRectFill(self.bounds);
     NSDictionary *state = self.dashboardState ?: @{};
     NSDictionary *session = DashboardDictionary(state[@"session"]);
+    NSDictionary *health = DashboardDictionary(state[@"health"]);
     CGFloat width = self.bounds.size.width;
     CGFloat height = self.bounds.size.height;
 
@@ -86,12 +88,22 @@ static void DrawDashboardText(NSString *text, NSRect rect, NSFont *font, NSColor
                               DashboardDictionary(state[@"xray_stats"]), self.language);
     TSDrawTrafficTrendPanel(NSMakeRect(28, 58, width - 56, 326), session, self.language);
 
-    NSString *footer = self.notice.length > 0
-        ? self.notice
-        : [NSString stringWithFormat:TSLocalized(self.language, @"dashboard.updated_format"),
-           DashboardString(state[@"updated_at"], TSLocalized(self.language, @"dashboard.waiting_sample"))];
+    BOOL hasHealthError = TSMonitorHealthHasError(health);
+    NSString *footer = nil;
+    NSColor *footerColor = [NSColor secondaryLabelColor];
+    if (hasHealthError) {
+        footer = [NSString stringWithFormat:TSLocalized(self.language, @"dashboard.sampling_error_format"),
+                  TSMonitorHealthMessage(health) ?: TSLocalized(self.language, @"error.unknown"),
+                  DashboardString(state[@"updated_at"], TSLocalized(self.language, @"dashboard.waiting_sample"))];
+        footerColor = [NSColor systemRedColor];
+    } else if (self.notice.length > 0) {
+        footer = self.notice;
+    } else {
+        footer = [NSString stringWithFormat:TSLocalized(self.language, @"dashboard.updated_format"),
+                  DashboardString(state[@"updated_at"], TSLocalized(self.language, @"dashboard.waiting_sample"))];
+    }
     DrawDashboardText(footer, NSMakeRect(30, 34, width - 60, 18),
-                      [NSFont systemFontOfSize:12], [NSColor secondaryLabelColor],
+                      [NSFont systemFontOfSize:12], footerColor,
                       NSLineBreakByTruncatingTail);
 }
 

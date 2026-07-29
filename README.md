@@ -13,6 +13,7 @@
 本机监控采用一条明确、收敛的实现路径：
 
 - 运行于 macOS，自动发现当前用户拥有的 Mihomo / Clash Meta Unix Socket；
+- 兼容 Clash Verge 服务模式在受控 `/tmp/verge` 目录下创建的 root-owned Socket，但不会信任任意位置的 root-owned Socket；
 - 优先检查 Clash Verge 的常见 Socket 路径，再在 `/tmp` 下查找名称包含 `mihomo` 的 Socket；
 - 只读访问兼容的 `/connections` 接口，不连接任意 TCP 控制器，也不要求保存控制器密钥；
 - 单次响应设有 64 MiB 安全上限，避免异常内核或错误 Socket 无限制占用内存。
@@ -185,6 +186,7 @@ Xray StatsService 必须只监听回环地址。每个 VLESS 用户都可以通�
 
 - 默认 5 分钟单方向超过 250 MiB 时警告；
 - 默认 10 分钟上下行合计超过 1 GiB 时严重告警；
+- App 或采样器中断后发现的累计差额仍计入本周期总量，但标为补记，不进入实时告警和 15 分钟速率趋势；
 - 点击通知会打开仪表板；
 - 证据快照只保存累计字节、聚合域名、代理路径和覆盖率；
 - 不保存 URL 路径、查询参数、请求头、正文、提示词或文件内容。

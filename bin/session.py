@@ -8,6 +8,7 @@ from pathlib import Path
 import time
 from typing import Any
 
+from sample_timing import DEFAULT_EXPECTED_INTERVAL_SECONDS
 from traffic_estimation import TrafficEstimationConfig, estimate_traffic, minute_rate_trend
 from vps import VPS_SAMPLE_SCHEMA
 
@@ -43,8 +44,13 @@ def consume_reset_request(state_dir: Path) -> dict[str, Any] | None:
 class SessionMeter:
     """Persist one user-started comparison across Mihomo, Xray, and VPS."""
 
-    def __init__(self, state_dir: Path) -> None:
+    def __init__(
+        self,
+        state_dir: Path,
+        expected_interval_seconds: float = DEFAULT_EXPECTED_INTERVAL_SECONDS,
+    ) -> None:
         self.state_dir = state_dir
+        self.expected_interval_seconds = float(expected_interval_seconds)
         self.started_epoch: float | None = None
         self.started_reason = ""
         self.kernel = self._empty_traffic()
@@ -259,6 +265,11 @@ class SessionMeter:
         self.history.append({
             "epoch": float(sample["epoch"]),
             "observed_seconds": float(sample.get("observed_seconds", 0.0)),
+            "interval_kind": sample.get("interval_kind"),
+            "expected_interval_seconds": sample.get(
+                "expected_interval_seconds",
+                self.expected_interval_seconds,
+            ),
             "services": interval_services,
             "mihomo_total": max(0, int(kernel.get("total_bytes", 0))),
             "proxy_observed": max(0, int(routes.get("proxy", {}).get("total_bytes", 0))),
@@ -372,5 +383,6 @@ class SessionMeter:
             "trend": minute_rate_trend(
                 self.history,
                 (service["id"] for service in attributed_services[:3]),
+                expected_interval_seconds=self.expected_interval_seconds,
             ),
         }

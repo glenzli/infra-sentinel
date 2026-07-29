@@ -21,6 +21,7 @@ cp "$ROOT_DIR/bin/sentinel.py" "$SENTINEL_RESOURCES_DIR/sentinel.py"
 cp "$ROOT_DIR/bin/config_migration.py" "$SENTINEL_RESOURCES_DIR/config_migration.py"
 cp "$ROOT_DIR/bin/mihomo_traffic.py" "$SENTINEL_RESOURCES_DIR/mihomo_traffic.py"
 cp "$ROOT_DIR/bin/remote_ssh.py" "$SENTINEL_RESOURCES_DIR/remote_ssh.py"
+cp "$ROOT_DIR/bin/sample_timing.py" "$SENTINEL_RESOURCES_DIR/sample_timing.py"
 cp "$ROOT_DIR/bin/session.py" "$SENTINEL_RESOURCES_DIR/session.py"
 cp "$ROOT_DIR/bin/traffic_estimation.py" "$SENTINEL_RESOURCES_DIR/traffic_estimation.py"
 cp "$ROOT_DIR/bin/vps.py" "$SENTINEL_RESOURCES_DIR/vps.py"
@@ -33,6 +34,7 @@ cp "$ROOT_DIR/config.example.toml" "$SENTINEL_RESOURCES_DIR/config.example.toml"
   "$ROOT_DIR/app/TrafficOverviewPanel.m" \
   "$ROOT_DIR/app/XrayUserPanel.m" \
   "$ROOT_DIR/app/TrafficFormatting.m" \
+  "$ROOT_DIR/app/MonitorHealth.m" \
   "$ROOT_DIR/app/Localization.m" \
   -o "$MACOS_DIR/TrafficSentinel"
 /usr/bin/codesign --force --sign - "$APP_DIR" >/dev/null

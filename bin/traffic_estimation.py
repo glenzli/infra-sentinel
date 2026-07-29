@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from sample_timing import DEFAULT_EXPECTED_INTERVAL_SECONDS, sample_is_realtime
+
 
 TREND_WINDOW_MINUTES = 15
 TYPICAL_TCP_FRAME_OVERHEAD_BYTES = 66
@@ -83,9 +85,15 @@ def minute_rate_trend(
     history: Iterable[dict[str, Any]],
     service_ids: Iterable[str],
     window_minutes: int = TREND_WINDOW_MINUTES,
+    expected_interval_seconds: float = DEFAULT_EXPECTED_INTERVAL_SECONDS,
 ) -> dict[str, Any]:
     """Aggregate uneven local samples into comparable bytes-per-minute rates."""
-    points = [point for point in history if isinstance(point.get("epoch"), (int, float))]
+    points = [
+        point
+        for point in history
+        if isinstance(point.get("epoch"), (int, float))
+        and sample_is_realtime(point, expected_interval_seconds)
+    ]
     ids = tuple(service_ids)
     if not points:
         return {"unit": "bytes_per_minute", "window_minutes": window_minutes, "buckets": [], "peak_bytes_per_minute": 0}

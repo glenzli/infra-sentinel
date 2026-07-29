@@ -16,7 +16,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "bin"))
 from mihomo_traffic import (  # noqa: E402
     MihomoApiClient,
     MihomoTrafficTracker,
-    _is_socket,
+    _is_trusted_mihomo_socket,
     classify_host,
     classify_route,
     combine_samples,
@@ -101,20 +101,94 @@ class FakeUnixSocket:
 
 class MihomoApiClientTests(unittest.TestCase):
     def test_rejects_socket_owned_by_another_user(self) -> None:
-        socket_stat = SimpleNamespace(st_mode=stat.S_IFSOCK, st_uid=502)
+        socket_stat = SimpleNamespace(
+            st_mode=stat.S_IFSOCK | stat.S_IWUSR,
+            st_uid=502,
+            st_gid=20,
+        )
         with (
-            patch.object(Path, "stat", return_value=socket_stat),
+            patch.object(Path, "lstat", return_value=socket_stat),
             patch("mihomo_traffic.os.geteuid", return_value=501),
         ):
-            self.assertFalse(_is_socket(Path("/tmp/other-user-mihomo.sock")))
+            self.assertFalse(
+                _is_trusted_mihomo_socket(Path("/tmp/other-user-mihomo.sock"))
+            )
 
     def test_accepts_socket_owned_by_current_user(self) -> None:
-        socket_stat = SimpleNamespace(st_mode=stat.S_IFSOCK, st_uid=501)
+        socket_stat = SimpleNamespace(
+            st_mode=stat.S_IFSOCK | stat.S_IWUSR,
+            st_uid=501,
+            st_gid=20,
+        )
         with (
-            patch.object(Path, "stat", return_value=socket_stat),
+            patch.object(Path, "lstat", return_value=socket_stat),
             patch("mihomo_traffic.os.geteuid", return_value=501),
         ):
-            self.assertTrue(_is_socket(Path("/tmp/current-user-mihomo.sock")))
+            self.assertTrue(
+                _is_trusted_mihomo_socket(Path("/tmp/current-user-mihomo.sock"))
+            )
+
+    def test_accepts_clash_verge_root_service_socket(self) -> None:
+        candidate = Path("/tmp/verge/verge-mihomo.sock")
+        socket_stat = SimpleNamespace(
+            st_mode=stat.S_IFSOCK | stat.S_IWGRP | stat.S_IWOTH,
+            st_uid=0,
+            st_gid=20,
+        )
+        parent_stat = SimpleNamespace(
+            st_mode=stat.S_IFDIR | stat.S_IXGRP,
+            st_uid=0,
+            st_gid=20,
+        )
+
+        def fake_lstat(path: Path) -> SimpleNamespace:
+            return socket_stat if path == candidate else parent_stat
+
+        with (
+            patch.object(Path, "lstat", autospec=True, side_effect=fake_lstat),
+            patch("mihomo_traffic.os.geteuid", return_value=501),
+            patch("mihomo_traffic.os.getegid", return_value=20),
+            patch("mihomo_traffic.os.getgroups", return_value=[20]),
+        ):
+            self.assertTrue(_is_trusted_mihomo_socket(candidate))
+
+    def test_rejects_root_socket_outside_known_service_paths(self) -> None:
+        socket_stat = SimpleNamespace(
+            st_mode=stat.S_IFSOCK | stat.S_IWOTH,
+            st_uid=0,
+            st_gid=0,
+        )
+        with (
+            patch.object(Path, "lstat", return_value=socket_stat),
+            patch("mihomo_traffic.os.geteuid", return_value=501),
+        ):
+            self.assertFalse(
+                _is_trusted_mihomo_socket(Path("/tmp/untrusted-mihomo.sock"))
+            )
+
+    def test_rejects_root_service_socket_in_world_writable_parent(self) -> None:
+        candidate = Path("/tmp/verge/verge-mihomo.sock")
+        socket_stat = SimpleNamespace(
+            st_mode=stat.S_IFSOCK | stat.S_IWOTH,
+            st_uid=0,
+            st_gid=20,
+        )
+        parent_stat = SimpleNamespace(
+            st_mode=stat.S_IFDIR | stat.S_IXOTH | stat.S_IWOTH,
+            st_uid=0,
+            st_gid=20,
+        )
+
+        def fake_lstat(path: Path) -> SimpleNamespace:
+            return socket_stat if path == candidate else parent_stat
+
+        with (
+            patch.object(Path, "lstat", autospec=True, side_effect=fake_lstat),
+            patch("mihomo_traffic.os.geteuid", return_value=501),
+            patch("mihomo_traffic.os.getegid", return_value=20),
+            patch("mihomo_traffic.os.getgroups", return_value=[20]),
+        ):
+            self.assertFalse(_is_trusted_mihomo_socket(candidate))
 
     def test_rejects_response_above_configured_safety_limit(self) -> None:
         fake_socket = FakeUnixSocket([b"x" * 40, b"y" * 40])
@@ -123,7 +197,7 @@ class MihomoApiClientTests(unittest.TestCase):
             max_response_bytes=64,
         )
         with (
-            patch("mihomo_traffic._is_socket", return_value=True),
+            patch("mihomo_traffic._is_trusted_mihomo_socket", return_value=True),
             patch("mihomo_traffic.socket.socket", return_value=fake_socket),
         ):
             with self.assertRaisesRegex(RuntimeError, "响应超过"):
@@ -144,7 +218,7 @@ class MihomoApiClientTests(unittest.TestCase):
             max_response_bytes=1024,
         )
         with (
-            patch("mihomo_traffic._is_socket", return_value=True),
+            patch("mihomo_traffic._is_trusted_mihomo_socket", return_value=True),
             patch("mihomo_traffic.socket.socket", return_value=fake_socket),
         ):
             self.assertEqual(client.connections()["connections"], [])

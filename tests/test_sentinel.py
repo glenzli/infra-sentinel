@@ -22,6 +22,12 @@ from sentinel import (  # noqa: E402
     read_config,
     totals_for_window,
 )
+from sample_timing import (  # noqa: E402
+    CATCH_UP_INTERVAL,
+    REALTIME_INTERVAL,
+    annotate_sample_timing,
+    classify_interval,
+)
 from session import RESET_REQUEST_SCHEMA, SessionMeter, consume_reset_request  # noqa: E402
 from snapshot import create_snapshot  # noqa: E402
 from traffic_estimation import (  # noqa: E402
@@ -51,6 +57,7 @@ def sample(
     *,
     chatgpt: int = 0,
     unattributed: int = 0,
+    observed_seconds: float = 5.0,
 ) -> dict[str, object]:
     total = up_bytes + down_bytes
     services: list[dict[str, object]] = []
@@ -74,7 +81,7 @@ def sample(
         "schema": SAMPLE_SCHEMA,
         "timestamp": "2026-07-28T12:00:00+08:00",
         "epoch": epoch,
-        "observed_seconds": 5.0,
+        "observed_seconds": observed_seconds,
         "kernel": {
             "up_bytes": up_bytes,
             "down_bytes": down_bytes,
@@ -211,6 +218,22 @@ class AlertEngineTests(unittest.TestCase):
             {"up_bytes": 30, "down_bytes": 40},
         )
 
+    def test_window_totals_exclude_delayed_catch_up_but_keep_live_samples(self) -> None:
+        live = sample(200, 30, 40)
+        delayed = sample(205, 3_000, 4_000, observed_seconds=3_600)
+        annotate_sample_timing(live, 5)
+        annotate_sample_timing(delayed, 5)
+        self.assertEqual(live["interval_kind"], REALTIME_INTERVAL)
+        self.assertEqual(delayed["interval_kind"], CATCH_UP_INTERVAL)
+        self.assertEqual(
+            totals_for_window([live, delayed], 210, 30, 5),
+            {"up_bytes": 30, "down_bytes": 40},
+        )
+
+    def test_interval_classification_allows_one_delayed_cycle_only(self) -> None:
+        self.assertEqual(classify_interval(10, 5), REALTIME_INTERVAL)
+        self.assertEqual(classify_interval(10.01, 5), CATCH_UP_INTERVAL)
+
 
 class VpsTrackerTests(unittest.TestCase):
     def test_vps_counters_use_differences_and_never_replay_reset(self) -> None:
@@ -330,6 +353,29 @@ class TrafficEstimationTests(unittest.TestCase):
         self.assertEqual(bucket["services"]["chatgpt"], 12 * 1_048_576)
         self.assertEqual(bucket["mihomo_total"], 12 * 2_097_152)
 
+    def test_trend_excludes_old_unmarked_catch_up_points(self) -> None:
+        result = minute_rate_trend([
+            {
+                "epoch": 120,
+                "observed_seconds": 5,
+                "services": {"chatgpt": 100},
+                "mihomo_total": 200,
+                "proxy_observed": 150,
+                "unattributed": 50,
+            },
+            {
+                "epoch": 125,
+                "observed_seconds": 3_600,
+                "services": {"chatgpt": 10_000},
+                "mihomo_total": 20_000,
+                "proxy_observed": 15_000,
+                "unattributed": 5_000,
+            },
+        ], ("chatgpt",), expected_interval_seconds=5)
+        bucket = result["buckets"][0]
+        self.assertEqual(bucket["services"]["chatgpt"], 1_200)
+        self.assertEqual(bucket["mihomo_total"], 2_400)
+
 
 class SessionMeterTests(unittest.TestCase):
     def test_session_accumulates_exact_total_dynamic_services_and_remote_bill(self) -> None:
@@ -384,6 +430,28 @@ class SessionMeterTests(unittest.TestCase):
             self.assertEqual(consume_reset_request(Path(temporary))["id"], "reset-1")
             self.assertIsNone(consume_reset_request(Path(temporary)))
 
+    def test_catch_up_bytes_stay_in_totals_but_not_rate_trend(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            meter = SessionMeter(Path(temporary), expected_interval_seconds=5)
+            meter.reset(100, "manual")
+            delayed = sample(
+                105,
+                3_000,
+                4_000,
+                chatgpt=7_000,
+                observed_seconds=3_600,
+            )
+            annotate_sample_timing(delayed, 5)
+            meter.record(delayed, {"status": "disabled", "last_sample": {}})
+            snapshot = meter.snapshot(
+                False,
+                TrafficEstimationConfig(),
+                now=110,
+            )
+            self.assertEqual(snapshot["kernel"]["total_bytes"], 7_000)
+            self.assertEqual(snapshot["services"][0]["total_bytes"], 7_000)
+            self.assertEqual(snapshot["trend"]["buckets"], [])
+
 
 class SnapshotAndEventTests(unittest.TestCase):
     def test_snapshot_contains_only_aggregate_mihomo_metadata(self) -> None:
@@ -414,6 +482,18 @@ class SnapshotAndEventTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(latest_delta_event(path)["id"], "new")
+
+    def test_live_event_selector_ignores_catch_up_alerts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "events.jsonl"
+            live_sample = sample(100, 10, 20)
+            delayed_sample = sample(105, 1_000, 2_000, observed_seconds=3_600)
+            path.write_text(
+                json.dumps({"id": "live", "sample": live_sample}) + "\n"
+                + json.dumps({"id": "catch-up", "sample": delayed_sample}) + "\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(latest_delta_event(path)["id"], "live")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
 #import <UserNotifications/UserNotifications.h>
 #import "DashboardController.h"
 #import "Localization.h"
+#import "MonitorHealth.h"
 #import "TrafficFormatting.h"
 
 static NSDictionary *DictionaryValue(id value) {
@@ -300,17 +301,26 @@ static NSDictionary *DictionaryValue(id value) {
 - (void)refresh:(id)sender {
     [self.menu removeAllItems];
     NSDictionary *state = [self loadState];
-    [self.dashboardController updateWithState:state ?: @{}];
-    if (state == nil) {
-        NSDictionary *health = [self loadHealth];
-        NSString *healthError = [health[@"status"] isEqualToString:@"error"] ? health[@"message"] : nil;
-        self.statusItem.button.title = healthError
-            ? [@"⚠︎ " stringByAppendingString:TSLocalized(self.language, @"status.sampling_failed")]
-            : ([self.sentinelTask isRunning]
-                ? [@"⌁ " stringByAppendingString:TSLocalized(self.language, @"status.starting")]
-                : [@"⚠︎ " stringByAppendingString:TSLocalized(self.language, @"status.abnormal")]);
+    NSDictionary *health = [self loadHealth];
+    [self.dashboardController updateWithState:TSStateByAttachingMonitorHealth(state, health)];
+    if (TSMonitorHealthHasError(health)) {
+        NSString *healthError = TSMonitorHealthMessage(health) ?: TSLocalized(self.language, @"error.unknown");
+        self.statusItem.button.title = [@"⚠︎ " stringByAppendingString:TSLocalized(self.language, @"status.sampling_failed")];
         [self addActionItem:TSLocalized(self.language, @"menu.open") action:@selector(showDashboard:)];
-        [self addDisabledItem:healthError ?: TSLocalized(self.language, @"status.first_sample")];
+        [self addDisabledItem:healthError];
+        if ([state[@"updated_at"] isKindOfClass:[NSString class]]) {
+            [self addDisabledItem:[NSString stringWithFormat:TSLocalized(self.language, @"status.last_success_format"),
+                                   state[@"updated_at"]]];
+        }
+        [self addFooterItems];
+        return;
+    }
+    if (state == nil) {
+        self.statusItem.button.title = [self.sentinelTask isRunning]
+            ? [@"⌁ " stringByAppendingString:TSLocalized(self.language, @"status.starting")]
+            : [@"⚠︎ " stringByAppendingString:TSLocalized(self.language, @"status.abnormal")];
+        [self addActionItem:TSLocalized(self.language, @"menu.open") action:@selector(showDashboard:)];
+        [self addDisabledItem:TSLocalized(self.language, @"status.first_sample")];
         [self addFooterItems];
         return;
     }
