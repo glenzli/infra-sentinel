@@ -18,7 +18,7 @@ mkdir -p "$MACOS_DIR" "$SENTINEL_RESOURCES_DIR" "$MODULE_CACHE_DIR"
 cp "$ROOT_DIR/app/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "$ROOT_DIR/assets/TrafficSentinel.icns" "$APP_RESOURCES_DIR/TrafficSentinel.icns"
 cp "$ROOT_DIR/bin/sentinel.py" "$SENTINEL_RESOURCES_DIR/sentinel.py"
-cp "$ROOT_DIR/bin/config_migration.py" "$SENTINEL_RESOURCES_DIR/config_migration.py"
+cp "$ROOT_DIR/bin/configuration.py" "$SENTINEL_RESOURCES_DIR/configuration.py"
 cp "$ROOT_DIR/bin/mihomo_traffic.py" "$SENTINEL_RESOURCES_DIR/mihomo_traffic.py"
 cp "$ROOT_DIR/bin/remote_ssh.py" "$SENTINEL_RESOURCES_DIR/remote_ssh.py"
 cp "$ROOT_DIR/bin/sample_timing.py" "$SENTINEL_RESOURCES_DIR/sample_timing.py"
@@ -31,6 +31,8 @@ cp "$ROOT_DIR/config.example.toml" "$SENTINEL_RESOURCES_DIR/config.example.toml"
 /usr/bin/clang -O2 -fblocks -fobjc-arc -fmodules -fmodules-cache-path="$MODULE_CACHE_DIR" -framework Cocoa -framework UserNotifications \
   "$ROOT_DIR/app/MenuBarApp.m" \
   "$ROOT_DIR/app/DashboardController.m" \
+  "$ROOT_DIR/app/SettingsController.m" \
+  "$ROOT_DIR/app/SettingsStore.m" \
   "$ROOT_DIR/app/TrafficOverviewPanel.m" \
   "$ROOT_DIR/app/XrayUserPanel.m" \
   "$ROOT_DIR/app/TrafficFormatting.m" \

@@ -11,15 +11,16 @@ import unittest
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "bin"))
 
-from config_migration import migrate_config, remove_legacy_codex_hooks  # noqa: E402
-from sentinel import (  # noqa: E402
-    AlertEngine,
+from configuration import (  # noqa: E402
     Config,
     MonitorConfig,
-    SAMPLE_SCHEMA,
     StateConfig,
-    latest_delta_event,
     read_config,
+)
+from sentinel import (  # noqa: E402
+    AlertEngine,
+    SAMPLE_SCHEMA,
+    latest_delta_event,
     totals_for_window,
 )
 from sample_timing import (  # noqa: E402
@@ -45,7 +46,7 @@ def make_config(state_dir: Path) -> Config:
         state=StateConfig(1024 * 1024, 2),
         vps=VpsConfig(False, "", "auto", 300, 1),
         xray_stats=XrayStatsConfig(False, "", "127.0.0.1:10085", "/usr/local/bin/xray", 300),
-        estimation=TrafficEstimationConfig(2.0),
+        estimation=TrafficEstimationConfig("both"),
         state_dir=state_dir,
     )
 
@@ -108,79 +109,14 @@ def sample(
     }
 
 
-class ConfigTests(unittest.TestCase):
-    def test_example_config_needs_no_local_process_or_domain_rules(self) -> None:
+class RuntimeConfigTests(unittest.TestCase):
+    def test_example_config_maps_fixed_product_behavior(self) -> None:
         config = read_config(PROJECT_ROOT / "config.example.toml")
         self.assertEqual(config.monitor.sample_seconds, 5)
         self.assertEqual(config.estimation.vps_billing_legs, 2.0)
-        self.assertFalse(hasattr(config, "groups"))
-        self.assertFalse(hasattr(config, "codex_activity"))
-
-    def test_migration_removes_only_obsolete_local_attribution(self) -> None:
-        old = """\
-[monitor]
-sample_seconds = 5
-warning_window_seconds = 300
-warning_bytes = 100
-critical_window_seconds = 600
-critical_bytes = 1000
-alert_group = "codex"
-
-[codex_activity]
-enabled = true
-
-[[process_groups]]
-id = "codex"
-label = "Codex"
-role = "attribution"
-patterns = ["codex"]
-
-[vps]
-enabled = true
-ssh_host = "sentinel-vps"
-interface = "auto"
-poll_seconds = 300
-billing_cycle_start_day = 1
-
-[estimation]
-proxy_group = "proxy"
-vps_billing_legs = 2.0
-"""
-        with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "config.toml"
-            path.write_text(old, encoding="utf-8")
-            self.assertTrue(migrate_config(path))
-            migrated = path.read_text(encoding="utf-8")
-            self.assertNotIn("codex_activity", migrated)
-            self.assertNotIn("process_groups", migrated)
-            self.assertNotIn("alert_group", migrated)
-            self.assertNotIn("proxy_group", migrated)
-            self.assertIn('ssh_host = "sentinel-vps"', migrated)
-            self.assertIn("vps_billing_legs = 2.0", migrated)
-            self.assertTrue(path.with_suffix(".toml.pre-mihomo").exists())
-
-    def test_migration_removes_only_the_retired_codex_hook(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "hooks.json"
-            path.write_text(json.dumps({
-                "hooks": {
-                    "SessionStart": [
-                        {"hooks": [
-                            {
-                                "type": "command",
-                                "command": "python codex_event_hook.py --traffic-sentinel-capture",
-                            },
-                            {"type": "command", "command": "keep-me"},
-                        ]},
-                    ],
-                },
-            }), encoding="utf-8")
-            self.assertTrue(remove_legacy_codex_hooks(path))
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            handlers = payload["hooks"]["SessionStart"][0]["hooks"]
-            self.assertEqual([handler["command"] for handler in handlers], ["keep-me"])
-            self.assertTrue(path.with_suffix(".json.pre-domain-attribution").exists())
-
+        self.assertEqual(config.vps.interface, "auto")
+        self.assertEqual(config.vps.poll_seconds, 300)
+        self.assertEqual(config.xray_stats.api_server, "127.0.0.1:10085")
 
 class AlertEngineTests(unittest.TestCase):
     def test_alerts_use_exact_mihomo_total_windows(self) -> None:
@@ -301,6 +237,10 @@ class VpsTrackerTests(unittest.TestCase):
 
 
 class TrafficEstimationTests(unittest.TestCase):
+    def test_rejects_unknown_billing_modes(self) -> None:
+        with self.assertRaisesRegex(ValueError, "billing_mode"):
+            TrafficEstimationConfig("unknown")
+
     def test_measures_aligned_xray_to_vps_multiplier(self) -> None:
         result = estimate_traffic(
             2_512,
@@ -309,7 +249,7 @@ class TrafficEstimationTests(unittest.TestCase):
             1_000,
             True,
             True,
-            TrafficEstimationConfig(2.0),
+            TrafficEstimationConfig("both"),
         )
         self.assertEqual(result["observed_multiplier"], 2.512)
         self.assertEqual(result["ideal_billable_bytes"], 2_000)
@@ -408,7 +348,7 @@ class SessionMeterTests(unittest.TestCase):
             )
             snapshot = meter.snapshot(
                 True,
-                TrafficEstimationConfig(2.0),
+                TrafficEstimationConfig("both"),
                 xray_stats={"ready": True, "intervals": 1, "total_bytes": 80},
                 now=160,
             )
@@ -419,6 +359,42 @@ class SessionMeterTests(unittest.TestCase):
             self.assertEqual(snapshot["attribution"]["coverage"], 0.8)
             self.assertEqual(snapshot["vps"]["total_bytes"], 200)
             self.assertEqual(snapshot["breakdown"]["observed_multiplier"], 2.5)
+
+    def test_outbound_billing_uses_only_vps_tx_as_the_billable_total(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            meter = SessionMeter(Path(temporary))
+            meter.reset(100, "manual")
+            meter.set_vps_baseline({
+                "status": "ok",
+                "last_sample": {
+                    "schema": VPS_SAMPLE_SCHEMA,
+                    "epoch": 100,
+                    "interval_started_epoch": 95,
+                },
+            })
+            meter.record(
+                sample(105, 100, 0),
+                {
+                    "status": "ok",
+                    "last_sample": {
+                        "schema": VPS_SAMPLE_SCHEMA,
+                        "epoch": 105,
+                        "interval_started_epoch": 100,
+                        "in_bytes": 90,
+                        "out_bytes": 110,
+                    },
+                },
+            )
+            snapshot = meter.snapshot(
+                True,
+                TrafficEstimationConfig("outbound"),
+                xray_stats={"ready": True, "intervals": 1, "total_bytes": 80},
+                now=160,
+            )
+            self.assertEqual(snapshot["vps"]["interface_total_bytes"], 200)
+            self.assertEqual(snapshot["vps"]["total_bytes"], 110)
+            self.assertEqual(snapshot["breakdown"]["vps_billing_legs"], 1.0)
+            self.assertEqual(snapshot["breakdown"]["observed_multiplier"], 1.375)
 
     def test_consumes_a_dashboard_reset_request_once(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

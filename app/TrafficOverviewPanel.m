@@ -125,7 +125,7 @@ void TSDrawTrafficSummaryPanel(NSRect rect, NSDictionary *session, NSDictionary 
         packagingLine = [NSString stringWithFormat:TSLocalized(language, @"estimate.packet_waiting_format"),
                          [breakdown[@"billable_overhead_share"] doubleValue] * 100.0];
     } else {
-        packagingLine = TSLocalized(language, @"estimate.fixed_disabled");
+        packagingLine = TSLocalized(language, @"estimate.alignment_pending");
     }
     DrawOverviewText(packagingLine, NSMakeRect(rect.origin.x + 2, cardY - 49, rect.size.width - 4, 17),
                      [NSFont systemFontOfSize:11.5 weight:NSFontWeightMedium],

@@ -3,6 +3,7 @@
 #import "DashboardController.h"
 #import "Localization.h"
 #import "MonitorHealth.h"
+#import "SettingsController.h"
 #import "TrafficFormatting.h"
 
 static NSDictionary *DictionaryValue(id value) {
@@ -14,7 +15,7 @@ static NSDictionary *DictionaryValue(id value) {
 @property(nonatomic, copy) NSString *statePath;
 @property(nonatomic, copy) NSString *configPath;
 @property(nonatomic, copy) NSString *helperPath;
-@property(nonatomic, copy) NSString *migrationHelperPath;
+@property(nonatomic, copy) NSString *configurationHelperPath;
 @property(nonatomic, copy) NSString *notificationStatePath;
 @property(nonatomic, copy) NSString *monitorStatus;
 @property(nonatomic, strong) NSStatusItem *statusItem;
@@ -22,6 +23,7 @@ static NSDictionary *DictionaryValue(id value) {
 @property(nonatomic, strong) NSTimer *refreshTimer;
 @property(nonatomic, strong) NSTask *sentinelTask;
 @property(nonatomic, strong) DashboardController *dashboardController;
+@property(nonatomic, strong) TSSettingsController *settingsController;
 @property(nonatomic, assign) BOOL isQuitting;
 @property(nonatomic, assign) BOOL isRestarting;
 @property(nonatomic, copy) NSString *lastNotifiedEventID;
@@ -42,6 +44,22 @@ static NSDictionary *DictionaryValue(id value) {
     self.monitorStatus = prepared ? TSLocalized(self.language, @"monitor.starting") : TSLocalized(self.language, @"monitor.init_failed");
     self.dashboardController = [[DashboardController alloc] initWithStateDirectory:[self.supportPath stringByAppendingPathComponent:@"state"]];
     [self.dashboardController setLanguage:self.language];
+    __weak typeof(self) weakSelf = self;
+    self.settingsController = [[TSSettingsController alloc]
+        initWithConfigPath:self.configPath
+                helperPath:self.configurationHelperPath
+            appliedHandler:^{
+                AppDelegate *strongSelf = weakSelf;
+                if (strongSelf == nil) {
+                    return;
+                }
+                [strongSelf.dashboardController showNotice:TSLocalized(strongSelf.language, @"notice.settings_applied")];
+                [strongSelf restartSentinel:nil];
+            }];
+    [self.settingsController setLanguage:self.language];
+    [self.dashboardController setSettingsHandler:^{
+        [weakSelf showSettings:nil];
+    }];
     [self configureNotifications];
     if (prepared) {
         [self startSentinelIfNeeded];
@@ -73,12 +91,12 @@ static NSDictionary *DictionaryValue(id value) {
 - (void)configurePaths {
     NSURL *applicationSupport = [[NSFileManager defaultManager] URLsForDirectory:NSApplicationSupportDirectory
                                                                          inDomains:NSUserDomainMask].firstObject;
-    self.supportPath = [[applicationSupport URLByAppendingPathComponent:@"Codex Traffic Sentinel" isDirectory:YES] path];
+    self.supportPath = [[applicationSupport URLByAppendingPathComponent:@"Traffic Sentinel" isDirectory:YES] path];
     self.statePath = [self.supportPath stringByAppendingPathComponent:@"state/menubar.json"];
     self.configPath = [self.supportPath stringByAppendingPathComponent:@"config.toml"];
     self.notificationStatePath = [self.supportPath stringByAppendingPathComponent:@"notification-state.json"];
     self.helperPath = [[NSBundle mainBundle] pathForResource:@"sentinel" ofType:@"py" inDirectory:@"Sentinel"];
-    self.migrationHelperPath = [[NSBundle mainBundle] pathForResource:@"config_migration" ofType:@"py" inDirectory:@"Sentinel"];
+    self.configurationHelperPath = [[NSBundle mainBundle] pathForResource:@"configuration" ofType:@"py" inDirectory:@"Sentinel"];
 }
 
 - (BOOL)prepareSupportDirectory {
@@ -94,19 +112,7 @@ static NSDictionary *DictionaryValue(id value) {
             return NO;
         }
     }
-    if (self.migrationHelperPath.length == 0) {
-        return NO;
-    }
-    NSTask *migration = [[NSTask alloc] init];
-    migration.executableURL = [NSURL fileURLWithPath:@"/usr/bin/env"];
-    migration.arguments = @[ @"python3", self.migrationHelperPath, self.configPath ];
-    migration.standardOutput = [NSFileHandle fileHandleWithNullDevice];
-    migration.standardError = [NSFileHandle fileHandleWithNullDevice];
-    if (![migration launchAndReturnError:&error]) {
-        return NO;
-    }
-    [migration waitUntilExit];
-    return migration.terminationStatus == 0 && self.helperPath.length > 0;
+    return self.helperPath.length > 0 && self.configurationHelperPath.length > 0;
 }
 
 - (void)startSentinelIfNeeded {
@@ -120,9 +126,9 @@ static NSDictionary *DictionaryValue(id value) {
     NSMutableDictionary<NSString *, NSString *> *environment = [NSProcessInfo processInfo].environment.mutableCopy;
     environment[@"PATH"] = @"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
     environment[@"PYTHONDONTWRITEBYTECODE"] = @"1";
-    environment[@"CODEX_TRAFFIC_SENTINEL_STATE_DIR"] = [self.supportPath stringByAppendingPathComponent:@"state"];
-    environment[@"CODEX_TRAFFIC_SENTINEL_PARENT_PID"] = [NSString stringWithFormat:@"%d", [NSProcessInfo processInfo].processIdentifier];
-    environment[@"CODEX_TRAFFIC_SENTINEL_APP_NOTIFICATIONS"] = @"1";
+    environment[@"TRAFFIC_SENTINEL_STATE_DIR"] = [self.supportPath stringByAppendingPathComponent:@"state"];
+    environment[@"TRAFFIC_SENTINEL_PARENT_PID"] = [NSString stringWithFormat:@"%d", [NSProcessInfo processInfo].processIdentifier];
+    environment[@"TRAFFIC_SENTINEL_APP_NOTIFICATIONS"] = @"1";
     task.environment = environment;
     task.standardOutput = [NSFileHandle fileHandleWithNullDevice];
     task.standardError = [NSFileHandle fileHandleWithNullDevice];
@@ -215,14 +221,17 @@ static NSDictionary *DictionaryValue(id value) {
         return TSLocalized(self.language, @"notification.deescalated_body");
     }
     NSDictionary *windows = DictionaryValue(event[@"windows"]);
+    NSDictionary *windowSeconds = DictionaryValue(event[@"window_seconds"]);
     NSDictionary *warning = DictionaryValue(windows[@"warning"]);
     NSDictionary *critical = DictionaryValue(windows[@"critical"]);
     NSString *level = [event[@"level"] isKindOfClass:[NSString class]] ? event[@"level"] : @"warning";
     if ([level isEqualToString:@"critical"]) {
         long long total = [critical[@"up_bytes"] longLongValue] + [critical[@"down_bytes"] longLongValue];
-        return [NSString stringWithFormat:TSLocalized(self.language, @"notification.critical_body"), TSFormatBytes(total)];
+        NSInteger minutes = MAX(1, [windowSeconds[@"critical"] integerValue] / 60);
+        return [NSString stringWithFormat:TSLocalized(self.language, @"notification.critical_body"), minutes, TSFormatBytes(total)];
     }
-    return [NSString stringWithFormat:TSLocalized(self.language, @"notification.warning_body"), TSFormatBytes([warning[@"up_bytes"] longLongValue]), TSFormatBytes([warning[@"down_bytes"] longLongValue])];
+    NSInteger minutes = MAX(1, [windowSeconds[@"warning"] integerValue] / 60);
+    return [NSString stringWithFormat:TSLocalized(self.language, @"notification.warning_body"), minutes, TSFormatBytes([warning[@"up_bytes"] longLongValue]), TSFormatBytes([warning[@"down_bytes"] longLongValue])];
 }
 
 - (void)deliverNotificationForEventIfNeeded:(NSDictionary *)event {
@@ -279,7 +288,7 @@ static NSDictionary *DictionaryValue(id value) {
 - (void)addFooterItems {
     [self.menu addItem:[NSMenuItem separatorItem]];
     [self addActionItem:TSLocalized(self.language, @"menu.restart") action:@selector(restartSentinel:)];
-    [self addActionItem:TSLocalized(self.language, @"menu.edit") action:@selector(openConfig:)];
+    [self addActionItem:TSLocalized(self.language, @"menu.settings") action:@selector(showSettings:)];
     [self addActionItem:TSLocalized(self.language, @"menu.state") action:@selector(showStateFolder:)];
     NSMenuItem *languageItem = [[NSMenuItem alloc] initWithTitle:TSLocalized(self.language, @"menu.language") action:nil keyEquivalent:@""];
     NSMenu *languageMenu = [[NSMenu alloc] initWithTitle:TSLocalized(self.language, @"menu.language")];
@@ -366,6 +375,10 @@ static NSDictionary *DictionaryValue(id value) {
     [self.dashboardController requestSessionReset:sender];
 }
 
+- (void)showSettings:(id)sender {
+    [self.settingsController showSettings:sender];
+}
+
 - (void)restartSentinel:(id)sender {
     self.isRestarting = YES;
     self.monitorStatus = TSLocalized(self.language, @"monitor.restarting");
@@ -382,11 +395,8 @@ static NSDictionary *DictionaryValue(id value) {
     self.language = sender.tag == TSLanguageEnglish ? TSLanguageEnglish : TSLanguageChinese;
     [[NSUserDefaults standardUserDefaults] setObject:TSLanguageIdentifier(self.language) forKey:@"TrafficSentinelLanguage"];
     [self.dashboardController setLanguage:self.language];
+    [self.settingsController setLanguage:self.language];
     [self refresh:nil];
-}
-
-- (void)openConfig:(id)sender {
-    [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:self.configPath]];
 }
 
 - (void)showStateFolder:(id)sender {

@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 from collections import deque
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass
 from datetime import datetime
 import fcntl
 import json
@@ -17,10 +16,10 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-import tomllib
 from typing import Any
 import uuid
 
+from configuration import Config, StateConfig, read_config
 from mihomo_traffic import (
     MIHOMO_SAMPLE_SCHEMA,
     MihomoApiClient,
@@ -33,129 +32,13 @@ from mihomo_traffic import (
 )
 from sample_timing import annotate_sample_timing, sample_is_realtime
 from session import SessionMeter, consume_reset_request
-from traffic_estimation import TrafficEstimationConfig
-from vps import VpsConfig, VpsMonitor
-from xray_stats import XrayStatsConfig, XrayStatsMonitor
+from vps import VpsMonitor
+from xray_stats import XrayStatsMonitor
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_CONFIG = PROJECT_ROOT / "config.toml"
-FALLBACK_CONFIG = PROJECT_ROOT / "config.example.toml"
-STATE_DIRECTORY_ENV = "CODEX_TRAFFIC_SENTINEL_STATE_DIR"
-PARENT_PROCESS_ENV = "CODEX_TRAFFIC_SENTINEL_PARENT_PID"
-APP_NOTIFICATIONS_ENV = "CODEX_TRAFFIC_SENTINEL_APP_NOTIFICATIONS"
+PARENT_PROCESS_ENV = "TRAFFIC_SENTINEL_PARENT_PID"
+APP_NOTIFICATIONS_ENV = "TRAFFIC_SENTINEL_APP_NOTIFICATIONS"
 SAMPLE_SCHEMA = 5
-
-
-@dataclass(frozen=True)
-class MonitorConfig:
-    sample_seconds: int
-    warning_window_seconds: int
-    warning_bytes: int
-    critical_window_seconds: int
-    critical_bytes: int
-
-
-@dataclass(frozen=True)
-class StateConfig:
-    max_log_bytes: int
-    backups: int
-
-
-@dataclass(frozen=True)
-class Config:
-    monitor: MonitorConfig
-    state: StateConfig
-    vps: VpsConfig
-    xray_stats: XrayStatsConfig
-    estimation: TrafficEstimationConfig
-    state_dir: Path
-
-
-def read_config(path: Path | None) -> Config:
-    selected = path or (DEFAULT_CONFIG if DEFAULT_CONFIG.exists() else FALLBACK_CONFIG)
-    with selected.open("rb") as handle:
-        raw = tomllib.load(handle)
-
-    monitor_raw = raw.get("monitor", {})
-    monitor = MonitorConfig(
-        sample_seconds=int(monitor_raw.get("sample_seconds", 5)),
-        warning_window_seconds=int(monitor_raw.get("warning_window_seconds", 300)),
-        warning_bytes=int(monitor_raw.get("warning_bytes", 268_435_456)),
-        critical_window_seconds=int(monitor_raw.get("critical_window_seconds", 600)),
-        critical_bytes=int(monitor_raw.get("critical_bytes", 1_073_741_824)),
-    )
-    if min(asdict(monitor).values()) <= 0:
-        raise ValueError("所有 [monitor] 数值都必须大于 0")
-    if monitor.sample_seconds < 2:
-        raise ValueError("[monitor] sample_seconds 至少为 2 秒")
-
-    state_raw = raw.get("state", {})
-    state = StateConfig(
-        max_log_bytes=int(state_raw.get("max_log_bytes", 10 * 1024 * 1024)),
-        backups=int(state_raw.get("backups", 5)),
-    )
-    if state.max_log_bytes <= 0 or state.backups < 1:
-        raise ValueError("[state] max_log_bytes 必须大于 0，backups 至少为 1")
-
-    vps_raw = raw.get("vps", {})
-    vps = VpsConfig(
-        enabled=bool(vps_raw.get("enabled", False)),
-        ssh_host=str(vps_raw.get("ssh_host", "")).strip(),
-        interface=str(vps_raw.get("interface", "auto")).strip(),
-        poll_seconds=int(vps_raw.get("poll_seconds", 300)),
-        billing_cycle_start_day=int(vps_raw.get("billing_cycle_start_day", 1)),
-    )
-    if vps.poll_seconds < 30:
-        raise ValueError("[vps] poll_seconds 至少为 30 秒")
-    if not 1 <= vps.billing_cycle_start_day <= 31:
-        raise ValueError("[vps] billing_cycle_start_day 必须在 1 到 31 之间")
-    if vps.enabled and not vps.ssh_host:
-        raise ValueError("启用 VPS 监控时，[vps] ssh_host 不能为空")
-
-    xray_raw = raw.get("xray_stats", {})
-    expected_users_raw = xray_raw.get("users", [])
-    flagged_users_raw = xray_raw.get("flagged_users", [])
-    if not isinstance(expected_users_raw, list) or not all(
-        isinstance(item, str) and item.strip() for item in expected_users_raw
-    ):
-        raise ValueError("[xray_stats] users 必须是非空字符串数组")
-    if not isinstance(flagged_users_raw, list) or not all(
-        isinstance(item, str) and item.strip() for item in flagged_users_raw
-    ):
-        raise ValueError("[xray_stats] flagged_users 必须是非空字符串数组")
-    expected_users = tuple(dict.fromkeys(item.strip() for item in expected_users_raw))
-    flagged_users = tuple(dict.fromkeys(item.strip() for item in flagged_users_raw))
-    if any(">>>" in item or "\n" in item or "\r" in item for item in (*expected_users, *flagged_users)):
-        raise ValueError("[xray_stats] 用户标签不能包含 >>> 或换行")
-    xray_stats = XrayStatsConfig(
-        enabled=bool(xray_raw.get("enabled", False)),
-        ssh_host=str(xray_raw.get("ssh_host", "")).strip() or vps.ssh_host,
-        api_server=str(xray_raw.get("api_server", "127.0.0.1:10085")).strip(),
-        binary_path=str(xray_raw.get("binary_path", "/usr/local/bin/xray")).strip(),
-        poll_seconds=int(xray_raw.get("poll_seconds", vps.poll_seconds)),
-        expected_users=expected_users,
-        flagged_users=flagged_users,
-    )
-    if xray_stats.poll_seconds < 30:
-        raise ValueError("[xray_stats] poll_seconds 至少为 30 秒")
-    if xray_stats.enabled and not xray_stats.ssh_host:
-        raise ValueError("启用 Xray 用户统计时，[xray_stats] ssh_host 或 [vps] ssh_host 不能为空")
-
-    estimation_raw = raw.get("estimation", {})
-    estimation = TrafficEstimationConfig(
-        vps_billing_legs=float(estimation_raw.get("vps_billing_legs", 2.0)),
-    )
-    if estimation.vps_billing_legs <= 0:
-        raise ValueError("[estimation] vps_billing_legs 必须大于 0")
-
-    configured_state_directory = os.environ.get(STATE_DIRECTORY_ENV)
-    state_dir = (
-        Path(configured_state_directory).expanduser()
-        if configured_state_directory
-        else selected.parent / "state"
-    )
-    return Config(monitor, state, vps, xray_stats, estimation, state_dir)
 
 
 def iso_now(epoch: float | None = None) -> str:
@@ -334,6 +217,7 @@ def build_event(
     sample: dict[str, Any],
     warning: dict[str, int],
     critical: dict[str, int],
+    config: Config,
 ) -> dict[str, Any]:
     return {
         "schema": 2,
@@ -344,6 +228,10 @@ def build_event(
         "alert_group": "Mihomo",
         "sample": sample,
         "windows": {"warning": warning, "critical": critical},
+        "window_seconds": {
+            "warning": config.monitor.warning_window_seconds,
+            "critical": config.monitor.critical_window_seconds,
+        },
     }
 
 
@@ -352,6 +240,7 @@ def notify(
     level: str,
     warning: dict[str, int],
     critical: dict[str, int],
+    config: Config,
 ) -> None:
     if os.environ.get(APP_NOTIFICATIONS_ENV) == "1":
         return
@@ -359,10 +248,12 @@ def notify(
         title, body = "Traffic Sentinel", "Mihomo 流量已回落到阈值以下"
     elif level == "critical":
         title = "Traffic Sentinel 严重告警"
-        body = f"10 分钟累计 {format_bytes(critical['up_bytes'] + critical['down_bytes'])}"
+        minutes = config.monitor.critical_window_seconds // 60
+        body = f"{minutes} 分钟累计 {format_bytes(critical['up_bytes'] + critical['down_bytes'])}"
     else:
         title = "Traffic Sentinel 流量告警"
-        body = f"5 分钟 ↑{format_bytes(warning['up_bytes'])} ↓{format_bytes(warning['down_bytes'])}"
+        minutes = config.monitor.warning_window_seconds // 60
+        body = f"{minutes} 分钟 ↑{format_bytes(warning['up_bytes'])} ↓{format_bytes(warning['down_bytes'])}"
     script = 'display notification (system attribute "TS_BODY") with title (system attribute "TS_TITLE")'
     environment = os.environ.copy()
     environment.update({"TS_TITLE": title, "TS_BODY": body})
@@ -471,7 +362,7 @@ def handle_sample(
     transition = alerts.evaluate(warning, critical, config)
     if transition is not None:
         event_type, level = transition
-        event = build_event(event_type, level, sample, warning, critical)
+        event = build_event(event_type, level, sample, warning, critical, config)
         if event_type != "recovered":
             try:
                 from snapshot import create_snapshot
@@ -480,7 +371,7 @@ def handle_sample(
             except Exception as exc:
                 event["snapshot_error"] = str(exc)
         append_jsonl(config.state_dir / "events.jsonl", event, config.state)
-        notify(event_type, level, warning, critical)
+        notify(event_type, level, warning, critical, config)
 
     reset_request = consume_reset_request(config.state_dir)
     if reset_request is not None:

@@ -10,11 +10,26 @@ from sample_timing import DEFAULT_EXPECTED_INTERVAL_SECONDS, sample_is_realtime
 
 TREND_WINDOW_MINUTES = 15
 TYPICAL_TCP_FRAME_OVERHEAD_BYTES = 66
+BILLING_MODES = ("both", "outbound")
 
 
 @dataclass(frozen=True)
 class TrafficEstimationConfig:
-    vps_billing_legs: float = 2.0
+    billing_mode: str = "both"
+
+    def __post_init__(self) -> None:
+        if self.billing_mode not in BILLING_MODES:
+            raise ValueError("billing_mode must be both or outbound")
+
+    @property
+    def vps_billing_legs(self) -> float:
+        return 2.0 if self.billing_mode == "both" else 1.0
+
+    def billable_bytes(self, incoming: int, outgoing: int) -> int:
+        return incoming + outgoing if self.billing_mode == "both" else outgoing
+
+    def billable_packets(self, incoming: int, outgoing: int) -> int:
+        return incoming + outgoing if self.billing_mode == "both" else outgoing
 
 
 def estimate_traffic(
@@ -30,6 +45,7 @@ def estimate_traffic(
     empirical_ready = bool(vps_ready and xray_ready and xray_logical_bytes > 0)
     result: dict[str, Any] = {
         "method": "xray_empirical" if empirical_ready else "waiting_for_aligned_xray",
+        "billing_mode": config.billing_mode,
         "vps_billing_legs": config.vps_billing_legs,
         "xray_logical_bytes": xray_logical_bytes,
         "empirical_ready": empirical_ready,

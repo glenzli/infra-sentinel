@@ -1,48 +1,16 @@
-# The App copies this file to its own config.toml on first launch.
-# Local traffic needs no configuration: the App discovers a current-user-owned
-# Clash Verge / Mihomo Unix socket and reads its compatible /connections API.
-# TCP-only controllers and other proxy-core APIs are outside the support scope.
-# This file only controls thresholds, optional remote observers, and retention.
+# Managed by Traffic Sentinel Settings.
+# Local Mihomo discovery, sampling frequency, remote endpoints, and log
+# retention are fixed product behavior rather than user configuration.
 
 [monitor]
-sample_seconds = 5
-warning_window_seconds = 300
-warning_bytes = 268435456       # 250 MiB in either direction
-critical_window_seconds = 600
-critical_bytes = 1073741824     # 1 GiB combined upload + download
+warning_window_minutes = 5
+warning_mib = 250
+critical_window_minutes = 10
+critical_mib = 1024
 
-[vps]
-# This reads the existing host alias from ~/.ssh/config. It never stores a key,
-# password, or host address; aliases beginning with "-" are rejected. The
-# remote counter reader currently targets Linux /sys/class/net.
-enabled = false
-ssh_host = "my-vps"
-interface = "auto"              # or an explicit interface such as "eth0"
-poll_seconds = 300               # five minutes; changing this needs an App restart
-billing_cycle_start_day = 1      # the provider billing cycle's day of month
-
-[xray_stats]
-# Optional per-user logical traffic from Xray's loopback-only StatsService.
-# Empty ssh_host reuses [vps].ssh_host. Each poll is a separate, short-lived
-# read-only SSH connection; no API port is exposed on the public interface.
+[remote]
 enabled = false
 ssh_host = ""
-api_server = "127.0.0.1:10085"
-binary_path = "/usr/local/bin/xray"
-poll_seconds = 300
-# These are arbitrary Xray client `email` labels, not real email addresses or
-# hard-coded device names. An empty users list discovers all active labels;
-# listed labels only remain visible at 0 and do not hide newly observed labels.
-users = []
-flagged_users = ["legacy-unknown"]
-
-[estimation]
-# Provider billing counts both VPS directions. Actual bill expansion is
-# measured from aligned VPS interface and Xray logical-user counters.
-vps_billing_legs = 2.0
-
-[state]
-# JSONL and ordinary logs rotate once they reach this size; the newest
-# `backups` archives are retained.
-max_log_bytes = 10485760
-backups = 5
+xray_stats_enabled = false
+billing_cycle_start_day = 1
+billing_mode = "both"

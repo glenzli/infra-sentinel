@@ -13,7 +13,7 @@ from traffic_estimation import TrafficEstimationConfig, estimate_traffic, minute
 from vps import VPS_SAMPLE_SCHEMA
 
 
-SESSION_SCHEMA = 4
+SESSION_SCHEMA = 5
 RESET_REQUEST_SCHEMA = 1
 HISTORY_LIMIT = 2_000
 HISTORY_WINDOW_SECONDS = 15 * 60
@@ -85,7 +85,8 @@ class SessionMeter:
             "out_bytes": 0,
             "in_packets": 0,
             "out_packets": 0,
-            "packet_covered_bytes": 0,
+            "packet_covered_in_bytes": 0,
+            "packet_covered_out_bytes": 0,
         }
 
     def _clear(self) -> None:
@@ -143,7 +144,8 @@ class SessionMeter:
                 "out_bytes": max(0, int(saved_vps.get("out_bytes", 0))),
                 "in_packets": max(0, int(saved_vps.get("in_packets", 0))),
                 "out_packets": max(0, int(saved_vps.get("out_packets", 0))),
-                "packet_covered_bytes": max(0, int(saved_vps.get("packet_covered_bytes", 0))),
+                "packet_covered_in_bytes": max(0, int(saved_vps.get("packet_covered_in_bytes", 0))),
+                "packet_covered_out_bytes": max(0, int(saved_vps.get("packet_covered_out_bytes", 0))),
             }
             self.vps_intervals = max(0, int(payload.get("vps_intervals", 0)))
             self.vps_packet_intervals = max(0, int(payload.get("vps_packet_intervals", 0)))
@@ -256,7 +258,8 @@ class SessionMeter:
                 if last.get("packet_counters_ready"):
                     self.vps["in_packets"] += max(0, int(last.get("in_packets", 0)))
                     self.vps["out_packets"] += max(0, int(last.get("out_packets", 0)))
-                    self.vps["packet_covered_bytes"] += interval_in + interval_out
+                    self.vps["packet_covered_in_bytes"] += interval_in
+                    self.vps["packet_covered_out_bytes"] += interval_out
                     self.vps_packet_intervals += 1
             self.vps_baselined_at = vps_epoch
 
@@ -326,16 +329,27 @@ class SessionMeter:
         proxy_observed = int(route_by_id["proxy"]["total_bytes"])
         unattributed = int(route_by_id["unattributed"]["total_bytes"])
         domain_attributed = max(0, kernel_total - unattributed)
-        vps_total = self.vps["in_bytes"] + self.vps["out_bytes"]
+        vps_interface_total = self.vps["in_bytes"] + self.vps["out_bytes"]
+        vps_billable = estimation_config.billable_bytes(
+            self.vps["in_bytes"],
+            self.vps["out_bytes"],
+        )
         vps_ready = bool(vps_enabled and self.vps_intervals > 0)
         xray_state = xray_stats or {}
         xray_logical_total = int(xray_state.get("total_bytes", 0))
         xray_ready = bool(xray_state.get("ready") and int(xray_state.get("intervals", 0)) > 0)
-        vps_packet_count = self.vps["in_packets"] + self.vps["out_packets"]
+        vps_packet_count = estimation_config.billable_packets(
+            self.vps["in_packets"],
+            self.vps["out_packets"],
+        )
+        packet_covered_bytes = estimation_config.billable_bytes(
+            self.vps["packet_covered_in_bytes"],
+            self.vps["packet_covered_out_bytes"],
+        )
         estimates = estimate_traffic(
-            vps_total,
+            vps_billable,
             vps_packet_count,
-            self.vps["packet_covered_bytes"],
+            packet_covered_bytes,
             xray_logical_total,
             vps_ready,
             xray_ready,
@@ -371,8 +385,10 @@ class SessionMeter:
             },
             "vps": {
                 **self.vps,
-                "total_bytes": vps_total,
+                "total_bytes": vps_billable,
+                "interface_total_bytes": vps_interface_total,
                 "total_packets": vps_packet_count,
+                "billing_mode": estimation_config.billing_mode,
                 "packet_intervals": self.vps_packet_intervals,
                 "baselined_at": iso_now(self.vps_baselined_at) if self.vps_baselined_at is not None else None,
                 "intervals": self.vps_intervals,

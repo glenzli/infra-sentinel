@@ -1,38 +1,49 @@
-# Net Traffic Sentinal
+# Traffic Sentinel
 
-一个只读的 macOS Mihomo / Clash Meta 流量分析工具，目前以 Clash Verge 为主要兼容目标。它直接读取代理内核的累计计数，按域名和实际代理链归因，并可选地与 Xray 用户逻辑流量、VPS 双向账单流量对账。
+Traffic Sentinel 是一个只读的 macOS 菜单栏流量分析工具，服务于一条明确的代理技术栈：
+
+- 本地使用 Mihomo / Clash Meta 兼容内核；
+- 可选通过 SSH 对账 Linux VPS 网卡流量；
+- 可选读取 Xray StatsService 的用户逻辑流量。
+
+它按域名和实际代理链归因本机流量，并把 Xray 逻辑流量与 VPS 账单流量放到同一个统计周期中比较。
 
 它不会抓包、读取请求内容或提示词、记录 URL 路径、终止进程、删除业务文件或断网。
 
 ![Traffic Sentinel English dashboard](assets/dashboard-en.png)
 
-> English 仪表板示例。图中的设备标签来自使用者自己的 Xray 配置，并非程序内置或写死。
+> 图中的设备标签来自使用者自己的 Xray 配置，不是程序内置名称。
 
-## 当前支持边界
+## 支持范围
 
-本机监控采用一条明确、收敛的实现路径：
+当前正式支持：
 
-- 运行于 macOS，自动发现当前用户拥有的 Mihomo / Clash Meta Unix Socket；
-- 兼容 Clash Verge 服务模式在受控 `/tmp/verge` 目录下创建的 root-owned Socket，但不会信任任意位置的 root-owned Socket；
-- 优先检查 Clash Verge 的常见 Socket 路径，再在 `/tmp` 下查找名称包含 `mihomo` 的 Socket；
-- 只读访问兼容的 `/connections` 接口，不连接任意 TCP 控制器，也不要求保存控制器密钥；
-- 单次响应设有 64 MiB 安全上限，避免异常内核或错误 Socket 无限制占用内存。
+- macOS；
+- 当前用户拥有的 Mihomo Unix Socket；
+- Clash Verge 服务模式在受控 `/tmp/verge` 目录下创建的 root-owned Socket；
+- 兼容的只读 `/connections` API；
+- 通过 `~/.ssh/config` 主机别名访问的 Linux VPS；
+- Linux `/sys/class/net` 网卡累计计数；
+- 仅监听远端 `127.0.0.1:10085` 的 Xray StatsService。
 
-可选的远端对账路径为：
+当前不支持：
 
-- 通过本机 `~/.ssh/config` 中已有的别名读取 Linux VPS 的 `/sys/class/net` 网卡计数；
-- 如需按代理用户对账，再启用仅监听远端 `127.0.0.1` 的 Xray StatsService。
+- 任意 TCP Controller；
+- sing-box、Surge 或其他代理核心；
+- 非 Linux 远端网卡统计；
+- 非 Xray 服务端用户统计；
+- 自定义 Xray API 地址、二进制路径或 VPS 网卡选择。
 
-当前不以其他 Clash 内核、仅提供 TCP 控制器的部署、sing-box、非 Linux VPS 网卡统计或非 Xray 服务端为兼容目标。接口完全兼容时可能可以工作，但尚未纳入支持与测试范围。
+接口偶然兼容不等于正式支持。项目只为上面的路径维护实现和测试。
 
-## 核心口径
+## 统计口径
 
-本机不再使用 `nettop`，也不依赖 Codex、Antigravity 或其他应用进程名。App 会自动发现当前用户的 Mihomo Unix Socket，并读取 `/connections`：
+App 自动发现本地 Mihomo Socket，并读取 `/connections`：
 
-- `Mihomo 本机总量`：`uploadTotal + downloadTotal` 的相邻增量，是代理内核处理的精确累计；
-- `域名流量归因`：持续跟踪活跃连接 ID，将连接字节按域名聚合；
-- `代理路径`：根据连接 `chains` 区分真正经过代理的流量、`DIRECT`、阻断和未知路径；
-- `未归因`：精确总增量减去已跟踪连接增量，主要来自在两次本地轮询之间结束的短连接。
+- `Mihomo 本机总量`：`uploadTotal + downloadTotal` 的相邻增量；
+- `域名流量归因`：持续跟踪活跃连接 ID，并按站点主域聚合；
+- `代理路径`：根据连接 `chains` 区分代理、`DIRECT`、阻断和未知路径；
+- `未归因`：总增量减去已观察连接增量，通常来自两个轮询点之间结束的短连接。
 
 始终满足：
 
@@ -41,104 +52,78 @@
 代理路径 + DIRECT + 阻断 + 未知路径 + 未归因 = Mihomo 精确总增量
 ```
 
-域名归因不会把缺失字节按比例硬塞给某个服务。已识别代理路径因此是一个可靠下限；未归因越小，分类越接近精确值。App 在每个 5 秒展示周期内以 250ms 间隔读取本机 Socket，改善多 Agent 短连接的覆盖；这些读取只发生在本机，不产生外网流量。
+每个 5 秒展示周期内，本地 Socket 默认每 250ms 读取一次，以提高多 Agent 短连接的归因覆盖。这些读取只发生在本机，不产生外网流量。单次响应上限为 64 MiB。
 
 内置的宽泛服务标签包括：
 
-- `chatgpt.com`、`openai.com`、`oaistatic.com`、`oaiusercontent.com` → `ChatGPT`
+- OpenAI / ChatGPT 相关主域 → `ChatGPT`
 - Google 相关主域 → `Google`
 - GitHub 相关主域 → `GitHub`
 - 其他域名按站点主域动态显示
 
-Google 流量不会被声称为 Antigravity，因为单凭域名无法证明具体客户端。未知域名仍会按域名显示，不需要用户维护规则。
+Google 流量不会被推断为某个具体客户端。未知域名也会直接显示，不需要维护规则。
 
-## 构建与运行
+## 设置
 
-仓库只包含源码，不提交预编译 App。
+从菜单栏或仪表板点击“设置”即可编辑全部用户配置。保存后，监控子进程会自动按新配置重新启动。
 
-要求：
+设置项只有：
 
-- macOS；
-- Xcode Command Line Tools；
-- Python 3.11 或更高版本。
+- 警告窗口与单方向流量阈值；
+- 严重窗口与上下行合计阈值；
+- 是否启用 Linux VPS 远端对账；
+- `~/.ssh/config` 中的主机别名；
+- 是否读取 Xray 用户逻辑流量；
+- VPS 计费周期开始日；
+- VPS 收发均计费（2.0×）或仅出站计费（1.0×）。
 
-```sh
-git clone git@gitlab.com:glenzli/net-traffic-sential.git
-cd net-traffic-sential
-./bin/build-menubar-app.sh
-open "Traffic Sentinel.app"
-```
+以下行为固定，不进入配置：
 
-构建脚本会编译原生 Cocoa 菜单栏程序、复制运行所需的 Python 模块、执行本机 ad-hoc 签名，并在仓库根目录生成 `Traffic Sentinel.app`。App 自行管理唯一的采样进程，不需要手动启动脚本。
+- 本地展示周期 5 秒；
+- 本地连接读取间隔 250ms；
+- VPS 与 Xray 远端读取间隔 5 分钟；
+- VPS 网卡自动发现；
+- Xray StatsService 地址 `127.0.0.1:10085`；
+- Xray 二进制路径 `/usr/local/bin/xray`；
+- 日志单文件 10 MiB、保留 5 份归档。
 
-## 菜单栏与仪表板
-
-菜单栏格式类似：
-
-```text
-⌁ T2.9 GiB · ChatGPT 8.4 MiB/s
-```
-
-- 启用 VPS 时，`T` 是当前统计周期的 VPS 入站 + 出站账单量；
-- 未启用 VPS 时，`T` 是当前统计周期的 Mihomo 本机精确总量；
-- 后半部分是当前区间最大的域名服务及速率；
-- 点击“重置统计”并在确认对话框中再次确认后，Mihomo、Xray 和 VPS 从同一个新基线开始。
-
-仪表板显示：
-
-1. VPS 当前账单量；
-2. Mihomo 本机精确总量；
-3. 已识别代理路径下限；
-4. Top 3 域名服务和其他域名；
-5. 域名归因覆盖率、未归因量和 `DIRECT` 量；
-6. Xray 用户逻辑流量；
-7. 最近 15 分钟的 `MiB/min` 趋势。
-
-界面支持中文和 English 即时切换。
-
-## VPS 与 Xray 对账
-
-本机 Mihomo 无需配置。只有可选的远端观察需要编辑：
+配置文件由设置界面管理：
 
 ```text
-~/Library/Application Support/Codex Traffic Sentinel/config.toml
+~/Library/Application Support/Traffic Sentinel/config.toml
 ```
 
-这是为了兼容旧版安装而保留的支持目录名称。
+当前 schema：
 
 ```toml
 [monitor]
-sample_seconds = 5
-warning_window_seconds = 300
-warning_bytes = 268435456
-critical_window_seconds = 600
-critical_bytes = 1073741824
+warning_window_minutes = 5
+warning_mib = 250
+critical_window_minutes = 10
+critical_mib = 1024
 
-[vps]
-enabled = true
-ssh_host = "my-vps"
-interface = "auto"
-poll_seconds = 300
+[remote]
+enabled = false
+ssh_host = ""
+xray_stats_enabled = false
 billing_cycle_start_day = 1
-
-[xray_stats]
-enabled = true
-ssh_host = "" # 留空时复用 [vps].ssh_host
-api_server = "127.0.0.1:10085"
-binary_path = "/usr/local/bin/xray"
-poll_seconds = 300
-users = []
-flagged_users = ["legacy-unknown"]
-
-[estimation]
-vps_billing_legs = 2.0
-
-[state]
-max_log_bytes = 10485760
-backups = 5
+billing_mode = "both"
 ```
 
-`ssh_host` 只引用 `~/.ssh/config` 中已有且不以 `-` 开头的别名。工具不保存密钥、密码或主机地址；每次到期时建立一条短暂、非交互、无 Agent 转发、无连接复用的只读 SSH。
+配置只接受当前 schema，不做历史格式迁移。版本控制保留历史，运行时代码不背负旧配置分支。
+
+## VPS 与 Xray 对账
+
+先在 `~/.ssh/config` 定义主机，再把 `Host` 后的别名填入设置页；默认不预设任何服务器：
+
+```sshconfig
+Host my-vps
+  HostName vps.example.com
+  User root
+  IdentityFile ~/.ssh/id_ed25519
+```
+
+App 只保存 `my-vps` 这个别名，不保存密钥、密码或主机地址。
 
 VPS 读取：
 
@@ -149,12 +134,22 @@ VPS 读取：
 /sys/class/net/<interface>/statistics/tx_packets
 ```
 
-Xray StatsService 必须只监听回环地址。每个 VLESS 用户都可以通过 `email` 字段设置任意统计标签，例如 `workstation`、`phone` 或 `tablet`。这些只是 Xray 标签，不要求是真实邮箱，也没有任何设备名写死在程序中。
+Xray 分端统计只需：
 
-推荐保持 `users = []`，程序会自动发现 Xray 返回的全部活跃标签。如果填写 `users`，它只控制固定展示顺序，并让暂时为零的标签仍然可见；不会限制动态发现的其他标签。
+1. 给每个 `clients[]` 项设置唯一的 `email` 标签和 `level: 0`；
+2. 启用用户上下行统计及只监听回环地址的 StatsService；
+3. 重启 Xray，并在设置页勾选 Xray 统计。
 
 ```json
 {
+  "inbounds": [{
+    "settings": {
+      "clients": [
+        {"id": "<uuid-1>", "email": "mac", "level": 0},
+        {"id": "<uuid-2>", "email": "phone", "level": 0}
+      ]
+    }
+  }],
   "stats": {},
   "policy": {
     "levels": {
@@ -172,37 +167,63 @@ Xray StatsService 必须只监听回环地址。每个 VLESS 用户都可以通�
 }
 ```
 
-实测账单关系：
+收发均计费时：
 
 ```text
-实测账单倍率 = VPS (RX + TX) ÷ Xray 用户 (uplink + downlink)
-双边理想账单 = Xray 用户逻辑流量 × vps_billing_legs
-账单附加量   = max(0, VPS 账单量 − 双边理想账单)
+VPS 账单量     = RX + TX
+理想账单量     = Xray 用户逻辑流量 × 2
+实测账单倍率   = VPS 账单量 ÷ Xray 用户逻辑流量
+账单附加量     = max(0, VPS 账单量 − 理想账单量)
 ```
 
-账单附加量包含两条链路的 IP/TCP 头与 ACK、连接建立、REALITY/Vision 填充、重传和少量 VPS 背景流量。包数拆分只是无需抓包的近似解释，不会被描述成精确丢包率。
+仅出站计费时，VPS 账单量使用 `TX`，理想倍率为 `1×`。
 
-## 告警、隐私与迁移
+账单附加量可能包含两条链路的 IP/TCP 头与 ACK、连接建立、REALITY/Vision 填充、重传和少量 VPS 背景流量。包数拆分是不抓包条件下的近似解释，不是精确丢包率。
 
-- 默认 5 分钟单方向超过 250 MiB 时警告；
-- 默认 10 分钟上下行合计超过 1 GiB 时严重告警；
-- App 或采样器中断后发现的累计差额仍计入本周期总量，但标为补记，不进入实时告警和 15 分钟速率趋势；
-- 点击通知会打开仪表板；
-- 证据快照只保存累计字节、聚合域名、代理路径和覆盖率；
-- 不保存 URL 路径、查询参数、请求头、正文、提示词或文件内容。
+## 菜单栏、仪表板与告警
 
-旧版的进程组、`nettop` 代理拆分和 Codex Hook 配置会在启动时移除。配置迁移前的副本保存为 `config.toml.pre-mihomo`。如果曾安装本项目的 Codex Hook，迁移器只删除包含 `--traffic-sentinel-capture` 标记的处理器，保留所有其他 Hooks，并留下 `hooks.json.pre-domain-attribution` 备份。
+菜单栏格式类似：
 
-主要状态文件：
+```text
+⌁ T2.9 GiB · ChatGPT 8.4 MiB/s
+```
 
-- `samples.jsonl`：Mihomo 精确增量、域名和路径归因；
-- `mihomo-baseline.json`：Mihomo 与连接累计基线；
-- `vps_samples.jsonl`：VPS 网卡低频增量；
-- `xray_user_samples.jsonl`：Xray 用户低频增量；
-- `session.json`：当前可重置统计周期；
-- `events.jsonl`：告警状态变化。
+- 启用 VPS 时，`T` 使用当前计费方式计算 VPS 账单量；
+- 未启用 VPS 时，`T` 是当前统计周期的 Mihomo 本机总量；
+- 后半部分显示当前区间流量最大的域名服务及速率。
 
-## 开发
+仪表板显示 VPS 账单、本机 Mihomo 总量、代理路径、域名归因、Xray 用户统计和最近 15 分钟的 `MiB/min` 趋势。界面支持中文和 English 即时切换。
+
+默认告警：
+
+- 5 分钟单方向超过 250 MiB：警告；
+- 10 分钟上下行合计超过 1 GiB：严重。
+
+App 或采样器中断后的累计差额仍进入本周期总量，但标记为补记，不进入实时告警和速率趋势。点击通知会打开仪表板。
+
+## 隐私
+
+证据快照和状态文件只保存累计字节、聚合域名、代理路径、覆盖率和远端计数。不会保存：
+
+- URL 路径或查询参数；
+- 请求头、请求正文或响应正文；
+- 提示词、命令或文件内容；
+- 抓包数据。
+
+## 构建与开发
+
+要求 macOS、Xcode Command Line Tools，以及 Python 3.11 或更高版本。
+
+```sh
+git clone git@gitlab.com:glenzli/net-traffic-sential.git
+cd net-traffic-sential
+./bin/build-menubar-app.sh
+open "Traffic Sentinel.app"
+```
+
+仓库只提交源码，不提交预编译 App。构建脚本会编译原生 Cocoa 程序、复制内嵌 Python 模块并执行本机 ad-hoc 签名。
+
+运行测试：
 
 ```sh
 python3 -m unittest discover -s tests -v

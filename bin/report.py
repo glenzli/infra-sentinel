@@ -10,7 +10,8 @@ import sys
 import time
 from typing import Any, Iterable
 
-from sentinel import SAMPLE_SCHEMA, Config, format_bytes, iter_jsonl, read_config
+from configuration import Config, read_config
+from sentinel import SAMPLE_SCHEMA, format_bytes, iter_jsonl
 from vps import SUPPORTED_VPS_SAMPLE_SCHEMAS, iter_vps_samples
 
 

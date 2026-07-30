@@ -113,7 +113,9 @@ static void DrawDashboardText(NSString *text, NSRect rect, NSFont *font, NSColor
 @property(nonatomic, copy) NSString *stateDirectory;
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) TrafficDashboardView *dashboardView;
+@property(nonatomic, strong) NSButton *settingsButton;
 @property(nonatomic, strong) NSButton *resetButton;
+@property(nonatomic, copy) void (^settingsHandler)(void);
 @property(nonatomic, assign) TSLanguage language;
 @end
 
@@ -152,13 +154,27 @@ static void DrawDashboardText(NSString *text, NSRect rect, NSFont *font, NSColor
     self.resetButton.frame = NSMakeRect(frame.size.width - 214, frame.size.height - 59, 184, 30);
     self.resetButton.autoresizingMask = NSViewMinXMargin | NSViewMinYMargin;
     [self.dashboardView addSubview:self.resetButton];
+
+    self.settingsButton = [NSButton buttonWithTitle:TSLocalized(self.language, @"button.settings")
+                                              target:self
+                                              action:@selector(showSettings:)];
+    self.settingsButton.bezelStyle = NSBezelStyleRounded;
+    self.settingsButton.font = [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold];
+    self.settingsButton.frame = NSMakeRect(frame.size.width - 338, frame.size.height - 59, 112, 30);
+    self.settingsButton.autoresizingMask = NSViewMinXMargin | NSViewMinYMargin;
+    [self.dashboardView addSubview:self.settingsButton];
 }
 
 - (void)setLanguage:(TSLanguage)language {
     _language = language;
     self.window.title = TSLocalized(language, @"window.title");
     self.dashboardView.language = language;
+    self.settingsButton.title = TSLocalized(language, @"button.settings");
     self.resetButton.title = TSLocalized(language, @"button.reset");
+}
+
+- (void)setSettingsHandler:(void (^)(void))handler {
+    _settingsHandler = [handler copy];
 }
 
 - (void)updateWithState:(NSDictionary *)state {
@@ -175,6 +191,12 @@ static void DrawDashboardText(NSString *text, NSRect rect, NSFont *font, NSColor
 - (void)showNotice:(NSString *)notice {
     [self createWindowIfNeeded];
     self.dashboardView.notice = notice;
+}
+
+- (void)showSettings:(id)sender {
+    if (self.settingsHandler != nil) {
+        self.settingsHandler();
+    }
 }
 
 - (BOOL)confirmSessionReset {

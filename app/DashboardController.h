@@ -5,6 +5,7 @@
 
 - (instancetype)initWithStateDirectory:(NSString *)stateDirectory;
 - (void)setLanguage:(TSLanguage)language;
+- (void)setSettingsHandler:(void (^)(void))handler;
 - (void)updateWithState:(NSDictionary *)state;
 - (void)showDashboard:(id)sender;
 - (void)showNotice:(NSString *)notice;

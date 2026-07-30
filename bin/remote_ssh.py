@@ -10,6 +10,11 @@ from typing import Sequence
 HOST_ALIAS_RE = re.compile(r"(?!-)[A-Za-z0-9._-]+\Z")
 
 
+def validate_ssh_host(ssh_host: str) -> None:
+    if not HOST_ALIAS_RE.fullmatch(ssh_host):
+        raise ValueError("ssh_host 必须是 ssh config 中的主机别名")
+
+
 def run_read_only_script(
     ssh_host: str,
     script: str,
@@ -23,8 +28,7 @@ def run_read_only_script(
     before invoking this transport. The SSH host is restricted to a local
     ``~/.ssh/config`` alias so configuration cannot inject SSH options.
     """
-    if not HOST_ALIAS_RE.fullmatch(ssh_host):
-        raise ValueError("ssh_host 必须是 ssh config 中的主机别名")
+    validate_ssh_host(ssh_host)
     command = [
         "/usr/bin/ssh",
         "-o", "BatchMode=yes",

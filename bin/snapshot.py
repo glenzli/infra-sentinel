@@ -10,7 +10,8 @@ import sys
 import uuid
 from typing import Any
 
-from sentinel import Config, ensure_state_dir, iso_now, latest_jsonl, read_config
+from configuration import Config, read_config
+from sentinel import ensure_state_dir, iso_now, latest_jsonl
 
 
 def create_snapshot(config: Config, event: dict[str, Any]) -> Path:
