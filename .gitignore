@@ -5,3 +5,4 @@ __pycache__/
 Codex Traffic Sentinel.app/
 Traffic Sentinel.app/
 .build/
+dist/
