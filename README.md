@@ -212,7 +212,13 @@ App 或采样器中断后的累计差额仍进入本周期总量，但标记为�
 
 ## 构建与开发
 
-要求 macOS、Xcode Command Line Tools，以及 Python 3.11 或更高版本。
+项目不要求 Apple Developer 证书。可以下载标明系统与架构要求的预编译 App，也可以在自己的 Mac 上构建：
+
+- macOS 13 或更高版本；
+- Xcode Command Line Tools；
+- Python 3.11 或更高版本。
+
+预编译 App 使用 ad-hoc 签名、未经 Apple 公证，Release 会明确标注最低 macOS 版本、CPU 架构和 Python 要求。macOS 如阻止首次启动，可在系统设置中确认后打开。
 
 ```sh
 git clone git@gitlab.com:glenzli/net-traffic-sential.git
@@ -221,7 +227,7 @@ cd net-traffic-sential
 open "Traffic Sentinel.app"
 ```
 
-仓库只提交源码，不提交预编译 App。构建脚本会编译原生 Cocoa 程序、复制内嵌 Python 模块并执行本机 ad-hoc 签名。
+构建脚本会生成适配当前 Mac 架构的 `Traffic Sentinel.app`，复制 Python 模块并执行本机 ad-hoc 签名。
 
 运行测试：
 

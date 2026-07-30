@@ -14,7 +14,8 @@ int main(int argc, const char *argv[]) {
         NSString *helperPath = [NSString stringWithUTF8String:argv[1]];
         NSString *configPath = [NSString stringWithUTF8String:argv[2]];
         TSSettingsStore *store = [[TSSettingsStore alloc] initWithConfigPath:configPath
-                                                                  helperPath:helperPath];
+                                                                  helperPath:helperPath
+                                                            pythonSearchPath:@"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"];
         NSError *error = nil;
         NSDictionary *defaults = [store defaultSettings:&error];
         Require(defaults != nil, error.localizedDescription ?: @"defaults failed");

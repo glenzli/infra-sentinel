@@ -62,10 +62,13 @@ static NSTextField *SettingsIntegerField(NSRect frame, NSInteger minimum, NSInte
 
 - (instancetype)initWithConfigPath:(NSString *)configPath
                         helperPath:(NSString *)helperPath
+                  pythonSearchPath:(NSString *)pythonSearchPath
                     appliedHandler:(TSSettingsAppliedHandler)appliedHandler {
     self = [super init];
     if (self) {
-        _store = [[TSSettingsStore alloc] initWithConfigPath:configPath helperPath:helperPath];
+        _store = [[TSSettingsStore alloc] initWithConfigPath:configPath
+                                                 helperPath:helperPath
+                                           pythonSearchPath:pythonSearchPath];
         _appliedHandler = [appliedHandler copy];
         _language = TSDefaultLanguage();
     }

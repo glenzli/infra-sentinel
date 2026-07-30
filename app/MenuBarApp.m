@@ -6,6 +6,8 @@
 #import "SettingsController.h"
 #import "TrafficFormatting.h"
 
+static NSString *const TSPythonSearchPath = @"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
+
 static NSDictionary *DictionaryValue(id value) {
     return [value isKindOfClass:[NSDictionary class]] ? value : @{};
 }
@@ -48,6 +50,7 @@ static NSDictionary *DictionaryValue(id value) {
     self.settingsController = [[TSSettingsController alloc]
         initWithConfigPath:self.configPath
                 helperPath:self.configurationHelperPath
+          pythonSearchPath:TSPythonSearchPath
             appliedHandler:^{
                 AppDelegate *strongSelf = weakSelf;
                 if (strongSelf == nil) {
@@ -124,7 +127,7 @@ static NSDictionary *DictionaryValue(id value) {
     task.arguments = @[ @"python3", self.helperPath, @"--config", self.configPath, @"--watch" ];
     task.currentDirectoryURL = [NSURL fileURLWithPath:self.supportPath isDirectory:YES];
     NSMutableDictionary<NSString *, NSString *> *environment = [NSProcessInfo processInfo].environment.mutableCopy;
-    environment[@"PATH"] = @"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
+    environment[@"PATH"] = TSPythonSearchPath;
     environment[@"PYTHONDONTWRITEBYTECODE"] = @"1";
     environment[@"TRAFFIC_SENTINEL_STATE_DIR"] = [self.supportPath stringByAppendingPathComponent:@"state"];
     environment[@"TRAFFIC_SENTINEL_PARENT_PID"] = [NSString stringWithFormat:@"%d", [NSProcessInfo processInfo].processIdentifier];

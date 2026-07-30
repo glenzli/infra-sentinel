@@ -5,16 +5,19 @@ static NSString *const TSSettingsErrorDomain = @"TrafficSentinel.Settings";
 @interface TSSettingsStore ()
 @property(nonatomic, copy) NSString *configPath;
 @property(nonatomic, copy) NSString *helperPath;
+@property(nonatomic, copy) NSString *pythonSearchPath;
 @end
 
 @implementation TSSettingsStore
 
 - (instancetype)initWithConfigPath:(NSString *)configPath
-                        helperPath:(NSString *)helperPath {
+                        helperPath:(NSString *)helperPath
+                  pythonSearchPath:(NSString *)pythonSearchPath {
     self = [super init];
     if (self) {
         _configPath = [configPath copy];
         _helperPath = [helperPath copy];
+        _pythonSearchPath = [pythonSearchPath copy];
     }
     return self;
 }
@@ -44,6 +47,10 @@ static NSString *const TSSettingsErrorDomain = @"TrafficSentinel.Settings";
         [arguments addObject:self.configPath];
     }
     task.arguments = arguments;
+    NSMutableDictionary<NSString *, NSString *> *environment =
+        [NSProcessInfo processInfo].environment.mutableCopy;
+    environment[@"PATH"] = self.pythonSearchPath;
+    task.environment = environment;
     NSPipe *outputPipe = [NSPipe pipe];
     NSPipe *errorPipe = [NSPipe pipe];
     task.standardOutput = outputPipe;

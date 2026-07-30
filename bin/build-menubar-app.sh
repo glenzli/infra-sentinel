@@ -8,6 +8,32 @@ MACOS_DIR="$CONTENTS_DIR/MacOS"
 APP_RESOURCES_DIR="$CONTENTS_DIR/Resources"
 SENTINEL_RESOURCES_DIR="$APP_RESOURCES_DIR/Sentinel"
 MODULE_CACHE_DIR="$ROOT_DIR/.build/clang-module-cache"
+MINIMUM_MACOS_VERSION=13.0
+
+if ! CLANG=$(/usr/bin/xcrun --sdk macosx --find clang 2>/dev/null); then
+  echo "Xcode Command Line Tools are required. Run: xcode-select --install" >&2
+  exit 1
+fi
+if ! SDK_ROOT=$(/usr/bin/xcrun --sdk macosx --show-sdk-path 2>/dev/null); then
+  echo "The macOS SDK is unavailable. Reinstall Xcode Command Line Tools." >&2
+  exit 1
+fi
+
+if ! PYTHON3=$(command -v python3); then
+  echo "Python 3.11 or newer is required." >&2
+  exit 1
+fi
+
+if ! "$PYTHON3" -c 'import sys; raise SystemExit(sys.version_info < (3, 11))'; then
+  echo "Python 3.11 or newer is required; found $("$PYTHON3" --version 2>&1)." >&2
+  exit 1
+fi
+
+PLIST_MINIMUM=$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$ROOT_DIR/app/Info.plist")
+if [ "$PLIST_MINIMUM" != "$MINIMUM_MACOS_VERSION" ]; then
+  echo "Info.plist minimum macOS version must be $MINIMUM_MACOS_VERSION." >&2
+  exit 1
+fi
 
 case "$APP_DIR" in
   "$ROOT_DIR/"*.app) ;;
@@ -28,7 +54,12 @@ cp "$ROOT_DIR/bin/vps.py" "$SENTINEL_RESOURCES_DIR/vps.py"
 cp "$ROOT_DIR/bin/xray_stats.py" "$SENTINEL_RESOURCES_DIR/xray_stats.py"
 cp "$ROOT_DIR/bin/snapshot.py" "$SENTINEL_RESOURCES_DIR/snapshot.py"
 cp "$ROOT_DIR/config.example.toml" "$SENTINEL_RESOURCES_DIR/config.example.toml"
-/usr/bin/clang -O2 -fblocks -fobjc-arc -fmodules -fmodules-cache-path="$MODULE_CACHE_DIR" -framework Cocoa -framework UserNotifications \
+"$CLANG" -O2 -fblocks -fobjc-arc -fmodules \
+  -isysroot "$SDK_ROOT" \
+  -mmacosx-version-min="$MINIMUM_MACOS_VERSION" \
+  -Werror=unguarded-availability-new \
+  -fmodules-cache-path="$MODULE_CACHE_DIR" \
+  -framework Cocoa -framework UserNotifications \
   "$ROOT_DIR/app/MenuBarApp.m" \
   "$ROOT_DIR/app/DashboardController.m" \
   "$ROOT_DIR/app/SettingsController.m" \
@@ -40,4 +71,7 @@ cp "$ROOT_DIR/config.example.toml" "$SENTINEL_RESOURCES_DIR/config.example.toml"
   "$ROOT_DIR/app/Localization.m" \
   -o "$MACOS_DIR/TrafficSentinel"
 /usr/bin/codesign --force --sign - "$APP_DIR" >/dev/null
-printf 'Built %s\n' "$APP_DIR"
+APP_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$CONTENTS_DIR/Info.plist")
+APP_ARCH=$(/usr/bin/file "$MACOS_DIR/TrafficSentinel" | /usr/bin/sed 's/.*Mach-O 64-bit executable //')
+printf 'Built %s · version %s · macOS %s+ · %s\n' \
+  "$APP_DIR" "$APP_VERSION" "$MINIMUM_MACOS_VERSION" "$APP_ARCH"

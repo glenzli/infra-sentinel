@@ -7,6 +7,7 @@ typedef void (^TSSettingsAppliedHandler)(void);
 
 - (instancetype)initWithConfigPath:(NSString *)configPath
                         helperPath:(NSString *)helperPath
+                  pythonSearchPath:(NSString *)pythonSearchPath
                     appliedHandler:(TSSettingsAppliedHandler)appliedHandler;
 - (void)setLanguage:(TSLanguage)language;
 - (void)showSettings:(id)sender;
