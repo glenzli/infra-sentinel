@@ -28,6 +28,7 @@ export interface InfraProjection {
   overall: { status: OverallStatus; active_alerts: number };
   resources: ResourceProjection[];
   sources: SourceProjection[];
+  ai_usage?: Record<string, unknown>;
 }
 
 export interface AgentProjection {

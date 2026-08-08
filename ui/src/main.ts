@@ -3,10 +3,11 @@ import { AgentProjection, OverallStatus, readProjection, resetSession } from "./
 import { formatDuration } from "./format";
 import { tr } from "./i18n";
 import { renderNetworkResourcePage } from "./network_view";
+import { renderAiUsageResourcePage } from "./ai_usage_view";
 import { renderOverview } from "./overview_view";
 import { loadSettings, renderSettings } from "./settings_view";
 
-type AppView = "overview" | "network" | "settings";
+type AppView = "overview" | "network" | "ai_usage" | "settings";
 
 function appRoot(): HTMLDivElement {
   const root = document.querySelector<HTMLDivElement>("#app");
@@ -52,9 +53,14 @@ function footer(projection: AgentProjection): string {
 function renderProjection(projection: AgentProjection): void {
   latestProjection = projection;
   const network = projection.infra.resources.find((resource) => resource.enabled && resource.id === "network");
+  const aiUsage = projection.infra.resources.find((resource) => resource.enabled && resource.id === "ai_usage");
   const sources = network ? projection.infra.sources.filter((source) => source.resource_id === network.id) : [];
+  const aiSources = aiUsage ? projection.infra.sources.filter((source) => source.resource_id === aiUsage.id) : [];
+  const controls = `<section class="dashboard-actions"><div><p class="eyebrow">${tr("CURRENT SESSION", "当前统计周期")}</p><strong>${formatDuration(projection.session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button></div></section>`;
   const content = activeView === "network" && network
     ? `<section class="dashboard-actions"><div><p class="eyebrow">${tr("CURRENT SESSION", "当前统计周期")}</p><strong>${formatDuration(projection.session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button><button class="button button--danger" id="reset"><span>${tr("Reset totals", "重置统计")}</span></button></div></section>${renderNetworkResourcePage(projection, network, sources)}`
+    : activeView === "ai_usage" && aiUsage
+      ? `${controls}${renderAiUsageResourcePage(projection, aiUsage, aiSources)}`
     : renderOverview(projection);
   root.innerHTML = `<main class="shell">${topbar(projection.infra.overall.status)}${content}${footer(projection)}</main>`;
   root.querySelector<HTMLButtonElement>("#settings")?.addEventListener("click", () => void openSettings());
@@ -62,7 +68,7 @@ function renderProjection(projection: AgentProjection): void {
   root.querySelector<HTMLButtonElement>("#reset")?.addEventListener("click", () => void requestReset());
   root.querySelector<HTMLButtonElement>("#back")?.addEventListener("click", () => { activeView = "overview"; renderProjection(projection); });
   root.querySelectorAll<HTMLButtonElement>("[data-resource-id]").forEach((button) => button.addEventListener("click", () => {
-    if (button.dataset.resourceId === "network") { activeView = "network"; renderProjection(projection); }
+    if (button.dataset.resourceId === "network" || button.dataset.resourceId === "ai_usage") { activeView = button.dataset.resourceId; renderProjection(projection); }
   }));
   bindChrome();
 }

@@ -10,7 +10,7 @@ from infra_model import MetricPoint, SourceStatus
 from infra_registry import DEFAULT_SOURCE_REGISTRY
 
 
-PROJECTION_SCHEMA = "20260808.1"
+PROJECTION_SCHEMA = "20260809.1"
 
 
 def _number(value: Any) -> int:
@@ -74,6 +74,43 @@ def _remote_sources(remote: dict[str, Any], runs: Iterable[CollectorRun]) -> lis
     return sources
 
 
+def _collector_snapshot(runs: Iterable[CollectorRun], source_id: str) -> dict[str, Any] | None:
+    for run in runs:
+        if run.capability.source_id == source_id and isinstance(run.snapshot, dict):
+            return run.snapshot
+    return None
+
+
+def _ai_usage_resource(runs: Iterable[CollectorRun]) -> tuple[dict[str, Any] | None, SourceStatus | None]:
+    """Project OpenCode only when the local executable is actually available."""
+    snapshot = _collector_snapshot(runs, "opencode")
+    if not snapshot or not snapshot.get("available"):
+        return None, None
+    status = str(snapshot.get("status") or _collector_status("opencode", "waiting", runs))
+    tokens = snapshot.get("tokens") if isinstance(snapshot.get("tokens"), dict) else {}
+    resource = {
+        "id": "ai_usage",
+        "status": status,
+        "enabled": True,
+        "primary_metric": "ai.tokens.total",
+        "primary_value": _number(tokens.get("total")),
+        "primary_unit": "tokens",
+        "primary_source_id": "opencode",
+        "source_count": 1,
+        "online_source_count": 1 if status == "ok" else 0,
+    }
+    source = SourceStatus(
+        id="opencode",
+        kind="ai.opencode",
+        resource_id="ai_usage",
+        enabled=True,
+        status=status,
+        label=str(snapshot.get("label") or "OpenCode"),
+        updated_at=snapshot.get("observed_at") if isinstance(snapshot.get("observed_at"), str) else None,
+    )
+    return resource, source
+
+
 def build_infra_projection(
     sample: dict[str, Any],
     session: dict[str, Any],
@@ -106,6 +143,9 @@ def build_infra_projection(
         updated_at=timestamp or None,
     )]
     sources.extend(_remote_sources(remote, collector_runs))
+    ai_resource, ai_source = _ai_usage_resource(collector_runs)
+    if ai_source:
+        sources.append(ai_source)
     source_dicts = [source.as_dict() for source in sources]
     active_sources = [source for source in sources if source.enabled]
     online_sources = [source for source in active_sources if source.status == "ok"]
@@ -131,6 +171,31 @@ def build_infra_projection(
             resource_id="network",
             dimensions={"scope": "fleet"},
         ).as_dict())
+    resources = [{
+        "id": "network",
+        "status": _status_for(alert_level, remote, collector_runs),
+        "enabled": True,
+        "primary_metric": "network.billable_bytes" if billing_available else "network.local_bytes",
+        "primary_value": primary_total,
+        "primary_unit": "bytes",
+        "primary_source_id": primary_source,
+        "source_count": len(active_sources),
+        "online_source_count": len(online_sources),
+    }]
+    if ai_resource:
+        resources.append(ai_resource)
+        metrics.append(MetricPoint(
+            observed_at=timestamp,
+            metric="ai.tokens.total",
+            instrument="gauge",
+            value=ai_resource["primary_value"],
+            unit="tokens",
+            source_id="opencode",
+            resource_id="ai_usage",
+            dimensions={"window": "today"},
+            attribution_method="exact",
+            confidence="high",
+        ).as_dict())
     return {
         "schema": PROJECTION_SCHEMA,
         "product": {"id": "infra-sentinel", "mode": "network"},
@@ -138,19 +203,10 @@ def build_infra_projection(
             "status": _status_for(alert_level, remote, collector_runs),
             "active_alerts": active_daily_guards or (0 if alert_level == "none" else 1),
         },
-        "resources": [{
-            "id": "network",
-            "status": _status_for(alert_level, remote, collector_runs),
-            "enabled": True,
-            "primary_metric": "network.billable_bytes" if billing_available else "network.local_bytes",
-            "primary_value": primary_total,
-            "primary_unit": "bytes",
-            "primary_source_id": primary_source,
-            "source_count": len(active_sources),
-            "online_source_count": len(online_sources),
-        }],
+        "resources": resources,
         "sources": source_dicts,
         "metrics": metrics,
         "capabilities": DEFAULT_SOURCE_REGISTRY.capabilities(),
         "collectors": [run.as_dict() for run in collector_runs],
+        "ai_usage": {"opencode": _collector_snapshot(collector_runs, "opencode")} if ai_resource else {},
     }

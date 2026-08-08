@@ -47,6 +47,7 @@ from mihomo_traffic import (
     save_tracker,
 )
 from network_metrics import network_collector_registry
+from opencode_usage import OpenCodeUsageCollector
 from sample_timing import annotate_sample_timing, sample_is_realtime
 from remote import RemoteFleetMonitor
 from session import SessionMeter
@@ -692,6 +693,7 @@ def main() -> int:
             raise RuntimeError("另一个监控实例已经在运行")
         metric_store = MetricStore(config.state_dir)
         collector_registry = network_collector_registry(server.id for server in config.remote_servers)
+        collector_registry.register(OpenCodeUsageCollector())
         imported = metric_store.import_legacy_network()
         if imported:
             logger.info("imported legacy network metric points=%s", imported)

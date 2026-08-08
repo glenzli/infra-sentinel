@@ -26,7 +26,7 @@ Infra Sentinel 面向个人拥有或控制的本地设备、代理链路、VPS �
 | 1 | 1.2 | 建立统一指标和 Collector 合同 | 最小闭环已完成 |
 | 2 | 1.3 | SQLite 时序存储与一次性迁移 | 进行中 |
 | 3 | 2.0 | Infra Sentinel 外壳与健康状态菜单栏 | 进行中 |
-| 4 | 2.1 | 首个 API 使用与配额模块 | 候选 |
+| 4 | 2.1 | 首个 API 使用与配额模块 | 进行中：OpenCode 本地会话用量 |
 | 5 | 2.2 | 本地存储与计算模块 | 候选 |
 | 6 | 3.x | 跨资源分析与调优建议 | 远期 |
 
@@ -103,7 +103,7 @@ MetricPoint
 配置围绕数据源和策略组织，版本标识采用 `YYYYMMDD.修订号`。以下是目标轮廓，不代表当前版本已经支持所有类型：
 
 ```toml
-schema_version = "20260808.3"
+schema_version = "20260808.4"
 
 [app]
 menu_bar_mode = "health"
@@ -252,11 +252,13 @@ Projection，并通过受限桥接提交既有 Agent 命令。Python Agent 仍�
 
 ### 4. API 使用与配额模块
 
-状态：候选。
+状态：进行中。第一个落点是无需密钥的 OpenCode 本地会话用量：仅调用公开
+`opencode stats --days 0 --models`，以模型维度保存 Token、缓存、消息数和其报告的费用。
+它不读取 OpenCode 数据库、会话导出、项目路径或认证文件；未安装 OpenCode 时模块隐藏。
 
 范围：
 
-- 先支持一个明确、可验证的 Provider；
+- 先支持一个明确、可验证的本地 Agent 或 Provider；
 - 采集请求数、Token、真实费用、配额快照和限流事件中实际可获得的部分；
 - 账户凭证存入 Keychain；
 - 支持 provider、account、model、project 等低敏维度；
@@ -366,4 +368,4 @@ Projection，并通过受限桥接提交既有 Agent 命令。Python Agent 仍�
 4. Collector 健康状态作为运行时状态进入 Projection，不与业务流量或告警混算；
 5. 没有新增 API、GPU 或磁盘采集，也没有把新模型塞回 Native Controller。
 
-下一步先完成阶段 0 的稳定性观察与网络 golden fixtures；随后再进入阶段 2 的查询、保留与降采样闭环，不以增加新资源模块为借口跳过数据基础设施。
+当前新增的 OpenCode Collector 已验证“独立资源模块不影响网络采样”的路径。下一步先为 AI counter 查询增加范围和降采样投影，再评估第二个客户端或可验证 Provider；ChatGPT/Codex 订阅额度仍须等待官方公开接口，不能由本地 Hook 伪造精确值。

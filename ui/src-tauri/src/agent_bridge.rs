@@ -14,7 +14,10 @@ use uuid::Uuid;
 
 use crate::app_paths::state_dir;
 
-const PROTOCOL_SCHEMA: &str = "20260808.4";
+// Keep this in lockstep with bin/agent_protocol.py. The desktop bridge owns
+// command/projection validation, so a dated protocol revision must change on
+// both sides before a new Agent can be displayed.
+const PROTOCOL_SCHEMA: &str = "20260809.1";
 
 #[derive(Serialize)]
 pub struct CommandReceipt {

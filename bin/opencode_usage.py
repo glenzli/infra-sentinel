@@ -1,0 +1,435 @@
+"""Privacy-minimal OpenCode session usage collector.
+
+This owner supports OpenCode CLI and OpenCode Desktop.  Desktop collection
+uses a read-only aggregate query over assistant-message usage metadata only;
+it never selects transcript text, project paths, account rows, or credentials.
+The CLI currently renders a terminal table rather than machine-readable data,
+so that fallback parser intentionally fails closed when required rows change.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+import re
+import shutil
+import sqlite3
+import subprocess
+import time
+from typing import Any
+
+from infra_collectors import Collection, CollectorCapability, CollectorContext
+from infra_model import MetricPoint
+
+
+OPENCODE_POLL_SECONDS = 60
+OPENCODE_TIMEOUT_SECONDS = 20
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_MODEL_HEADER = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.:@-]+$")
+_NUMBER = re.compile(r"^(\d+(?:\.\d+)?)([KMB])?$")
+_SUMMARY_LABELS = (
+    "Total Cost", "Avg Cost/Day", "Avg Tokens/Session", "Median Tokens/Session",
+    "Input Tokens", "Output Tokens", "Cache Write", "Cache Read", "Sessions", "Messages", "Days", "Cost", "Input", "Output",
+)
+
+
+@dataclass(frozen=True)
+class OpenCodeStats:
+    sessions: int
+    messages: int
+    input_tokens: int
+    output_tokens: int
+    reasoning_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    cost_usd: float
+    models: tuple[dict[str, Any], ...]
+    output_includes_reasoning: bool
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens + self.reasoning_tokens + self.cache_read_tokens + self.cache_write_tokens
+
+
+def discover_opencode() -> str | None:
+    """Find only executable CLI locations; no OpenCode data directories are read."""
+    discovered = shutil.which("opencode")
+    candidates = [
+        discovered,
+        str(Path.home() / ".local" / "bin" / "opencode"),
+        str(Path.home() / ".opencode" / "bin" / "opencode"),
+        "/opt/homebrew/bin/opencode",
+        "/usr/local/bin/opencode",
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file() and os_access_executable(candidate):
+            return candidate
+    return None
+
+
+def discover_opencode_desktop_database() -> Path | None:
+    """Locate OpenCode Desktop's session database, never its auth store."""
+    candidate = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+    return candidate if candidate.is_file() else None
+
+
+def os_access_executable(path: str) -> bool:
+    # Kept tiny and injectable-adjacent so the discovery contract stays
+    # explicit in tests without importing any OpenCode-owned local files.
+    return Path(path).exists() and bool(Path(path).stat().st_mode & 0o111)
+
+
+def _table_text(line: str) -> str:
+    text = _ANSI_ESCAPE.sub("", line).strip()
+    if text.startswith("│") and text.endswith("│"):
+        return text[1:-1].strip()
+    return ""
+
+
+def _number(value: str) -> int:
+    compact = value.replace(",", "").strip()
+    match = _NUMBER.fullmatch(compact)
+    if not match:
+        raise ValueError("unsupported OpenCode numeric value")
+    amount = float(match.group(1))
+    multiplier = {None: 1, "K": 1_000, "M": 1_000_000, "B": 1_000_000_000}[match.group(2)]
+    return max(0, round(amount * multiplier))
+
+
+def _cost(value: str) -> float:
+    if not value.startswith("$"):
+        raise ValueError("unsupported OpenCode cost value")
+    amount = float(value[1:].replace(",", ""))
+    return max(0.0, amount)
+
+
+def _value_after_label(text: str, label: str) -> str | None:
+    if not text.startswith(label):
+        return None
+    value = text[len(label):].strip()
+    return value or None
+
+
+def parse_opencode_stats(output: str) -> OpenCodeStats:
+    """Parse documented human-readable stats without retaining transcript text.
+
+    ``--models`` combines reasoning tokens into each model's output field in
+    OpenCode's current display.  We preserve that useful total and state the
+    semantic fact instead of inventing a separate reasoning count.
+    """
+    rows = [_table_text(line) for line in output.splitlines()]
+    summary: dict[str, str] = {}
+    models: list[dict[str, Any]] = []
+    current_model: dict[str, Any] | None = None
+    for text in rows:
+        if not text:
+            continue
+        if _MODEL_HEADER.fullmatch(text):
+            current_model = {
+                "id": text,
+                "messages": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+                "cost_usd": 0.0,
+            }
+            models.append(current_model)
+            continue
+        for label in _SUMMARY_LABELS:
+            value = _value_after_label(text, label)
+            if value is None:
+                continue
+            if current_model is not None:
+                model_fields = {
+                    "Messages": ("messages", _number),
+                    "Input Tokens": ("input_tokens", _number),
+                    "Output Tokens": ("output_tokens", _number),
+                    "Cache Read": ("cache_read_tokens", _number),
+                    "Cache Write": ("cache_write_tokens", _number),
+                    "Cost": ("cost_usd", _cost),
+                }
+                model = model_fields.get(label)
+                if model:
+                    current_model[model[0]] = model[1](value)
+                    break
+            summary[label] = value
+            break
+    required = {"Sessions", "Messages", "Input", "Output", "Cache Read", "Cache Write", "Total Cost"}
+    if not required.issubset(summary):
+        missing = ", ".join(sorted(required - set(summary)))
+        raise ValueError(f"OpenCode stats output missing required rows: {missing}")
+    if models:
+        return OpenCodeStats(
+            sessions=_number(summary["Sessions"]),
+            messages=_number(summary["Messages"]),
+            input_tokens=sum(int(item["input_tokens"]) for item in models),
+            output_tokens=sum(int(item["output_tokens"]) for item in models),
+            reasoning_tokens=0,
+            cache_read_tokens=sum(int(item["cache_read_tokens"]) for item in models),
+            cache_write_tokens=sum(int(item["cache_write_tokens"]) for item in models),
+            cost_usd=sum(float(item["cost_usd"]) for item in models),
+            models=tuple(models),
+            output_includes_reasoning=True,
+        )
+    return OpenCodeStats(
+        sessions=_number(summary["Sessions"]),
+        messages=_number(summary["Messages"]),
+        input_tokens=_number(summary["Input"]),
+        output_tokens=_number(summary["Output"]),
+        reasoning_tokens=0,
+        cache_read_tokens=_number(summary["Cache Read"]),
+        cache_write_tokens=_number(summary["Cache Write"]),
+        cost_usd=_cost(summary["Total Cost"]),
+        models=(),
+        output_includes_reasoning=False,
+    )
+
+
+def _day_start_epoch(epoch: float) -> int:
+    local = datetime.fromtimestamp(epoch).astimezone()
+    return int(local.replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
+
+
+def _number_from_database(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _cost_from_database(value: Any) -> float:
+    try:
+        return max(0.0, float(value or 0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def read_opencode_desktop_stats(path: Path, epoch: float) -> OpenCodeStats:
+    """Aggregate today’s assistant-message token metadata from OpenCode Desktop.
+
+    JSON accessors extract only provider, model, role, token counters, and
+    cost inside SQLite. Neither message data nor any text-bearing column is
+    selected, returned, stored, logged, or placed in the Projection.
+    """
+    if not path.is_file():
+        raise OSError("OpenCodeDesktopDatabaseMissing")
+    cutoff = _day_start_epoch(epoch)
+    uri = f"{path.resolve().as_uri()}?mode=ro"
+    with sqlite3.connect(uri, uri=True) as connection:
+        connection.execute("PRAGMA query_only = ON")
+        model_rows = connection.execute("""
+            SELECT
+                COALESCE(NULLIF(json_extract(data, '$.providerID'), ''), 'unknown') AS provider,
+                COALESCE(NULLIF(json_extract(data, '$.modelID'), ''), 'unknown') AS model,
+                COUNT(*) AS messages,
+                COALESCE(SUM(CAST(json_extract(data, '$.tokens.input') AS INTEGER)), 0) AS input_tokens,
+                COALESCE(SUM(CAST(json_extract(data, '$.tokens.output') AS INTEGER)), 0) AS output_tokens,
+                COALESCE(SUM(CAST(json_extract(data, '$.tokens.reasoning') AS INTEGER)), 0) AS reasoning_tokens,
+                COALESCE(SUM(CAST(json_extract(data, '$.tokens.cache.read') AS INTEGER)), 0) AS cache_read_tokens,
+                COALESCE(SUM(CAST(json_extract(data, '$.tokens.cache.write') AS INTEGER)), 0) AS cache_write_tokens,
+                COALESCE(SUM(CAST(json_extract(data, '$.cost') AS REAL)), 0) AS cost_usd
+            FROM message
+            WHERE time_created >= ?
+              AND json_extract(data, '$.role') = 'assistant'
+            GROUP BY provider, model
+            ORDER BY input_tokens + output_tokens + reasoning_tokens + cache_read_tokens + cache_write_tokens DESC, provider, model
+        """, (cutoff,)).fetchall()
+        session_count = _number_from_database(connection.execute("""
+            SELECT COUNT(DISTINCT session_id)
+            FROM message
+            WHERE time_created >= ?
+              AND json_extract(data, '$.role') = 'assistant'
+        """, (cutoff,)).fetchone()[0])
+    models = tuple({
+        "id": f"{str(row[0])}/{str(row[1])}",
+        "messages": _number_from_database(row[2]),
+        "input_tokens": _number_from_database(row[3]),
+        "output_tokens": _number_from_database(row[4]),
+        "reasoning_tokens": _number_from_database(row[5]),
+        "cache_read_tokens": _number_from_database(row[6]),
+        "cache_write_tokens": _number_from_database(row[7]),
+        "cost_usd": _cost_from_database(row[8]),
+    } for row in model_rows)
+    return OpenCodeStats(
+        sessions=session_count,
+        messages=sum(int(item["messages"]) for item in models),
+        input_tokens=sum(int(item["input_tokens"]) for item in models),
+        output_tokens=sum(int(item["output_tokens"]) for item in models),
+        reasoning_tokens=sum(int(item["reasoning_tokens"]) for item in models),
+        cache_read_tokens=sum(int(item["cache_read_tokens"]) for item in models),
+        cache_write_tokens=sum(int(item["cache_write_tokens"]) for item in models),
+        cost_usd=sum(float(item["cost_usd"]) for item in models),
+        models=models,
+        output_includes_reasoning=False,
+    )
+
+
+def _iso_now(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
+
+
+def _metric_point(
+    *, timestamp: str, epoch: float, metric: str, value: int | float, dimensions: dict[str, str], unit: str,
+) -> MetricPoint:
+    return MetricPoint(
+        observed_at=timestamp,
+        observed_epoch=epoch,
+        metric=metric,
+        instrument="counter",
+        value=value,
+        unit=unit,
+        source_id="opencode",
+        resource_id="ai_usage",
+        dimensions=dimensions,
+        attribution_method="exact",
+        confidence="high",
+    )
+
+
+class OpenCodeUsageCollector:
+    """Own OpenCode discovery, paced CLI polling, and counter checkpoints."""
+
+    capability = CollectorCapability(
+        id="ai.opencode.session-usage",
+        source_id="opencode",
+        source_kind="ai.opencode",
+        resource_id="ai_usage",
+        metrics=("ai.tokens.input", "ai.tokens.output", "ai.tokens.reasoning", "ai.tokens.cache_read", "ai.tokens.cache_write", "ai.cost.usd"),
+    )
+
+    def __init__(
+        self,
+        *,
+        executable_finder: Callable[[], str | None] = discover_opencode,
+        desktop_database_finder: Callable[[], Path | None] = discover_opencode_desktop_database,
+        runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+        clock: Callable[[], float] = time.time,
+        poll_seconds: int = OPENCODE_POLL_SECONDS,
+    ) -> None:
+        self._executable_finder = executable_finder
+        self._desktop_database_finder = desktop_database_finder
+        self._runner = runner
+        self._clock = clock
+        self._poll_seconds = poll_seconds
+        self._next_poll_epoch = 0.0
+        self._snapshot: dict[str, Any] = {"available": False, "status": "unavailable"}
+        self._previous: dict[str, int | float] = {}
+
+    def _snapshot_for(self, stats: OpenCodeStats, timestamp: str, collection_method: str) -> dict[str, Any]:
+        models = [dict(model, total_tokens=(
+            int(model["input_tokens"]) + int(model["output_tokens"]) + int(model.get("reasoning_tokens", 0))
+            + int(model["cache_read_tokens"]) + int(model["cache_write_tokens"])
+        )) for model in stats.models]
+        return {
+            "available": True,
+            "status": "ok",
+            "label": "OpenCode",
+            "observed_at": timestamp,
+            "window": "today",
+            "collection_method": collection_method,
+            "sessions": stats.sessions,
+            "messages": stats.messages,
+            "tokens": {
+                "input": stats.input_tokens,
+                "output": stats.output_tokens,
+                "reasoning": stats.reasoning_tokens,
+                "cache_read": stats.cache_read_tokens,
+                "cache_write": stats.cache_write_tokens,
+                "total": stats.total_tokens,
+                "output_includes_reasoning": stats.output_includes_reasoning,
+            },
+            "cost_usd": stats.cost_usd,
+            "models": models,
+            "attribution_method": "exact",
+            "confidence": "high",
+            "privacy": "aggregate-session-stats-only",
+        }
+
+    def _interval_points(self, snapshot: dict[str, Any], timestamp: str, epoch: float) -> tuple[MetricPoint, ...]:
+        tokens = snapshot["tokens"]
+        current: dict[str, int | float] = {"all:ai.messages": int(snapshot["messages"])}
+        fields = {
+            "input_tokens": ("ai.tokens.input", "tokens"),
+            "output_tokens": ("ai.tokens.output", "tokens"),
+            "reasoning_tokens": ("ai.tokens.reasoning", "tokens"),
+            "cache_read_tokens": ("ai.tokens.cache_read", "tokens"),
+            "cache_write_tokens": ("ai.tokens.cache_write", "tokens"),
+            "cost_usd": ("ai.cost.usd", "usd"),
+        }
+        metric_units = {metric: unit for metric, unit in fields.values()} | {"ai.messages": "messages"}
+        if snapshot["models"]:
+            for model in snapshot["models"]:
+                for field, (metric, _unit) in fields.items():
+                    current[f"{model['id']}:{metric}"] = model.get(field, 0)
+        else:
+            current = {
+                "all:ai.tokens.input": int(tokens["input"]),
+                "all:ai.tokens.output": int(tokens["output"]),
+                "all:ai.tokens.reasoning": int(tokens["reasoning"]),
+                "all:ai.tokens.cache_read": int(tokens["cache_read"]),
+                "all:ai.tokens.cache_write": int(tokens["cache_write"]),
+                "all:ai.cost.usd": float(snapshot["cost_usd"]),
+                "all:ai.messages": int(snapshot["messages"]),
+            }
+        points: list[MetricPoint] = []
+        for key, total in current.items():
+            previous = self._previous.get(key)
+            delta = total if previous is None or total < previous else total - previous
+            self._previous[key] = total
+            if not delta:
+                continue
+            _scope, metric = key.rsplit(":", 1)
+            model_id: str | None = None
+            # Split only on the known metric suffix; provider/model identifiers
+            # can themselves contain ':' in custom OpenCode configurations.
+            for candidate in ("ai.tokens.input", "ai.tokens.output", "ai.tokens.reasoning", "ai.tokens.cache_read", "ai.tokens.cache_write", "ai.cost.usd", "ai.messages"):
+                suffix = f":{candidate}"
+                if key.endswith(suffix):
+                    model_id = key[:-len(suffix)]
+                    metric = candidate
+                    break
+            unit = metric_units[metric]
+            dimensions = {"scope": "all"} if model_id == "all" else {"model": str(model_id)}
+            points.append(_metric_point(timestamp=timestamp, epoch=epoch, metric=metric, value=delta, dimensions=dimensions, unit=unit))
+        return tuple(points)
+
+    def collect(self, context: CollectorContext) -> Collection:
+        epoch = float(context.local_sample.get("epoch") or self._clock())
+        if epoch < self._next_poll_epoch:
+            return Collection(status=str(self._snapshot.get("status", "ok")), snapshot=self._snapshot)
+        self._next_poll_epoch = epoch + self._poll_seconds
+        desktop_database = self._desktop_database_finder()
+        executable = None if desktop_database else self._executable_finder()
+        if not executable and not desktop_database:
+            self._snapshot = {"available": False, "status": "unavailable"}
+            return Collection(status="unavailable", snapshot=self._snapshot)
+        try:
+            timestamp = _iso_now(epoch)
+            if desktop_database:
+                stats = read_opencode_desktop_stats(desktop_database, epoch)
+                collection_method = "desktop-session-metadata"
+            else:
+                completed = self._runner(
+                    [executable, "stats", "--days", "0", "--models"],
+                    capture_output=True,
+                    text=True,
+                    timeout=OPENCODE_TIMEOUT_SECONDS,
+                    check=False,
+                )
+                if completed.returncode != 0:
+                    raise RuntimeError("OpenCodeStatsCommandFailed")
+                stats = parse_opencode_stats(completed.stdout)
+                collection_method = "cli-session-summary"
+            snapshot = self._snapshot_for(stats, timestamp, collection_method)
+            points = self._interval_points(snapshot, timestamp, epoch)
+        except (OSError, subprocess.TimeoutExpired, ValueError, RuntimeError):
+            # Keep the last complete aggregate visible, but make its stale
+            # state unmistakable.  A parser or CLI failure must never turn a
+            # known total into a misleading zero.
+            self._snapshot = {**self._snapshot, "available": True, "status": "error", "label": "OpenCode"}
+            return Collection(status="error", snapshot=self._snapshot)
+        self._snapshot = snapshot
+        return Collection(points=points, status="ok", snapshot=snapshot)

@@ -1,6 +1,6 @@
 # Infra Sentinel
 
-Infra Sentinel 是一个本地优先的个人 AI Infra 资源归因面板。当前正式启用的第一个资源模块是只读网络监控，服务于一条明确的代理技术栈：
+Infra Sentinel 是一个本地优先的个人 AI Infra 资源归因面板。当前正式启用的资源模块包括只读网络监控，以及在检测到 OpenCode 后自动启用的本地 AI 用量统计。网络模块服务于一条明确的代理技术栈：
 
 - 本地使用 Mihomo / Clash Meta 兼容内核；
 - 可选通过 SSH 校验一台或多台独立 Linux VPS 网卡流量；
@@ -14,7 +14,7 @@ Infra Sentinel 是一个本地优先的个人 AI Infra 资源归因面板。当�
 
 > 图中的设备标签来自使用者自己的 Xray 配置，不是程序内置名称。
 
-网络以外的能力尚未接入；API 额度、磁盘和本地计算不会被伪装成可用功能。架构迁移计划见 [ROADMAP.md](ROADMAP.md)。
+OpenCode 以外的 API 额度、磁盘和本地计算尚未接入，不会被伪装成可用功能。架构迁移计划见 [ROADMAP.md](ROADMAP.md)。
 
 ## 支持范围
 
@@ -27,6 +27,7 @@ Infra Sentinel 是一个本地优先的个人 AI Infra 资源归因面板。当�
 - 通过 `~/.ssh/config` 主机别名访问的 Linux VPS；
 - Linux `/sys/class/net` 网卡累计计数；
 - 仅监听远端 `127.0.0.1:10085` 的 Xray StatsService。
+- 已安装的 OpenCode CLI（自动发现，读取其公开 `stats` 命令）。
 
 桌面端使用 Tauri，并把 Python Agent 按目标平台打包为本地 sidecar。桌面端只
 能读取版本化 Projection 和提交受限命令，无法读取任意文件或运行任意命令；
@@ -39,6 +40,7 @@ Agent 仍是采样、存储、策略和通知的唯一所有者。首次启动�
 - sing-box、Surge 或其他代理核心；
 - 非 Linux 远端网卡统计；
 - 非 Xray 服务端用户统计；
+- 其他 Agent、ChatGPT/Codex 订阅额度或任意 API 账户额度；
 - 自定义 Xray API 地址、二进制路径或 VPS 网卡选择。
 
 接口偶然兼容不等于正式支持。项目只为上面的路径维护实现和测试。
@@ -63,17 +65,31 @@ App 自动发现本地 Mihomo Socket，并读取 `/connections`：
 
 ## 本地数据存储
 
-从 `20260808.2` 起，App 在状态目录创建 `infra.sqlite3`，使用 SQLite WAL 保存标准化的网络区间指标。写入通过稳定来源、时间、指标和维度生成去重键，因此重启或回填不会重复计数。
+从 `20260808.2` 起，App 在状态目录创建 `infra.sqlite3`，使用 SQLite WAL 保存标准化的网络与 OpenCode AI 用量区间指标。写入通过稳定来源、时间、指标和维度生成去重键，因此重启或回填不会重复计数。
 
 首次运行会从既有网络 JSONL 一次性回填；原始 JSONL 目前仍保留给会话恢复、证据快照和旧报告，下一次存储迁移会在查询路径完全切换后再停止该依赖。数据库只保存累计字节、方向、代理路径、来源身份和必要的 Xray 客户端标签，不保存域名原文、URL、请求内容或提示词。
 
-进入存储前，网络事实会经过独立 Collector 注册表：本机 Mihomo、每台 VPS 网卡、每台 VPS 的 Xray 统计分别输出标准指标。某一个指标适配器出错只会标记对应数据源异常，其余来源仍会继续写入；Collector 不保存或展示请求内容。
+进入存储前，事实会经过独立 Collector 注册表：本机 Mihomo、每台 VPS 网卡、每台 VPS 的 Xray 统计，以及 OpenCode 分别输出标准指标。某一个指标适配器出错只会标记对应数据源异常，其余来源仍会继续写入；Collector 不保存或展示请求内容。
+
+## OpenCode AI 用量
+
+检测到 OpenCode Desktop 后，Agent 每 60 秒以 SQLite 只读模式聚合当天
+assistant 消息的 provider、model、时间、token 与 cost 元数据；不会选择消息
+正文、提示词、响应、项目路径、账户行或认证凭据。Desktop 库不存在时，才回退执行：
+
+```text
+opencode stats --days 0 --models
+```
+
+Desktop 路径提供当天逐 assistant 消息的精确输入、输出、推理和缓存 Token；它不会把不同模型混在一个 session 总数里。CLI 后备只解析会话聚合 token、模型、缓存、消息数和 OpenCode 报告的费用；当前 CLI 的模型明细会把 reasoning 合入输出，因此界面会明确标为“输出 + 推理”。
+
+OpenCode 未安装时，此资源模块不会出现在界面中，也不会造成数据源异常。若其 CLI 输出格式发生不兼容变化，模块会标记为数据源异常而不会写入猜测值。
 
 ## 本地 Agent 协议
 
 `infra_agent.py` 是采样、存储、Projection 与本地命令的唯一运行时。桌面 UI 只负责启动 Agent、读取状态和提交命令；它不参与流量计算。
 
-当前协议版本为 `20260808.4`，以本地原子文件作为第一种传输方式：
+当前协议版本为 `20260809.1`，以本地原子文件作为第一种传输方式：
 
 - `state/projection.json`：完整只读 Projection，供任意 UI 读取；
 - `state/health.json`：采样失败时的独立运行时健康状态；
@@ -123,10 +139,10 @@ Google 流量不会被推断为某个具体客户端。未知域名也会直接�
 ~/Library/Application Support/Infra Sentinel/config.toml
 ```
 
-当前配置契约为 `20260808.3`。版本采用 `YYYYMMDD.修订号`：同一天内迭代修订号，跨日发布使用新的日期。
+当前配置契约为 `20260808.4`。版本采用 `YYYYMMDD.修订号`：同一天内迭代修订号，跨日发布使用新的日期。
 
 ```toml
-schema_version = "20260808.3"
+schema_version = "20260808.4"
 
 [app]
 menu_bar_mode = "health"
@@ -250,7 +266,7 @@ VPS 账单量     = RX + TX
 ```
 
 - 点击菜单栏即可打开完整仪表板；完整数值、网络归因和趋势只在仪表板中展示。
-- 仪表板顶部先展示整体健康状态、正式资源模块和数据源数量；当前唯一正式资源模块为 Network。
+- 仪表板顶部先展示整体健康状态、正式资源模块和数据源数量；检测到 OpenCode 时会附加 AI 用量模块。
 - Network 详情继续显示 VPS 账单、本机 Mihomo 总量、代理路径、域名归因、Xray 用户统计和最近 1 小时的 `MiB/min` 趋势。
 
 仪表板显示 VPS 账单、本机 Mihomo 总量、代理路径、域名归因、Xray 用户统计和最近 1 小时的 `MiB/min` 趋势。界面支持中文和 English 即时切换。

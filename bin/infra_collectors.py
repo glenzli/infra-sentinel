@@ -43,12 +43,28 @@ class CollectorContext:
 
 
 @dataclass(frozen=True)
+class Collection:
+    """One collector result, with an optional privacy-safe current snapshot.
+
+    Interval metric points remain the canonical historical facts.  A snapshot
+    exists for sources such as a local AI client which also expose a useful
+    current-day summary without forcing that summary to be re-summed as an
+    interval counter.
+    """
+
+    points: tuple[MetricPoint, ...] = ()
+    status: str = "ok"
+    snapshot: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
 class CollectorRun:
     """One collector outcome, separate from source business metrics."""
 
     capability: CollectorCapability
     status: str
     points: tuple[MetricPoint, ...] = ()
+    snapshot: dict[str, Any] | None = None
     error_kind: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
@@ -59,13 +75,15 @@ class CollectorRun:
         }
         if self.error_kind:
             payload["error_kind"] = self.error_kind
+        if self.snapshot is not None:
+            payload["snapshot"] = self.snapshot
         return payload
 
 
 class Collector(Protocol):
     capability: CollectorCapability
 
-    def collect(self, context: CollectorContext) -> Iterable[MetricPoint]:
+    def collect(self, context: CollectorContext) -> Iterable[MetricPoint] | Collection:
         """Return canonical points without mutating runtime state."""
 
 
@@ -107,7 +125,7 @@ class CollectorRegistry:
         runs: list[CollectorRun] = []
         for collector in self._collectors.values():
             try:
-                points = tuple(collector.collect(context))
+                result = collector.collect(context)
             except Exception as exc:
                 runs.append(CollectorRun(
                     capability=collector.capability,
@@ -115,10 +133,19 @@ class CollectorRegistry:
                     error_kind=type(exc).__name__,
                 ))
                 continue
+            if isinstance(result, Collection):
+                points = result.points
+                status = result.status
+                snapshot = result.snapshot
+            else:
+                points = tuple(result)
+                status = "ok"
+                snapshot = None
             runs.append(CollectorRun(
                 capability=collector.capability,
-                status="ok",
+                status=status,
                 points=points,
+                snapshot=snapshot,
             ))
         return tuple(runs)
 
