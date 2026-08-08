@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -35,6 +36,7 @@ from infra_agent import (  # noqa: E402
     apply_agent_commands,
     build_billing_event,
     latest_delta_event,
+    send_native_notification,
     process_configuration_read_commands,
     totals_for_window,
     write_projection_state,
@@ -710,6 +712,14 @@ class SessionMeterTests(unittest.TestCase):
 
 
 class SnapshotAndEventTests(unittest.TestCase):
+    def test_native_notifications_pass_chinese_as_osascript_arguments(self) -> None:
+        with patch("infra_agent.subprocess.run") as runner:
+            send_native_notification("流量告警", "5 分钟 ↑250 MiB")
+        args, kwargs = runner.call_args
+        self.assertEqual(args[0][:2], ["/usr/bin/osascript", "-e"])
+        self.assertEqual(args[0][-2:], ["流量告警", "5 分钟 ↑250 MiB"])
+        self.assertNotIn("env", kwargs)
+
     def test_vps_billing_event_is_visible_to_the_native_notification_projection(self) -> None:
         transition = BillingBudgetTransition(
             policy=BillingBudgetPolicy("primary-billing-budget", "primary", "Primary VPS", 100, 200),

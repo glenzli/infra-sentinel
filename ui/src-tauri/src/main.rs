@@ -4,12 +4,14 @@ mod agent_bridge;
 mod agent_supervisor;
 mod app_paths;
 mod menu_bar;
+mod native_notifications;
 
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
             menu_bar::install(app.handle()).map_err(std::io::Error::other)?;
             agent_supervisor::start(app.handle().clone()).map_err(std::io::Error::other)?;
+            native_notifications::start(app.handle().clone()).map_err(std::io::Error::other)?;
             Ok(())
         })
         .on_window_event(|window, event| {

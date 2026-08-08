@@ -311,16 +311,27 @@ def notify(
         title = "Traffic Sentinel 流量告警"
         minutes = config.monitor.warning_window_seconds // 60
         body = f"{minutes} 分钟 ↑{format_bytes(warning['up_bytes'])} ↓{format_bytes(warning['down_bytes'])}"
-    script = 'display notification (system attribute "TS_BODY") with title (system attribute "TS_TITLE")'
-    environment = os.environ.copy()
-    environment.update({"TS_TITLE": title, "TS_BODY": body})
-    subprocess.run(
-        ["/usr/bin/osascript", "-e", script],
-        env=environment,
-        capture_output=True,
-        timeout=5,
-        check=False,
-    )
+    send_native_notification(title, body)
+
+
+def send_native_notification(title: str, body: str) -> None:
+    """Deliver UTF-8 text as AppleScript arguments instead of environment variables.
+
+    `system attribute` has been observed to decode non-ASCII environment values
+    inconsistently under launchd/PyInstaller. Positional arguments preserve the
+    Python process' UTF-8 text all the way to AppleScript without interpolating
+    untrusted values into script source.
+    """
+    script = "on run argv\n display notification (item 2 of argv) with title (item 1 of argv)\nend run"
+    try:
+        subprocess.run(
+            ["/usr/bin/osascript", "-e", script, title, body],
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
 def notify_billing(transition: BillingBudgetTransition) -> None:
@@ -335,16 +346,7 @@ def notify_billing(transition: BillingBudgetTransition) -> None:
     else:
         title = f"{label} {'严重' if transition.level == 'critical' else ''}账单告警"
         body = f"本计费周期 {format_bytes(transition.billable_bytes)}，阈值 {format_bytes(transition.threshold_bytes)}"
-    script = 'display notification (system attribute "TS_BODY") with title (system attribute "TS_TITLE")'
-    environment = os.environ.copy()
-    environment.update({"TS_TITLE": title, "TS_BODY": body})
-    subprocess.run(
-        ["/usr/bin/osascript", "-e", script],
-        env=environment,
-        capture_output=True,
-        timeout=5,
-        check=False,
-    )
+    send_native_notification(title, body)
 
 
 def write_projection_state(

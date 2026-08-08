@@ -86,6 +86,7 @@ fn launch_once(agent: &Path, support: &Path, state: &Path, config: &Path) -> Res
         .current_dir(support)
         .env(STATE_DIRECTORY_ENV, state)
         .env("INFRA_SENTINEL_PARENT_PID", std::process::id().to_string())
+        .env("INFRA_SENTINEL_APP_NOTIFICATIONS", "1")
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
