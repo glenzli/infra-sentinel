@@ -1,4 +1,4 @@
-import { AgentProjection } from "./bridge";
+import { AgentProjection, ResourceProjection, SourceProjection } from "./bridge";
 import { asArray, asRecord, formatBytes, number } from "./format";
 import { tr } from "./i18n";
 
@@ -66,4 +66,14 @@ export function renderNetworkDetail(projection: AgentProjection): string {
       ${users.length ? `<article class="xray-panel"><div class="detail-panel__heading"><h3>${tr("Xray users", "Xray 用户")}</h3><span>${formatBytes(asRecord(state.xray_stats).total_bytes)}</span></div><ul class="traffic-list traffic-list--columns">${users.slice(0, 8).map((user) => `<li><span>${escapeHtml(user.label)}</span><strong>${formatBytes(user.total_bytes)}</strong></li>`).join("")}</ul></article>` : ""}
       <section class="trend-panel"><div class="detail-panel__heading"><h3>${tr("Last 15 minutes — rate", "近 15 分钟速率趋势")}</h3><span>${tr("Unit", "单位")} · ${rate(trend.peak_bytes_per_minute)}</span></div>${trendSvg(trend)}<div class="chart-legend"><span><i class="chart-dot chart-dot--mihomo"></i>Mihomo</span><span><i class="chart-dot chart-dot--proxy"></i>${tr("Proxy route", "代理路径")}</span></div></section>
     </section>`;
+}
+
+function sourceLabel(source: SourceProjection): string {
+  const status = source.enabled ? source.status : "disabled";
+  const text = status === "ok" ? tr("online", "在线") : status === "disabled" ? tr("disabled", "已停用") : status;
+  return `<li class="source-row"><span class="source-state source-state--${escapeHtml(status)}" aria-hidden="true"></span><span class="source-main"><strong>${escapeHtml(source.label)}</strong><small>${escapeHtml(source.kind)}</small></span><span class="source-status">${escapeHtml(text)}</span></li>`;
+}
+
+export function renderNetworkResourcePage(projection: AgentProjection, resource: ResourceProjection, sources: SourceProjection[]): string {
+  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("RESOURCE DETAIL", "资源详情")}</p><h2>${tr("Network", "网络")}</h2></div><span class="pill pill--${escapeHtml(resource.status)}">${escapeHtml(resource.status)}</span></div>${renderNetworkDetail(projection)}<article class="sources-card sources-card--footer"><div class="sources-card__heading"><h3>${tr("Collector sources", "采集数据源")}</h3><span>${sources.length}</span></div><ul>${sources.map(sourceLabel).join("") || `<li class="empty">${tr("No configured sources", "尚未配置数据源")}</li>`}</ul></article></section>`;
 }

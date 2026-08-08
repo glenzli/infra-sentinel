@@ -17,6 +17,8 @@ export interface SettingsActions {
   languageChanged(): void;
 }
 
+type SettingsSection = "general" | "sources" | "policies";
+
 function escapeHtml(value: unknown): string {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;",
@@ -141,15 +143,24 @@ export async function loadSettings(): Promise<SettingsPayload> {
 
 export function renderSettings(root: HTMLDivElement, initial: SettingsPayload, actions: SettingsActions): void {
   let settings = cloneSettings(initial);
+  let activeSection: SettingsSection = "general";
   const render = (notice = "") => {
     const alert = trafficPolicy(settings);
     const hosts = remoteSources(settings);
     root.innerHTML = `
       <main class="shell">
-        <header class="topbar"><div class="brand"><span class="brand-mark" aria-hidden="true"><i></i></span><span>Infra Sentinel</span></div><div class="topbar-actions">${languagePicker()}<button class="button button--subtle" id="back">${icon("arrow-left")}<span>Back to overview / 返回概览</span></button></div></header>
-        <section class="settings-header"><p class="eyebrow">CONFIGURATION</p><h1>Settings / 设置</h1><p>Local Mihomo is discovered automatically. Configure only alert policy and remote hosts.</p></section>
+        <header class="topbar"><button class="brand" id="back" type="button"><span class="brand-mark" aria-hidden="true"><i></i></span><span>Infra Sentinel</span></button><div class="topbar-actions"><button class="button button--subtle" id="back-overview">${icon("arrow-left")}<span>Back to overview / 返回概览</span></button></div></header>
+        <section class="settings-header"><p class="eyebrow">CONFIGURATION</p><h1>Settings / 设置</h1><p>Local Mihomo is discovered automatically. Choose how Infra Sentinel appears, which hosts it observes, and when it should notify you.</p></section>
+        <div class="settings-layout"><nav class="settings-nav" aria-label="Settings sections"><button type="button" data-settings-section="general" class="${activeSection === "general" ? "is-active" : ""}">General / 通用</button><button type="button" data-settings-section="sources" class="${activeSection === "sources" ? "is-active" : ""}">Data sources / 数据源</button><button type="button" data-settings-section="policies" class="${activeSection === "policies" ? "is-active" : ""}">Policies / 策略</button></nav>
         <form id="settings-form" class="settings-form">
-          <section class="settings-section"><div class="section-heading"><div><p class="eyebrow">ALERT POLICY</p><h2>Traffic alerts / 流量告警</h2></div></div>
+          <section class="settings-section settings-panel ${activeSection === "general" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">GENERAL</p><h2>Appearance / 外观</h2></div></div>
+            <div class="general-grid"><label class="setting-choice"><span>Language / 语言</span>${languagePicker()}</label></div>
+          </section>
+          <section class="settings-section settings-panel ${activeSection === "sources" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">REMOTE HOSTS</p><h2>Host configuration / 主机配置</h2></div><button class="button button--subtle" type="button" id="add-host">${icon("plus")}<span>Add VPS / 添加 VPS</span></button></div>
+            <p class="settings-note">Use a Host alias from <code>~/.ssh/config</code>. Xray StatsService remains limited to remote <code>127.0.0.1:10085</code>.</p>
+            <div class="host-list">${hosts.map((source) => sourceRow(source, budgetPolicy(settings, String(source.id)))).join("") || "<p class=\"empty\">No remote host configured / 尚未配置远端主机</p>"}</div>
+          </section>
+          <section class="settings-section settings-panel ${activeSection === "policies" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">TRAFFIC POLICY</p><h2>Traffic alerts / 流量告警</h2></div></div>
             <div class="alert-grid">
               <label>Warning window / 警告窗口<input name="warning-window" type="number" min="1" max="120" value="${number(alert.warning_window_minutes, 5)}" required /><span>minutes / 分钟</span></label>
               <label>Warning threshold / 警告阈值<input name="warning-mib" type="number" min="1" value="${number(alert.warning_mib, 250)}" required /><span>MiB</span></label>
@@ -157,22 +168,24 @@ export function renderSettings(root: HTMLDivElement, initial: SettingsPayload, a
               <label>Critical threshold / 严重阈值<input name="critical-mib" type="number" min="1" value="${number(alert.critical_mib, 1024)}" required /><span>MiB</span></label>
             </div>
           </section>
-          <section class="settings-section"><div class="section-heading"><div><p class="eyebrow">REMOTE HOSTS</p><h2>Host configuration / 主机配置</h2></div><button class="button button--subtle" type="button" id="add-host">${icon("plus")}<span>Add VPS / 添加 VPS</span></button></div>
-            <p class="settings-note">Use a Host alias from <code>~/.ssh/config</code>. Xray StatsService remains limited to remote <code>127.0.0.1:10085</code>.</p>
-            <div class="host-list">${hosts.map((source) => sourceRow(source, budgetPolicy(settings, String(source.id)))).join("") || "<p class=\"empty\">No remote host configured / 尚未配置远端主机</p>"}</div>
-          </section>
           <p class="form-notice">${escapeHtml(notice)}</p>
           <div class="form-actions"><button class="button button--subtle" type="button" id="cancel">Cancel / 取消</button><button class="button button--primary" type="submit">Save and apply / 保存并应用</button></div>
-        </form>
+        </form></div>
       </main>`;
     const form = root.querySelector<HTMLFormElement>("#settings-form");
     if (!form) return;
     localizeInlinePairs(root);
     refreshHostControlState(form);
-    bindLanguagePicker(root, actions.languageChanged);
+    bindLanguagePicker(root, () => render());
     form.addEventListener("change", () => refreshHostControlState(form));
     root.querySelector<HTMLButtonElement>("#back")?.addEventListener("click", actions.cancel);
+    root.querySelector<HTMLButtonElement>("#back-overview")?.addEventListener("click", actions.cancel);
     root.querySelector<HTMLButtonElement>("#cancel")?.addEventListener("click", actions.cancel);
+    root.querySelectorAll<HTMLButtonElement>("[data-settings-section]").forEach((button) => button.addEventListener("click", () => {
+      settings = readForm(form, settings);
+      activeSection = button.dataset.settingsSection as SettingsSection;
+      render(notice);
+    }));
     root.querySelector<HTMLButtonElement>("#add-host")?.addEventListener("click", () => {
       settings.sources.push({ id: nextSourceId(settings), kind: "network.linux-xray", label: "New VPS", enabled: true, ssh_host: "", xray_stats_enabled: false, billing_cycle_start_day: 1, billing_mode: "both" });
       render();
