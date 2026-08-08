@@ -71,6 +71,7 @@ static NSString *XrayFooter(NSDictionary *state, TSLanguage language) {
 
 void TSDrawXrayUserTrafficPanel(NSRect rect, NSDictionary *rawState, TSLanguage language) {
     NSDictionary *state = XrayDictionary(rawState);
+    NSArray<NSDictionary *> *servers = XrayArray(state[@"remote_servers"]);
     NSArray<NSDictionary *> *users = VisibleXrayUsers(XrayArray(state[@"users"]), language);
     DrawXrayText(TSLocalized(language, @"xray.title"),
                  NSMakeRect(rect.origin.x, NSMaxY(rect) - 19, rect.size.width * 0.55, 17),
@@ -83,9 +84,47 @@ void TSDrawXrayUserTrafficPanel(NSRect rect, NSDictionary *rawState, TSLanguage 
                  [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightMedium],
                  [NSColor secondaryLabelColor], NSLineBreakByTruncatingHead);
 
-    if (users.count == 0) {
+    CGFloat contentTop = NSMaxY(rect) - 44;
+    NSUInteger visibleServers = MIN((NSUInteger)3, servers.count);
+    if (visibleServers > 0) {
+        DrawXrayText(TSLocalized(language, @"remote.title"),
+                     NSMakeRect(rect.origin.x, contentTop - 4, rect.size.width, 15),
+                     [NSFont systemFontOfSize:11 weight:NSFontWeightMedium], [NSColor secondaryLabelColor],
+                     NSLineBreakByTruncatingTail);
+        for (NSUInteger index = 0; index < visibleServers; index++) {
+            NSDictionary *server = XrayDictionary(servers[index]);
+            CGFloat y = contentTop - 25 - (CGFloat)index * 19.0;
+            NSString *label = XrayString(server[@"label"], XrayString(server[@"id"], @"VPS"));
+            NSString *value = TSFormatBytes(XrayNumber(server[@"total_bytes"]));
+            // Keep name, direction detail, and total in non-overlapping
+            // columns. Direction text is allowed to truncate in its own
+            // column when byte values become wide.
+            CGFloat labelWidth = MIN(96.0, rect.size.width * 0.32);
+            CGFloat totalWidth = MIN(82.0, rect.size.width * 0.26);
+            CGFloat detailX = rect.origin.x + labelWidth + 8.0;
+            CGFloat detailWidth = MAX(24.0, rect.size.width - labelWidth - totalWidth - 12.0);
+            DrawXrayText(label, NSMakeRect(rect.origin.x + 10, y, labelWidth - 10, 16),
+                         [NSFont systemFontOfSize:11], [NSColor labelColor], NSLineBreakByTruncatingTail);
+            DrawXrayText(value, NSMakeRect(NSMaxX(rect) - totalWidth, y, totalWidth, 16),
+                         [NSFont monospacedDigitSystemFontOfSize:10 weight:NSFontWeightMedium], [NSColor labelColor],
+                         NSLineBreakByTruncatingHead);
+            NSDictionary *vps = XrayDictionary(server[@"vps"]);
+            NSString *directions = [NSString stringWithFormat:TSLocalized(language, @"xray.directions_format"),
+                                    TSFormatBytes(XrayNumber(vps[@"in_bytes"])), TSFormatBytes(XrayNumber(vps[@"out_bytes"]))];
+            DrawXrayText(directions, NSMakeRect(detailX, y, detailWidth, 16),
+                         [NSFont monospacedDigitSystemFontOfSize:9 weight:NSFontWeightRegular], [NSColor secondaryLabelColor],
+                         NSLineBreakByTruncatingHead);
+        }
+        contentTop -= 31 + (CGFloat)visibleServers * 19.0;
+    }
+
+    if (visibleServers > 0) {
+        // The server rows are the primary view when more than one independent
+        // remote route is configured; user rows would make this compact panel
+        // unreadable. The aggregate remains available in the top total.
+    } else if (users.count == 0) {
         DrawXrayText(TSLocalized(language, @"xray.no_users"),
-                     NSMakeRect(rect.origin.x, NSMaxY(rect) - 47, rect.size.width, 18),
+                     NSMakeRect(rect.origin.x, contentTop, rect.size.width, 18),
                      [NSFont systemFontOfSize:12], [NSColor secondaryLabelColor],
                      NSLineBreakByTruncatingTail);
     } else {
@@ -95,7 +134,7 @@ void TSDrawXrayUserTrafficPanel(NSRect rect, NSDictionary *rawState, TSLanguage 
         CGFloat detailWidth = rect.size.width - labelWidth - totalWidth - 18;
         for (NSUInteger index = 0; index < users.count; index++) {
             NSDictionary *user = XrayDictionary(users[index]);
-            CGFloat y = NSMaxY(rect) - 44 - (CGFloat)index * 21.0;
+            CGFloat y = contentTop - (CGFloat)index * 21.0;
             BOOL flagged = [user[@"flagged"] boolValue];
             NSColor *accent = flagged ? [NSColor systemOrangeColor] : [NSColor systemIndigoColor];
             [accent setFill];

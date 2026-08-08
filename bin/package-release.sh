@@ -2,7 +2,7 @@
 set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-APP_DIR="$ROOT_DIR/Traffic Sentinel.app"
+APP_DIR="$ROOT_DIR/Infra Sentinel.app"
 EXECUTABLE="$APP_DIR/Contents/MacOS/TrafficSentinel"
 INFO_PLIST="$APP_DIR/Contents/Info.plist"
 DIST_DIR="$ROOT_DIR/dist"
@@ -27,7 +27,7 @@ case "$ARCHS" in
 esac
 
 MINIMUM_LABEL=${MINIMUM_MACOS%%.*}
-ASSET_NAME="Traffic-Sentinel-${VERSION}-macos${MINIMUM_LABEL}-${ARCH_LABEL}-unsigned.zip"
+ASSET_NAME="Infra-Sentinel-${VERSION}-macos${MINIMUM_LABEL}-${ARCH_LABEL}-unsigned.zip"
 CHECKSUM_NAME="${ASSET_NAME}.sha256"
 ARCHIVE_PATH="$DIST_DIR/$ASSET_NAME"
 CHECKSUM_PATH="$DIST_DIR/$CHECKSUM_NAME"

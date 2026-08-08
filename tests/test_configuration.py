@@ -12,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "bin"))
 
 from configuration import (  # noqa: E402
+    CONFIG_SCHEMA,
     SETTINGS_SCHEMA,
     read_config,
     read_user_settings,
@@ -23,84 +24,86 @@ from configuration import (  # noqa: E402
 def payload(*, billing_mode: str = "both") -> dict[str, object]:
     return {
         "schema": SETTINGS_SCHEMA,
-        "monitor": {
-            "warning_window_minutes": 7,
-            "warning_mib": 320,
-            "critical_window_minutes": 12,
-            "critical_mib": 1536,
-        },
-        "remote": {
-            "enabled": True,
-            "ssh_host": "my-vps",
-            "xray_stats_enabled": True,
-            "billing_cycle_start_day": 9,
-            "billing_mode": billing_mode,
-        },
+        "app": {"menu_bar_mode": "health"},
+        "policies": [{
+            "id": "network-traffic-alerts", "kind": "traffic.threshold", "resource_id": "network",
+            "warning_window_minutes": 7, "warning_mib": 320,
+            "critical_window_minutes": 12, "critical_mib": 1536,
+        }],
+        "sources": [
+            {"id": "local-mihomo", "kind": "network.mihomo", "enabled": True},
+            {"id": "primary", "kind": "network.linux-xray", "label": "Primary VPS", "enabled": True,
+             "ssh_host": "my-vps", "xray_stats_enabled": True, "billing_cycle_start_day": 9,
+             "billing_mode": billing_mode},
+        ],
     }
 
 
 class ConfigurationTests(unittest.TestCase):
-    def test_example_is_the_complete_current_schema(self) -> None:
+    def test_example_is_the_complete_date_versioned_contract(self) -> None:
         settings = read_user_settings(PROJECT_ROOT / "config.example.toml")
+        self.assertEqual(CONFIG_SCHEMA, "20260808.1")
         self.assertEqual(settings.warning_window_minutes, 5)
         self.assertEqual(settings.warning_mib, 250)
-        self.assertFalse(settings.remote_enabled)
-        self.assertEqual(settings.ssh_host, "")
-        self.assertEqual(settings.billing_mode, "both")
+        self.assertEqual(settings.remote_servers, ())
 
     def test_settings_round_trip_and_runtime_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "config.toml"
             saved = write_user_settings(path, payload(billing_mode="outbound"))
             self.assertEqual(settings_payload(read_user_settings(path)), settings_payload(saved))
+            document = path.read_text(encoding="utf-8")
+            self.assertIn('schema_version = "20260808.1"', document)
+            self.assertIn('kind = "network.linux-xray"', document)
             runtime = read_config(path)
             self.assertEqual(runtime.monitor.warning_window_seconds, 7 * 60)
             self.assertEqual(runtime.monitor.warning_bytes, 320 * 1024 * 1024)
-            self.assertTrue(runtime.vps.enabled)
-            self.assertEqual(runtime.vps.ssh_host, "my-vps")
-            self.assertTrue(runtime.xray_stats.enabled)
-            self.assertEqual(runtime.estimation.vps_billing_legs, 1.0)
+            self.assertEqual(len(runtime.remote_servers), 1)
+            self.assertTrue(runtime.remote_servers[0].vps.enabled)
+            self.assertEqual(runtime.remote_servers[0].vps.ssh_host, "my-vps")
+            self.assertTrue(runtime.remote_servers[0].xray.enabled)
+            self.assertEqual(runtime.remote_servers[0].estimation.vps_billing_legs, 1.0)
 
-    def test_unknown_configuration_fields_are_rejected(self) -> None:
+    def test_multiple_remote_sources_keep_independent_identity_and_billing(self) -> None:
+        data = payload()
+        data["sources"].append({
+            "id": "secondary", "kind": "network.linux-xray", "label": "Secondary VPS", "enabled": True,
+            "ssh_host": "my-vps-2", "xray_stats_enabled": False, "billing_cycle_start_day": 15,
+            "billing_mode": "outbound",
+        })
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "config.toml"
+            write_user_settings(path, data)
+            runtime = read_config(path)
+            self.assertEqual([server.id for server in runtime.remote_servers], ["primary", "secondary"])
+            self.assertEqual(runtime.remote_servers[1].estimation.billing_mode, "outbound")
+
+    def test_legacy_config_migrates_once_with_a_backup(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "config.toml"
             path.write_text(
-                "[monitor]\n"
-                "warning_window_minutes = 5\n"
-                "warning_mib = 250\n"
-                "critical_window_minutes = 10\n"
-                "critical_mib = 1024\n"
-                "unexpected = true\n"
-                "\n"
-                "[remote]\n"
-                "enabled = false\n"
-                "ssh_host = \"\"\n"
-                "xray_stats_enabled = false\n"
-                "billing_cycle_start_day = 1\n"
-                "billing_mode = \"both\"\n",
+                "[monitor]\nwarning_window_minutes = 5\nwarning_mib = 250\ncritical_window_minutes = 10\ncritical_mib = 1024\n\n[remote]\nservers = []\n",
                 encoding="utf-8",
             )
+            settings = read_user_settings(path)
+            self.assertEqual(settings.remote_servers, ())
+            self.assertTrue((Path(temporary) / "config.pre-20260808.1.toml").exists())
+            self.assertIn('schema_version = "20260808.1"', path.read_text(encoding="utf-8"))
+
+    def test_unknown_configuration_fields_are_rejected(self) -> None:
+        data = payload()
+        data["app"]["unexpected"] = True
+        with tempfile.TemporaryDirectory() as temporary:
             with self.assertRaisesRegex(ValueError, "不支持的字段"):
-                read_user_settings(path)
+                write_user_settings(Path(temporary) / "config.toml", data)
 
     def test_cli_bridge_writes_and_exports_the_same_json_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "config.toml"
             helper = PROJECT_ROOT / "bin/configuration.py"
-            written = subprocess.run(
-                [sys.executable, str(helper), "write", str(path)],
-                input=json.dumps(payload()),
-                text=True,
-                capture_output=True,
-                check=False,
-            )
+            written = subprocess.run([sys.executable, str(helper), "write", str(path)], input=json.dumps(payload()), text=True, capture_output=True, check=False)
             self.assertEqual(written.returncode, 0, written.stderr)
-            exported = subprocess.run(
-                [sys.executable, str(helper), "export", str(path)],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
+            exported = subprocess.run([sys.executable, str(helper), "export", str(path)], text=True, capture_output=True, check=False)
             self.assertEqual(exported.returncode, 0, exported.stderr)
             self.assertEqual(json.loads(exported.stdout), payload())
 

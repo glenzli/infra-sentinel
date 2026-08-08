@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mihomo domain attribution, alerts, and dashboard state for Traffic Sentinel."""
+"""Network runtime and Infra Sentinel overview projection producer."""
 
 from __future__ import annotations
 
@@ -20,6 +20,8 @@ from typing import Any
 import uuid
 
 from configuration import Config, StateConfig, read_config
+from infra_projection import build_infra_projection
+from metric_store import MetricStore
 from mihomo_traffic import (
     MIHOMO_SAMPLE_SCHEMA,
     MihomoApiClient,
@@ -30,15 +32,16 @@ from mihomo_traffic import (
     load_tracker,
     save_tracker,
 )
+from network_metrics import network_metrics
 from sample_timing import annotate_sample_timing, sample_is_realtime
+from remote import RemoteFleetMonitor
 from session import SessionMeter, consume_reset_request
-from vps import VpsMonitor
-from xray_stats import XrayStatsMonitor
 
 
 PARENT_PROCESS_ENV = "TRAFFIC_SENTINEL_PARENT_PID"
 APP_NOTIFICATIONS_ENV = "TRAFFIC_SENTINEL_APP_NOTIFICATIONS"
 SAMPLE_SCHEMA = 5
+MENUBAR_STATE_SCHEMA = "20260808.3"
 
 
 def iso_now(epoch: float | None = None) -> str:
@@ -272,12 +275,23 @@ def write_menubar_state(
     warning: dict[str, int],
     critical: dict[str, int],
     level: str,
-    vps: dict[str, Any],
-    xray_stats: dict[str, Any],
+    remote: dict[str, Any],
     session: dict[str, Any],
+    storage: dict[str, Any] | None = None,
 ) -> None:
+    remote_servers = remote.get("servers", [])
+    xray_servers = [server.get("xray_stats", {}) for server in remote_servers]
+    active_xray = [server for server in xray_servers if server.get("enabled")]
+    if not active_xray:
+        xray_status = "disabled"
+    elif any(server.get("status") == "error" for server in active_xray):
+        xray_status = "error"
+    elif any(server.get("status") in {"waiting", "baseline"} for server in active_xray):
+        xray_status = "waiting"
+    else:
+        xray_status = "ok"
     state = {
-        "schema": 5,
+        "schema": MENUBAR_STATE_SCHEMA,
         "updated_at": sample["timestamp"],
         "epoch": sample["epoch"],
         "observed_seconds": sample["observed_seconds"],
@@ -292,9 +306,33 @@ def write_menubar_state(
             "attribution": sample.get("attribution", {}),
             "active_connections": sample.get("active_connections", 0),
         },
-        "vps": vps,
-        "xray_stats": xray_stats,
+        "vps": {
+            "enabled": remote.get("enabled", False),
+            "status": remote.get("status", "disabled"),
+            "updated_at": remote.get("updated_at"),
+            "cycle": remote.get("cycle", {}),
+            "servers": remote.get("servers", []),
+        },
+        "xray_stats": {
+            "enabled": bool(active_xray),
+            "status": xray_status,
+            "servers": xray_servers,
+            "users": [
+                {
+                    **user,
+                    "id": f"{server.get('id', 'remote')}:{user.get('id', user.get('label', 'unknown'))}",
+                    "label": f"{server.get('label', server.get('id', 'VPS'))} / {user.get('label', 'unknown')}",
+                }
+                for server in remote_servers
+                for user in server.get("xray_stats", {}).get("users", [])
+            ],
+            "total_bytes": sum(int(server.get("total_bytes", 0)) for server in xray_servers),
+        },
         "session": session,
+        "storage": storage or {"schema": "20260808.2", "kind": "sqlite", "status": "waiting"},
+        # This is a derived, generic resource projection.  The legacy-shaped
+        # network fields above remain facts for the detailed network panel.
+        "infra": build_infra_projection(sample, session, remote, level),
         "last_event": latest_delta_event(config.state_dir / "events.jsonl"),
     }
     temporary = config.state_dir / ".menubar.json.tmp"
@@ -332,9 +370,9 @@ def handle_sample(
     client: MihomoApiClient,
     tracker: MihomoTrafficTracker,
     alerts: AlertEngine,
-    vps_monitor: VpsMonitor,
-    xray_monitor: XrayStatsMonitor,
+    remote_monitor: RemoteFleetMonitor,
     session_meter: SessionMeter,
+    metric_store: MetricStore,
     logger: logging.Logger,
 ) -> dict[str, Any]:
     sample = collect_interval(client, tracker, config.monitor.sample_seconds)
@@ -376,34 +414,31 @@ def handle_sample(
     reset_request = consume_reset_request(config.state_dir)
     if reset_request is not None:
         session_meter.reset(float(sample["epoch"]), "manual")
-        vps_state = vps_monitor.maybe_poll(sample["epoch"], force=True)
-        xray_state = xray_monitor.reset_session(float(sample["epoch"]))
-        session_meter.set_vps_baseline(vps_state)
+        remote_state = remote_monitor.reset_session(float(sample["epoch"]))
+        session_meter.set_vps_baseline(remote_state)
         logger.info("dashboard session reset id=%s", reset_request["id"])
     elif session_meter.started_epoch is None:
-        vps_state = vps_monitor.maybe_poll(sample["epoch"])
+        remote_state = remote_monitor.maybe_poll(sample["epoch"])
         session_meter.reset(float(sample["epoch"]), "automatic")
-        session_meter.set_vps_baseline(vps_state)
-        xray_state = xray_monitor.reset_session(float(sample["epoch"]))
+        session_meter.set_vps_baseline(remote_state)
     else:
-        vps_state = vps_monitor.maybe_poll(sample["epoch"])
-        xray_state = xray_monitor.maybe_poll(sample["epoch"])
-        session_meter.record(sample, vps_state)
+        remote_state = remote_monitor.maybe_poll(sample["epoch"])
+        session_meter.record(sample, remote_state)
 
+    session_snapshot = session_meter.snapshot(
+        remote_state,
+        now=float(sample["epoch"]),
+    )
+    metric_store.write(network_metrics(sample, remote_state))
     write_menubar_state(
         config,
         sample,
         warning,
         critical,
         alerts.level,
-        vps_state,
-        xray_state,
-        session_meter.snapshot(
-            config.vps.enabled,
-            config.estimation,
-            xray_state,
-            now=float(sample["epoch"]),
-        ),
+        remote_state,
+        session_snapshot,
+        metric_store.summary(),
     )
     write_health_state(config, "ok")
     return sample
@@ -447,21 +482,23 @@ def main() -> int:
         history = load_recent_samples(config, time.time())
         tracker = load_tracker(config.state_dir / "mihomo-baseline.json")
         alerts = AlertEngine()
-        vps_monitor = VpsMonitor(config.vps, config.state_dir, config.state)
-        xray_monitor = XrayStatsMonitor(config.xray_stats, config.state_dir, config.state)
+        remote_monitor = RemoteFleetMonitor(config.remote_servers, config.state_dir, config.state)
         session_meter = SessionMeter(
             config.state_dir,
             expected_interval_seconds=config.monitor.sample_seconds,
         )
-        xray_monitor.align_session(session_meter.started_epoch)
+        remote_monitor.align_session(session_meter.started_epoch)
         lock = acquire_watch_lock(config)
         if lock is None:
             raise RuntimeError("另一个监控实例已经在运行")
+        metric_store = MetricStore(config.state_dir)
+        imported = metric_store.import_legacy_network()
+        if imported:
+            logger.info("imported legacy network metric points=%s", imported)
         logger.info(
-            "monitor started local=%ss vps=%ss xray=%ss",
+            "monitor started local=%ss remote_servers=%s",
             config.monitor.sample_seconds,
-            config.vps.poll_seconds,
-            config.xray_stats.poll_seconds,
+            len(config.remote_servers),
         )
         try:
             while not parent_process_exited():
@@ -472,9 +509,9 @@ def main() -> int:
                         client,
                         tracker,
                         alerts,
-                        vps_monitor,
-                        xray_monitor,
+                        remote_monitor,
                         session_meter,
+                        metric_store,
                         logger,
                     )
                 except Exception as exc:

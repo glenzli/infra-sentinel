@@ -2,7 +2,7 @@
 set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-APP_DIR="$ROOT_DIR/Traffic Sentinel.app"
+APP_DIR="$ROOT_DIR/Infra Sentinel.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 APP_RESOURCES_DIR="$CONTENTS_DIR/Resources"
@@ -45,8 +45,14 @@ cp "$ROOT_DIR/app/Info.plist" "$CONTENTS_DIR/Info.plist"
 cp "$ROOT_DIR/assets/TrafficSentinel.icns" "$APP_RESOURCES_DIR/TrafficSentinel.icns"
 cp "$ROOT_DIR/bin/sentinel.py" "$SENTINEL_RESOURCES_DIR/sentinel.py"
 cp "$ROOT_DIR/bin/configuration.py" "$SENTINEL_RESOURCES_DIR/configuration.py"
+cp "$ROOT_DIR/bin/infra_model.py" "$SENTINEL_RESOURCES_DIR/infra_model.py"
+cp "$ROOT_DIR/bin/infra_registry.py" "$SENTINEL_RESOURCES_DIR/infra_registry.py"
+cp "$ROOT_DIR/bin/infra_projection.py" "$SENTINEL_RESOURCES_DIR/infra_projection.py"
+cp "$ROOT_DIR/bin/network_metrics.py" "$SENTINEL_RESOURCES_DIR/network_metrics.py"
+cp "$ROOT_DIR/bin/metric_store.py" "$SENTINEL_RESOURCES_DIR/metric_store.py"
 cp "$ROOT_DIR/bin/mihomo_traffic.py" "$SENTINEL_RESOURCES_DIR/mihomo_traffic.py"
 cp "$ROOT_DIR/bin/remote_ssh.py" "$SENTINEL_RESOURCES_DIR/remote_ssh.py"
+cp "$ROOT_DIR/bin/remote.py" "$SENTINEL_RESOURCES_DIR/remote.py"
 cp "$ROOT_DIR/bin/sample_timing.py" "$SENTINEL_RESOURCES_DIR/sample_timing.py"
 cp "$ROOT_DIR/bin/session.py" "$SENTINEL_RESOURCES_DIR/session.py"
 cp "$ROOT_DIR/bin/traffic_estimation.py" "$SENTINEL_RESOURCES_DIR/traffic_estimation.py"
@@ -62,6 +68,7 @@ cp "$ROOT_DIR/config.example.toml" "$SENTINEL_RESOURCES_DIR/config.example.toml"
   -framework Cocoa -framework UserNotifications \
   "$ROOT_DIR/app/MenuBarApp.m" \
   "$ROOT_DIR/app/DashboardController.m" \
+  "$ROOT_DIR/app/InfraOverviewPanel.m" \
   "$ROOT_DIR/app/SettingsController.m" \
   "$ROOT_DIR/app/SettingsStore.m" \
   "$ROOT_DIR/app/TrafficOverviewPanel.m" \

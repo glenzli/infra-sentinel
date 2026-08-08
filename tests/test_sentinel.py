@@ -17,11 +17,13 @@ from configuration import (  # noqa: E402
     StateConfig,
     read_config,
 )
+from remote import RemoteServerConfig  # noqa: E402
 from sentinel import (  # noqa: E402
     AlertEngine,
     SAMPLE_SCHEMA,
     latest_delta_event,
     totals_for_window,
+    write_menubar_state,
 )
 from sample_timing import (  # noqa: E402
     CATCH_UP_INTERVAL,
@@ -41,12 +43,12 @@ from xray_stats import XrayStatsConfig  # noqa: E402
 
 
 def make_config(state_dir: Path) -> Config:
+    vps = VpsConfig(False, "", "auto", 300, 1)
+    xray = XrayStatsConfig(False, "", "127.0.0.1:10085", "/usr/local/bin/xray", 300)
     return Config(
         monitor=MonitorConfig(5, 300, 100, 600, 1_000),
         state=StateConfig(1024 * 1024, 2),
-        vps=VpsConfig(False, "", "auto", 300, 1),
-        xray_stats=XrayStatsConfig(False, "", "127.0.0.1:10085", "/usr/local/bin/xray", 300),
-        estimation=TrafficEstimationConfig("both"),
+        remote_servers=(RemoteServerConfig("default", "VPS", vps, xray, TrafficEstimationConfig("both")),),
         state_dir=state_dir,
     )
 
@@ -113,10 +115,24 @@ class RuntimeConfigTests(unittest.TestCase):
     def test_example_config_maps_fixed_product_behavior(self) -> None:
         config = read_config(PROJECT_ROOT / "config.example.toml")
         self.assertEqual(config.monitor.sample_seconds, 5)
-        self.assertEqual(config.estimation.vps_billing_legs, 2.0)
-        self.assertEqual(config.vps.interface, "auto")
-        self.assertEqual(config.vps.poll_seconds, 300)
-        self.assertEqual(config.xray_stats.api_server, "127.0.0.1:10085")
+        self.assertEqual(len(config.remote_servers), 0)
+
+    def test_menubar_state_contains_generic_infra_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary)
+            config = make_config(state_dir)
+            write_menubar_state(
+                config,
+                sample(100, 40, 60),
+                {"up_bytes": 40, "down_bytes": 60},
+                {"up_bytes": 40, "down_bytes": 60},
+                "none",
+                {"enabled": False, "status": "disabled", "servers": []},
+                {"kernel": {"total_bytes": 100}, "vps": {"total_bytes": 0}},
+            )
+            payload = json.loads((state_dir / "menubar.json").read_text(encoding="utf-8"))
+            self.assertEqual(payload["schema"], "20260808.3")
+            self.assertEqual(payload["infra"]["resources"][0]["id"], "network")
 
 class AlertEngineTests(unittest.TestCase):
     def test_alerts_use_exact_mihomo_total_windows(self) -> None:
@@ -318,6 +334,65 @@ class TrafficEstimationTests(unittest.TestCase):
 
 
 class SessionMeterTests(unittest.TestCase):
+    def test_session_aggregates_independent_remote_servers_without_crossing_baselines(self) -> None:
+        def remote(epoch: float, first_in: int, first_out: int, second_in: int, second_out: int) -> dict[str, object]:
+            return {
+                "status": "ok",
+                "servers": [
+                    {"id": "one", "label": "One", "billing_mode": "both", "vps": {"enabled": True, "last_sample": {
+                        "schema": VPS_SAMPLE_SCHEMA, "epoch": epoch, "interval_started_epoch": epoch - 5,
+                        "in_bytes": first_in, "out_bytes": first_out}},
+                     "xray_stats": {"enabled": True, "ready": True, "intervals": 1, "total_bytes": 80}},
+                    {"id": "two", "label": "Two", "billing_mode": "both", "vps": {"enabled": True, "last_sample": {
+                        "schema": VPS_SAMPLE_SCHEMA, "epoch": epoch, "interval_started_epoch": epoch - 5,
+                        "in_bytes": second_in, "out_bytes": second_out}},
+                     "xray_stats": {"enabled": True, "ready": True, "intervals": 1, "total_bytes": 40}},
+                ],
+            }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            meter = SessionMeter(Path(temporary))
+            meter.reset(100, "manual")
+            meter.set_vps_baseline(remote(100, 0, 0, 0, 0))
+            meter.record(sample(105, 10, 20), remote(105, 90, 110, 40, 60))
+            snapshot = meter.snapshot(remote(105, 90, 110, 40, 60), now=160)
+            self.assertEqual(snapshot["vps"]["total_bytes"], 300)
+            self.assertEqual(snapshot["vps"]["in_bytes"], 130)
+            self.assertEqual(snapshot["vps"]["out_bytes"], 170)
+            self.assertEqual([row["id"] for row in snapshot["remote_servers"]], ["one", "two"])
+            self.assertEqual(snapshot["breakdown"]["xray_logical_bytes"], 120)
+            self.assertEqual(snapshot["breakdown"]["observed_multiplier"], 2.5)
+
+    def test_fleet_multiplier_excludes_vps_without_an_aligned_xray_pair(self) -> None:
+        def remote(epoch: float, first_in: int, first_out: int, second_in: int, second_out: int) -> dict[str, object]:
+            return {
+                "status": "ok",
+                "servers": [
+                    {"id": "proxy", "label": "Proxy", "billing_mode": "both", "vps": {"enabled": True, "last_sample": {
+                        "schema": VPS_SAMPLE_SCHEMA, "epoch": epoch, "interval_started_epoch": epoch - 5,
+                        "in_bytes": first_in, "out_bytes": first_out}},
+                     "xray_stats": {"enabled": True, "ready": True, "intervals": 1, "total_bytes": 80}},
+                    {"id": "other", "label": "Other", "billing_mode": "both", "vps": {"enabled": True, "last_sample": {
+                        "schema": VPS_SAMPLE_SCHEMA, "epoch": epoch, "interval_started_epoch": epoch - 5,
+                        "in_bytes": second_in, "out_bytes": second_out}},
+                     "xray_stats": {"enabled": False, "ready": False, "intervals": 0, "total_bytes": 0}},
+                ],
+            }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            meter = SessionMeter(Path(temporary))
+            meter.reset(100, "manual")
+            meter.set_vps_baseline(remote(100, 0, 0, 0, 0))
+            meter.record(sample(105, 10, 20), remote(105, 90, 110, 50, 50))
+            snapshot = meter.snapshot(remote(105, 90, 110, 50, 50), now=160)
+
+            self.assertEqual(snapshot["vps"]["total_bytes"], 300)
+            self.assertEqual(snapshot["breakdown"]["xray_logical_bytes"], 80)
+            self.assertEqual(snapshot["breakdown"]["observed_multiplier"], 2.5)
+            self.assertEqual(snapshot["breakdown"]["comparable_server_ids"], ["proxy"])
+            self.assertEqual(snapshot["breakdown"]["excluded_server_count"], 1)
+            self.assertFalse(snapshot["remote_servers"][1]["breakdown"]["empirical_ready"])
+
     def test_session_accumulates_exact_total_dynamic_services_and_remote_bill(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             state_dir = Path(temporary)

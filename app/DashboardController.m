@@ -1,4 +1,5 @@
 #import "DashboardController.h"
+#import "InfraOverviewPanel.h"
 #import "MonitorHealth.h"
 #import "TrafficOverviewPanel.h"
 
@@ -71,7 +72,7 @@ static void DrawDashboardText(NSString *text, NSRect rect, NSFont *font, NSColor
     CGFloat width = self.bounds.size.width;
     CGFloat height = self.bounds.size.height;
 
-    DrawDashboardText(@"Traffic Sentinel", NSMakeRect(28, height - 50, 360, 30),
+    DrawDashboardText(@"Infra Sentinel", NSMakeRect(28, height - 50, 360, 30),
                       [NSFont systemFontOfSize:24 weight:NSFontWeightBold], [NSColor labelColor],
                       NSLineBreakByTruncatingTail);
     NSString *started = DashboardString(session[@"started_at"], TSLocalized(self.language, @"dashboard.waiting_sample"));
@@ -84,9 +85,14 @@ static void DrawDashboardText(NSString *text, NSRect rect, NSFont *font, NSColor
                       [NSFont systemFontOfSize:12], [NSColor secondaryLabelColor],
                       NSLineBreakByTruncatingTail);
 
-    TSDrawTrafficSummaryPanel(NSMakeRect(28, 400, width - 56, 330), session,
+    TSDrawInfraOverviewPanel(NSMakeRect(28, 748, width - 56, 112),
+                             DashboardDictionary(state[@"infra"]), health, self.language);
+    DrawDashboardText(TSLocalized(self.language, @"resource.network.detail"), NSMakeRect(30, 724, width - 60, 18),
+                      [NSFont systemFontOfSize:13 weight:NSFontWeightMedium], [NSColor secondaryLabelColor],
+                      NSLineBreakByTruncatingTail);
+    TSDrawTrafficSummaryPanel(NSMakeRect(28, 390, width - 56, 320), session,
                               DashboardDictionary(state[@"xray_stats"]), self.language);
-    TSDrawTrafficTrendPanel(NSMakeRect(28, 58, width - 56, 326), session, self.language);
+    TSDrawTrafficTrendPanel(NSMakeRect(28, 58, width - 56, 316), session, self.language);
 
     BOOL hasHealthError = TSMonitorHealthHasError(health);
     NSString *footer = nil;
@@ -134,13 +140,13 @@ static void DrawDashboardText(NSString *text, NSRect rect, NSFont *font, NSColor
     if (self.window != nil) {
         return;
     }
-    NSRect frame = NSMakeRect(0, 0, 860, 820);
+    NSRect frame = NSMakeRect(0, 0, 860, 940);
     self.window = [[NSWindow alloc] initWithContentRect:frame
                                               styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable)
                                                 backing:NSBackingStoreBuffered
                                                   defer:NO];
     self.window.title = TSLocalized(self.language, @"window.title");
-    self.window.minSize = NSMakeSize(760, 820);
+    self.window.minSize = NSMakeSize(760, 940);
     self.window.releasedWhenClosed = NO;
     self.dashboardView = [[TrafficDashboardView alloc] initWithFrame:frame];
     self.dashboardView.language = self.language;

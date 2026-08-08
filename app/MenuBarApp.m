@@ -12,6 +12,47 @@ static NSDictionary *DictionaryValue(id value) {
     return [value isKindOfClass:[NSDictionary class]] ? value : @{};
 }
 
+static NSImage *TSStatusImage(NSString *status) {
+    NSImage *image = [[NSImage alloc] initWithSize:NSMakeSize(22, 18)];
+    [image lockFocus];
+    // A template image inherits the normal macOS menu-bar color. The paired
+    // arcs are the product mark; only the center changes with monitor state.
+    NSColor *foreground = [NSColor blackColor];
+    [foreground setStroke];
+    NSBezierPath *leftArc = [NSBezierPath bezierPath];
+    [leftArc appendBezierPathWithArcWithCenter:NSMakePoint(10.0, 9.0)
+                                         radius:7.3 startAngle:100.0 endAngle:260.0 clockwise:NO];
+    leftArc.lineWidth = 1.5;
+    [leftArc stroke];
+    NSBezierPath *rightArc = [NSBezierPath bezierPath];
+    [rightArc appendBezierPathWithArcWithCenter:NSMakePoint(10.0, 9.0)
+                                          radius:7.3 startAngle:280.0 endAngle:80.0 clockwise:NO];
+    rightArc.lineWidth = 1.5;
+    [rightArc stroke];
+    [foreground setFill];
+    if ([status isEqualToString:@"warning"]) {
+        NSBezierPath *mark = [NSBezierPath bezierPath];
+        [mark moveToPoint:NSMakePoint(10.0, 12.2)];
+        [mark lineToPoint:NSMakePoint(10.0, 8.6)];
+        mark.lineWidth = 1.7;
+        [mark stroke];
+        [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(9.15, 5.6, 1.7, 1.7)] fill];
+    } else if ([status isEqualToString:@"critical"] || [status isEqualToString:@"degraded"]) {
+        NSBezierPath *cross = [NSBezierPath bezierPath];
+        [cross moveToPoint:NSMakePoint(7.4, 6.4)];
+        [cross lineToPoint:NSMakePoint(12.6, 11.6)];
+        [cross moveToPoint:NSMakePoint(12.6, 6.4)];
+        [cross lineToPoint:NSMakePoint(7.4, 11.6)];
+        cross.lineWidth = 1.8;
+        [cross stroke];
+    } else if (![status isEqualToString:@"starting"]) {
+        [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(7.7, 6.7, 4.6, 4.6)] fill];
+    }
+    [image unlockFocus];
+    image.template = YES;
+    return image;
+}
+
 @interface AppDelegate : NSObject <NSApplicationDelegate, UNUserNotificationCenterDelegate>
 @property(nonatomic, copy) NSString *supportPath;
 @property(nonatomic, copy) NSString *statePath;
@@ -36,12 +77,18 @@ static NSDictionary *DictionaryValue(id value) {
 @implementation AppDelegate
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
-    NSString *storedLanguage = [[NSUserDefaults standardUserDefaults] stringForKey:@"TrafficSentinelLanguage"];
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSString *storedLanguage = [defaults stringForKey:@"InfraSentinelLanguage"];
+    if (storedLanguage.length == 0) {
+        storedLanguage = [defaults stringForKey:@"TrafficSentinelLanguage"];
+        if (storedLanguage.length > 0) [defaults setObject:storedLanguage forKey:@"InfraSentinelLanguage"];
+    }
     self.language = TSLanguageFromIdentifier(storedLanguage);
     [self configurePaths];
-    self.menu = [[NSMenu alloc] initWithTitle:@"Traffic Sentinel"];
-    self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
+    self.menu = [[NSMenu alloc] initWithTitle:@"Infra Sentinel"];
+    self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:30.0];
     self.statusItem.menu = self.menu;
+    self.statusItem.button.imagePosition = NSImageOnly;
     BOOL prepared = [self prepareSupportDirectory];
     self.monitorStatus = prepared ? TSLocalized(self.language, @"monitor.starting") : TSLocalized(self.language, @"monitor.init_failed");
     self.dashboardController = [[DashboardController alloc] initWithStateDirectory:[self.supportPath stringByAppendingPathComponent:@"state"]];
@@ -76,6 +123,13 @@ static NSDictionary *DictionaryValue(id value) {
     [[NSRunLoop mainRunLoop] addTimer:self.refreshTimer forMode:NSRunLoopCommonModes];
 }
 
+- (void)setStatusIcon:(NSString *)status tooltip:(NSString *)tooltip {
+    self.statusItem.button.title = @"";
+    self.statusItem.button.image = TSStatusImage(status);
+    self.statusItem.button.toolTip = tooltip;
+    self.statusItem.button.accessibilityLabel = tooltip;
+}
+
 - (void)applicationWillTerminate:(NSNotification *)notification {
     self.isQuitting = YES;
     [self.refreshTimer invalidate];
@@ -94,7 +148,7 @@ static NSDictionary *DictionaryValue(id value) {
 - (void)configurePaths {
     NSURL *applicationSupport = [[NSFileManager defaultManager] URLsForDirectory:NSApplicationSupportDirectory
                                                                          inDomains:NSUserDomainMask].firstObject;
-    self.supportPath = [[applicationSupport URLByAppendingPathComponent:@"Traffic Sentinel" isDirectory:YES] path];
+    self.supportPath = [[applicationSupport URLByAppendingPathComponent:@"Infra Sentinel" isDirectory:YES] path];
     self.statePath = [self.supportPath stringByAppendingPathComponent:@"state/menubar.json"];
     self.configPath = [self.supportPath stringByAppendingPathComponent:@"config.toml"];
     self.notificationStatePath = [self.supportPath stringByAppendingPathComponent:@"notification-state.json"];
@@ -105,6 +159,11 @@ static NSDictionary *DictionaryValue(id value) {
 - (BOOL)prepareSupportDirectory {
     NSFileManager *files = [NSFileManager defaultManager];
     NSError *error = nil;
+    NSURL *applicationSupport = [files URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask].firstObject;
+    NSString *legacyPath = [[applicationSupport URLByAppendingPathComponent:@"Traffic Sentinel" isDirectory:YES] path];
+    if (![files fileExistsAtPath:self.supportPath] && [files fileExistsAtPath:legacyPath]) {
+        if (![files moveItemAtPath:legacyPath toPath:self.supportPath error:&error]) return NO;
+    }
     if (![files createDirectoryAtPath:[self.supportPath stringByAppendingPathComponent:@"state"]
           withIntermediateDirectories:YES attributes:nil error:&error]) {
         return NO;
@@ -317,7 +376,7 @@ static NSDictionary *DictionaryValue(id value) {
     [self.dashboardController updateWithState:TSStateByAttachingMonitorHealth(state, health)];
     if (TSMonitorHealthHasError(health)) {
         NSString *healthError = TSMonitorHealthMessage(health) ?: TSLocalized(self.language, @"error.unknown");
-        self.statusItem.button.title = [@"⚠︎ " stringByAppendingString:TSLocalized(self.language, @"status.sampling_failed")];
+        [self setStatusIcon:@"degraded" tooltip:TSLocalized(self.language, @"infra.status.degraded")];
         [self addActionItem:TSLocalized(self.language, @"menu.open") action:@selector(showDashboard:)];
         [self addDisabledItem:healthError];
         if ([state[@"updated_at"] isKindOfClass:[NSString class]]) {
@@ -328,40 +387,31 @@ static NSDictionary *DictionaryValue(id value) {
         return;
     }
     if (state == nil) {
-        self.statusItem.button.title = [self.sentinelTask isRunning]
-            ? [@"⌁ " stringByAppendingString:TSLocalized(self.language, @"status.starting")]
-            : [@"⚠︎ " stringByAppendingString:TSLocalized(self.language, @"status.abnormal")];
+        [self setStatusIcon:[self.sentinelTask isRunning] ? @"starting" : @"degraded"
+                     tooltip:[self.sentinelTask isRunning] ? TSLocalized(self.language, @"status.starting") : TSLocalized(self.language, @"status.abnormal")];
         [self addActionItem:TSLocalized(self.language, @"menu.open") action:@selector(showDashboard:)];
         [self addDisabledItem:TSLocalized(self.language, @"status.first_sample")];
         [self addFooterItems];
         return;
     }
-    NSDictionary *vps = DictionaryValue(state[@"vps"]);
-    NSDictionary *busiest = DictionaryValue(state[@"busiest_service"]);
+    NSDictionary *infra = DictionaryValue(state[@"infra"]);
+    NSDictionary *overall = DictionaryValue(infra[@"overall"]);
     NSDictionary *session = DictionaryValue(state[@"session"]);
-    NSDictionary *sessionVps = DictionaryValue(session[@"vps"]);
-    NSDictionary *sessionKernel = DictionaryValue(session[@"kernel"]);
-    NSDictionary *breakdown = DictionaryValue(session[@"breakdown"]);
     NSString *level = [state[@"level"] isKindOfClass:[NSString class]] ? state[@"level"] : @"none";
-    NSString *marker = [level isEqualToString:@"critical"] ? @"⛔" : ([level isEqualToString:@"warning"] ? @"⚠︎" : @"⌁");
-    NSString *total = [vps[@"enabled"] boolValue]
-        ? TSFormatBytes([sessionVps[@"total_bytes"] longLongValue])
-        : TSFormatBytes([sessionKernel[@"total_bytes"] longLongValue]);
-    NSString *busiestLabel = busiest.count > 0 ? TSLocalizedGroupLabel(self.language, busiest) : TSLocalized(self.language, @"status.local");
-    double observedSeconds = [state[@"observed_seconds"] doubleValue];
-    self.statusItem.button.title = [NSString stringWithFormat:@"%@ T%@ · %@ %@", marker, total, busiestLabel, TSFormatRate([busiest[@"up_bytes"] longLongValue] + [busiest[@"down_bytes"] longLongValue], observedSeconds)];
+    NSString *overallStatus = [overall[@"status"] isKindOfClass:[NSString class]] ? overall[@"status"] : @"healthy";
+    NSString *iconStatus = [level isEqualToString:@"critical"] ? @"critical" : ([level isEqualToString:@"warning"] ? @"warning" : overallStatus);
+    [self setStatusIcon:iconStatus tooltip:TSLocalized(self.language, [iconStatus isEqualToString:@"healthy"] ? @"infra.status.healthy" : ([iconStatus isEqualToString:@"critical"] ? @"infra.status.critical" : ([iconStatus isEqualToString:@"warning"] ? @"infra.status.warning" : @"infra.status.degraded")))];
 
     [self addActionItem:TSLocalized(self.language, @"menu.open") action:@selector(showDashboard:)];
     [self addActionItem:TSLocalized(self.language, @"button.reset") action:@selector(resetSession:)];
     NSString *started = [session[@"started_at"] isKindOfClass:[NSString class]] ? session[@"started_at"] : TSLocalized(self.language, @"session.waiting");
     [self addDisabledItem:[NSString stringWithFormat:TSLocalized(self.language, @"session.menu_format"), started]];
-    if ([breakdown[@"empirical_ready"] boolValue]) {
-        [self addDisabledItem:[NSString stringWithFormat:TSLocalized(self.language, @"estimate.menu_format"),
-                               [breakdown[@"observed_multiplier"] doubleValue],
-                               [breakdown[@"billable_overhead_share"] doubleValue] * 100.0]];
-    } else {
-        [self addDisabledItem:TSLocalized(self.language, @"estimate.menu_waiting_format")];
-    }
+    NSString *statusKey = [overallStatus isEqualToString:@"healthy"]
+        ? @"infra.status.healthy"
+        : ([overallStatus isEqualToString:@"critical"]
+            ? @"infra.status.critical"
+            : ([overallStatus isEqualToString:@"warning"] ? @"infra.status.warning" : @"infra.status.degraded"));
+    [self addDisabledItem:TSLocalized(self.language, statusKey)];
     NSDictionary *event = DictionaryValue(state[@"last_event"]);
     [self deliverNotificationForEventIfNeeded:event];
     if (event.count > 0) {
@@ -396,7 +446,7 @@ static NSDictionary *DictionaryValue(id value) {
 
 - (void)changeLanguage:(NSMenuItem *)sender {
     self.language = sender.tag == TSLanguageEnglish ? TSLanguageEnglish : TSLanguageChinese;
-    [[NSUserDefaults standardUserDefaults] setObject:TSLanguageIdentifier(self.language) forKey:@"TrafficSentinelLanguage"];
+    [[NSUserDefaults standardUserDefaults] setObject:TSLanguageIdentifier(self.language) forKey:@"InfraSentinelLanguage"];
     [self.dashboardController setLanguage:self.language];
     [self.settingsController setLanguage:self.language];
     [self refresh:nil];

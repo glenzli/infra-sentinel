@@ -1,18 +1,20 @@
-# Traffic Sentinel
+# Infra Sentinel
 
-Traffic Sentinel 是一个只读的 macOS 菜单栏流量分析工具，服务于一条明确的代理技术栈：
+Infra Sentinel 是一个本地优先的个人 AI Infra 资源归因面板。当前正式启用的第一个资源模块是只读网络监控，服务于一条明确的代理技术栈：
 
 - 本地使用 Mihomo / Clash Meta 兼容内核；
-- 可选通过 SSH 对账 Linux VPS 网卡流量；
+- 可选通过 SSH 对账一台或多台独立 Linux VPS 网卡流量；
 - 可选读取 Xray StatsService 的用户逻辑流量。
 
 它按域名和实际代理链归因本机流量，并把 Xray 逻辑流量与 VPS 账单流量放到同一个统计周期中比较。
 
 它不会抓包、读取请求内容或提示词、记录 URL 路径、终止进程、删除业务文件或断网。
 
-![Traffic Sentinel English dashboard](assets/dashboard-en.png)
+![Infra Sentinel network dashboard](assets/dashboard-en.png)
 
 > 图中的设备标签来自使用者自己的 Xray 配置，不是程序内置名称。
+
+网络以外的能力尚未接入；API 额度、磁盘和本地计算不会被伪装成可用功能。架构迁移计划见 [ROADMAP.md](ROADMAP.md)。
 
 ## 支持范围
 
@@ -54,6 +56,12 @@ App 自动发现本地 Mihomo Socket，并读取 `/connections`：
 
 每个 5 秒展示周期内，本地 Socket 默认每 250ms 读取一次，以提高多 Agent 短连接的归因覆盖。这些读取只发生在本机，不产生外网流量。单次响应上限为 64 MiB。
 
+## 本地数据存储
+
+从 `20260808.2` 起，App 在状态目录创建 `infra.sqlite3`，使用 SQLite WAL 保存标准化的网络区间指标。写入通过稳定来源、时间、指标和维度生成去重键，因此重启或回填不会重复计数。
+
+首次运行会从既有网络 JSONL 一次性回填；原始 JSONL 目前仍保留给会话恢复、证据快照和旧报告，下一次存储迁移会在查询路径完全切换后再停止该依赖。数据库只保存累计字节、方向、代理路径、来源身份和必要的 Xray 客户端标签，不保存域名原文、URL、请求内容或提示词。
+
 内置的宽泛服务标签包括：
 
 - OpenAI / ChatGPT 相关主域 → `ChatGPT`
@@ -71,11 +79,9 @@ Google 流量不会被推断为某个具体客户端。未知域名也会直接�
 
 - 警告窗口与单方向流量阈值；
 - 严重窗口与上下行合计阈值；
-- 是否启用 Linux VPS 远端对账；
-- `~/.ssh/config` 中的主机别名；
-- 是否读取 Xray 用户逻辑流量；
-- VPS 计费周期开始日；
-- VPS 收发均计费（2.0×）或仅出站计费（1.0×）。
+- 每台远端 VPS 的启用状态、显示名称、`~/.ssh/config` 主机别名；
+- 每台 VPS 是否读取 Xray 用户逻辑流量；
+- 每台 VPS 的计费周期开始日，以及收发均计费（2.0×）或仅出站计费（1.0×）。
 
 以下行为固定，不进入配置：
 
@@ -90,40 +96,63 @@ Google 流量不会被推断为某个具体客户端。未知域名也会直接�
 配置文件由设置界面管理：
 
 ```text
-~/Library/Application Support/Traffic Sentinel/config.toml
+~/Library/Application Support/Infra Sentinel/config.toml
 ```
 
-当前 schema：
+当前配置契约为 `20260808.1`。版本采用 `YYYYMMDD.修订号`：同一天内迭代修订号，跨日发布使用新的日期。
 
 ```toml
-[monitor]
+schema_version = "20260808.1"
+
+[app]
+menu_bar_mode = "health"
+
+[[policies]]
+id = "network-traffic-alerts"
+kind = "traffic.threshold"
+resource_id = "network"
 warning_window_minutes = 5
 warning_mib = 250
 critical_window_minutes = 10
 critical_mib = 1024
 
-[remote]
-enabled = false
-ssh_host = ""
-xray_stats_enabled = false
+[[sources]]
+id = "local-mihomo"
+kind = "network.mihomo"
+enabled = true
+
+[[sources]]
+id = "primary"
+kind = "network.linux-xray"
+label = "Primary VPS"
+enabled = true
+ssh_host = "my-vps"
+xray_stats_enabled = true
 billing_cycle_start_day = 1
 billing_mode = "both"
 ```
 
-配置只接受当前 schema，不做历史格式迁移。版本控制保留历史，运行时代码不背负旧配置分支。
+`local-mihomo` 是固定启用的本机数据源；远端 `network.linux-xray` 数据源可以有零个或多个。每个远端 `id` 对应一套独立的 VPS 网卡计数、Xray 计数和本地基线。仪表板顶部显示所有启用 VPS 的合计，远端明细区按名称分别列出各路账单量。
+
+第一次读取旧版 `[monitor]` / `[remote]` 配置时，App 会在同目录写入 `config.pre-20260808.1.toml` 备份，然后原子改写为当前结构；迁移完成后不维护旧格式分支。
 
 ## VPS 与 Xray 对账
 
-先在 `~/.ssh/config` 定义主机，再把 `Host` 后的别名填入设置页；默认不预设任何服务器：
+先在 `~/.ssh/config` 定义每台主机，再把 `Host` 后的别名填入对应的设置行；默认不预设任何服务器：
 
 ```sshconfig
 Host my-vps
   HostName vps.example.com
   User root
   IdentityFile ~/.ssh/id_ed25519
+
+Host my-vps-2
+  HostName vps2.example.com
+  User root
+  IdentityFile ~/.ssh/id_ed25519
 ```
 
-App 只保存 `my-vps` 这个别名，不保存密钥、密码或主机地址。
+App 只保存这些别名和显示名称，不保存密钥、密码或主机地址。每台服务器通过短时、只读 SSH 采样访问，不维持长期 SSH 链接。
 
 VPS 读取：
 
@@ -182,15 +211,17 @@ VPS 账单量     = RX + TX
 
 ## 菜单栏、仪表板与告警
 
-菜单栏格式类似：
+菜单栏是健康状态入口，而不是持续滚动的指标面板：
 
 ```text
-⌁ T2.9 GiB · ChatGPT 8.4 MiB/s
+⌁  正常
+⚠︎  需要关注、采样异常或数据源异常
+⛔  严重告警
 ```
 
-- 启用 VPS 时，`T` 使用当前计费方式计算 VPS 账单量；
-- 未启用 VPS 时，`T` 是当前统计周期的 Mihomo 本机总量；
-- 后半部分显示当前区间流量最大的域名服务及速率。
+- 点击菜单栏即可打开完整仪表板；完整数值、网络归因和趋势只在仪表板中展示。
+- 仪表板顶部先展示整体健康状态、正式资源模块和数据源数量；当前唯一正式资源模块为 Network。
+- Network 详情继续显示 VPS 账单、本机 Mihomo 总量、代理路径、域名归因、Xray 用户统计和最近 15 分钟的 `MiB/min` 趋势。
 
 仪表板显示 VPS 账单、本机 Mihomo 总量、代理路径、域名归因、Xray 用户统计和最近 15 分钟的 `MiB/min` 趋势。界面支持中文和 English 即时切换。
 
@@ -228,10 +259,10 @@ App 或采样器中断后的累计差额仍进入本周期总量，但标记为�
 git clone git@gitlab.com:glenzli/net-traffic-sential.git
 cd net-traffic-sential
 ./bin/build-menubar-app.sh
-open "Traffic Sentinel.app"
+open "Infra Sentinel.app"
 ```
 
-构建脚本会生成适配当前 Mac 架构的 `Traffic Sentinel.app`，复制 Python 模块并执行本机 ad-hoc 签名。
+构建脚本会生成适配当前 Mac 架构的 `Infra Sentinel.app`，复制 Python 模块并执行本机 ad-hoc 签名。
 
 维护者生成 Release 附件：
 

@@ -109,6 +109,11 @@ void TSDrawTrafficSummaryPanel(NSRect rect, NSDictionary *session, NSDictionary 
            [breakdown[@"vps_billing_legs"] doubleValue],
            [breakdown[@"billable_overhead_ratio"] doubleValue] * 100.0]
         : TSLocalized(language, @"estimate.empirical_waiting");
+    NSInteger comparableServers = [breakdown[@"comparable_server_count"] integerValue];
+    if (empiricalReady && comparableServers > 0) {
+        billingLine = [billingLine stringByAppendingFormat:TSLocalized(language, @"estimate.comparable_scope_format"),
+                       (long)comparableServers];
+    }
     DrawOverviewText(billingLine, NSMakeRect(rect.origin.x + 2, cardY - 29, rect.size.width - 4, 20),
                      [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold],
                      empiricalReady ? [NSColor systemGreenColor] : [NSColor secondaryLabelColor],
@@ -177,11 +182,13 @@ void TSDrawTrafficSummaryPanel(NSRect rect, NSDictionary *session, NSDictionary 
     divider.lineWidth = 0.5;
     [divider stroke];
 
+    NSMutableDictionary *remoteDisplay = [OverviewDictionary(xrayStats) mutableCopy];
+    remoteDisplay[@"remote_servers"] = OverviewArray(session[@"remote_servers"]);
     TSDrawXrayUserTrafficPanel(
         NSMakeRect(dividerX + inset, breakdownRect.origin.y + 10,
                    breakdownRect.size.width / 2.0 - inset * 2.0,
                    breakdownRect.size.height - 20),
-        xrayStats,
+        remoteDisplay,
         language
     );
 }

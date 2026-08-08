@@ -45,6 +45,8 @@ class XrayStatsConfig:
     poll_seconds: int
     expected_users: tuple[str, ...] = ()
     flagged_users: tuple[str, ...] = ()
+    server_id: str = "default"
+    label: str = "VPS"
 
 
 def iso_now(epoch: float | None = None) -> str:
@@ -326,6 +328,8 @@ class XrayStatsMonitor:
         result = {
             "enabled": self.config.enabled,
             "status": status,
+            "server_id": self.config.server_id,
+            "label": self.config.label,
             "ssh_host": self.config.ssh_host,
             "api_server": self.config.api_server,
             "poll_seconds": self.config.poll_seconds,

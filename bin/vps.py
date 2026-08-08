@@ -59,6 +59,9 @@ class VpsConfig:
     interface: str
     poll_seconds: int
     billing_cycle_start_day: int
+    server_id: str = "default"
+    label: str = "VPS"
+    billing_mode: str = "both"
 
 
 def iso_now(epoch: float | None = None) -> str:
@@ -244,7 +247,15 @@ class VpsMonitor:
     def _initial_public_state(self) -> dict[str, Any]:
         now = time.time()
         if not self.config.enabled:
-            return {"enabled": False, "status": "disabled", "ssh_host": self.config.ssh_host, "cycle": self._cycle(now)}
+            return {
+                "enabled": False,
+                "status": "disabled",
+                "server_id": self.config.server_id,
+                "label": self.config.label,
+                "ssh_host": self.config.ssh_host,
+                "billing_mode": self.config.billing_mode,
+                "cycle": self._cycle(now),
+            }
         latest = None
         for record in iter_vps_samples(self.state_dir):
             if record.get("schema") in SUPPORTED_VPS_SAMPLE_SCHEMAS:
@@ -252,7 +263,10 @@ class VpsMonitor:
         return {
             "enabled": True,
             "status": "waiting" if latest is None else "ok",
+            "server_id": self.config.server_id,
+            "label": self.config.label,
             "ssh_host": self.config.ssh_host,
+            "billing_mode": self.config.billing_mode,
             "updated_at": latest.get("timestamp") if latest else None,
             "interface": latest.get("interface") if latest else None,
             "last_sample": latest,
@@ -281,7 +295,15 @@ class VpsMonitor:
     def maybe_poll(self, now: float | None = None, force: bool = False) -> dict[str, Any]:
         current = now or time.time()
         if not self.config.enabled:
-            self.public_state = {"enabled": False, "status": "disabled", "ssh_host": self.config.ssh_host, "cycle": self._cycle(current)}
+            self.public_state = {
+                "enabled": False,
+                "status": "disabled",
+                "server_id": self.config.server_id,
+                "label": self.config.label,
+                "ssh_host": self.config.ssh_host,
+                "billing_mode": self.config.billing_mode,
+                "cycle": self._cycle(current),
+            }
             return self.public_state
         if force or current >= self.next_poll_at:
             self.next_poll_at = current + self.config.poll_seconds
@@ -294,7 +316,10 @@ class VpsMonitor:
                 self.public_state = {
                     "enabled": True,
                     "status": "baseline" if was_uninitialized else "ok",
+                    "server_id": self.config.server_id,
+                    "label": self.config.label,
                     "ssh_host": self.config.ssh_host,
+                    "billing_mode": self.config.billing_mode,
                     "updated_at": sample["timestamp"],
                     "interface": sample["interface"],
                     "last_sample": sample,

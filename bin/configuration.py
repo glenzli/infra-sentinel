@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Current Traffic Sentinel settings schema, validation, and persistence."""
+"""Infra Sentinel configuration contract, migration, and runtime mapping.
+
+The persisted document is intentionally source/policy based.  A single
+one-time reader migration rewrites the prior Traffic Sentinel document and
+leaves a dated backup; no parallel configuration format is maintained.
+"""
 
 from __future__ import annotations
 
@@ -8,18 +13,21 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import tomllib
 from typing import Any
 
 from remote_ssh import validate_ssh_host
+from remote import RemoteServerConfig
 from traffic_estimation import BILLING_MODES, TrafficEstimationConfig
 from vps import VpsConfig
 from xray_stats import XrayStatsConfig
 
 
 STATE_DIRECTORY_ENV = "TRAFFIC_SENTINEL_STATE_DIR"
-SETTINGS_SCHEMA = 1
+CONFIG_SCHEMA = "20260808.1"
+SETTINGS_SCHEMA = CONFIG_SCHEMA
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG = PROJECT_ROOT / "config.toml"
 SOURCE_EXAMPLE_CONFIG = PROJECT_ROOT / "config.example.toml"
@@ -33,20 +41,32 @@ XRAY_BINARY_PATH = "/usr/local/bin/xray"
 MAX_LOG_BYTES = 10 * 1024 * 1024
 LOG_BACKUPS = 5
 
-TOP_LEVEL_KEYS = {"monitor", "remote"}
+CONTRACT_TOP_LEVEL_KEYS = {"app", "policies", "sources"}
+APP_KEYS = {"menu_bar_mode"}
+POLICY_KEYS = {
+    "id", "kind", "resource_id", "warning_window_minutes", "warning_mib",
+    "critical_window_minutes", "critical_mib",
+}
+LOCAL_SOURCE_KEYS = {"id", "kind", "enabled"}
+REMOTE_SOURCE_KEYS = {
+    "id", "kind", "label", "enabled", "ssh_host", "xray_stats_enabled",
+    "billing_cycle_start_day", "billing_mode",
+}
+LEGACY_TOP_LEVEL_KEYS = {"monitor", "remote"}
 MONITOR_KEYS = {
-    "warning_window_minutes",
-    "warning_mib",
-    "critical_window_minutes",
-    "critical_mib",
+    "warning_window_minutes", "warning_mib", "critical_window_minutes", "critical_mib",
 }
-REMOTE_KEYS = {
-    "enabled",
-    "ssh_host",
-    "xray_stats_enabled",
-    "billing_cycle_start_day",
-    "billing_mode",
+REMOTE_KEYS = {"servers"}
+LEGACY_REMOTE_KEYS = {
+    "enabled", "ssh_host", "xray_stats_enabled", "billing_cycle_start_day", "billing_mode",
 }
+LEGACY_SERVER_KEYS = {
+    "id", "label", "enabled", "ssh_host", "xray_stats_enabled",
+    "billing_cycle_start_day", "billing_mode",
+}
+SERVER_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}\Z")
+
+
 @dataclass(frozen=True)
 class MonitorConfig:
     sample_seconds: int
@@ -66,9 +86,7 @@ class StateConfig:
 class Config:
     monitor: MonitorConfig
     state: StateConfig
-    vps: VpsConfig
-    xray_stats: XrayStatsConfig
-    estimation: TrafficEstimationConfig
+    remote_servers: tuple[RemoteServerConfig, ...]
     state_dir: Path
 
 
@@ -78,32 +96,11 @@ class UserSettings:
     warning_mib: int
     critical_window_minutes: int
     critical_mib: int
-    remote_enabled: bool
-    ssh_host: str
-    xray_stats_enabled: bool
-    billing_cycle_start_day: int
-    billing_mode: str
+    remote_servers: tuple[dict[str, Any], ...]
 
 
 def default_user_settings() -> UserSettings:
-    return UserSettings(
-        warning_window_minutes=5,
-        warning_mib=250,
-        critical_window_minutes=10,
-        critical_mib=1024,
-        remote_enabled=False,
-        ssh_host="",
-        xray_stats_enabled=False,
-        billing_cycle_start_day=1,
-        billing_mode="both",
-    )
-
-
-def _require_table(raw: dict[str, Any], name: str) -> dict[str, Any]:
-    value = raw.get(name)
-    if not isinstance(value, dict):
-        raise ValueError(f"缺少 [{name}] 配置")
-    return value
+    return UserSettings(5, 250, 10, 1024, ())
 
 
 def _require_exact_keys(raw: dict[str, Any], expected: set[str], context: str) -> None:
@@ -113,6 +110,13 @@ def _require_exact_keys(raw: dict[str, Any], expected: set[str], context: str) -
         raise ValueError(f"{context} 包含不支持的字段：{', '.join(sorted(unknown))}")
     if missing:
         raise ValueError(f"{context} 缺少字段：{', '.join(sorted(missing))}")
+
+
+def _require_table(raw: dict[str, Any], name: str) -> dict[str, Any]:
+    value = raw.get(name)
+    if not isinstance(value, dict):
+        raise ValueError(f"缺少 [{name}] 配置")
+    return value
 
 
 def _integer(raw: dict[str, Any], key: str, minimum: int, maximum: int) -> int:
@@ -126,176 +130,236 @@ def _integer(raw: dict[str, Any], key: str, minimum: int, maximum: int) -> int:
 
 def _boolean(raw: dict[str, Any], key: str) -> bool:
     value = raw.get(key)
-    if not isinstance(value, bool):
-        raise ValueError(f"{key} 必须是 true 或 false")
-    return value
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    raise ValueError(f"{key} 必须是 true 或 false")
 
 
-def parse_settings(raw: dict[str, Any]) -> UserSettings:
-    if not isinstance(raw, dict):
-        raise ValueError("配置根节点必须是表")
-    _require_exact_keys(raw, TOP_LEVEL_KEYS, "配置")
-    monitor = _require_table(raw, "monitor")
-    remote = _require_table(raw, "remote")
-    _require_exact_keys(monitor, MONITOR_KEYS, "[monitor]")
-    _require_exact_keys(remote, REMOTE_KEYS, "[remote]")
+def _parse_remote_sources(raw_sources: list[Any]) -> tuple[dict[str, Any], ...]:
+    servers: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    local_found = False
+    for index, raw_source in enumerate(raw_sources):
+        if not isinstance(raw_source, dict):
+            raise ValueError(f"数据源 #{index + 1} 必须是表")
+        kind = raw_source.get("kind")
+        if kind == "network.mihomo":
+            _require_exact_keys(raw_source, LOCAL_SOURCE_KEYS, f"数据源 #{index + 1}")
+            if raw_source.get("id") != "local-mihomo" or not _boolean(raw_source, "enabled"):
+                raise ValueError("local-mihomo 必须保持启用")
+            local_found = True
+            continue
+        if kind != "network.linux-xray":
+            raise ValueError(f"数据源 #{index + 1} 的 kind 不受支持")
+        _require_exact_keys(raw_source, REMOTE_SOURCE_KEYS, f"数据源 #{index + 1}")
+        server_id = raw_source.get("id")
+        label = raw_source.get("label")
+        ssh_host = raw_source.get("ssh_host")
+        if not isinstance(server_id, str) or not SERVER_ID_RE.fullmatch(server_id) or server_id == "local-mihomo":
+            raise ValueError(f"数据源 #{index + 1} 的 id 无效")
+        if server_id in seen_ids:
+            raise ValueError(f"数据源 id 重复：{server_id}")
+        seen_ids.add(server_id)
+        if not isinstance(label, str) or not label.strip() or "\n" in label or "\r" in label:
+            raise ValueError(f"数据源 #{index + 1} 的 label 无效")
+        if not isinstance(ssh_host, str):
+            raise ValueError(f"数据源 #{index + 1} 的 ssh_host 必须是字符串")
+        enabled = _boolean(raw_source, "enabled")
+        xray_enabled = _boolean(raw_source, "xray_stats_enabled")
+        ssh_host = ssh_host.strip()
+        if enabled:
+            validate_ssh_host(ssh_host)
+        if xray_enabled and not enabled:
+            raise ValueError(f"数据源 #{index + 1} 启用 Xray 前必须启用服务器")
+        billing_mode = raw_source.get("billing_mode")
+        if billing_mode not in BILLING_MODES:
+            raise ValueError("billing_mode 只能是 both 或 outbound")
+        servers.append({
+            "id": server_id,
+            "label": label.strip(),
+            "enabled": enabled,
+            "ssh_host": ssh_host,
+            "xray_stats_enabled": xray_enabled,
+            "billing_cycle_start_day": _integer(raw_source, "billing_cycle_start_day", 1, 31),
+            "billing_mode": str(billing_mode),
+        })
+    if not local_found:
+        raise ValueError("缺少 local-mihomo 数据源")
+    return tuple(servers)
 
-    remote_enabled = _boolean(remote, "enabled")
-    xray_enabled = _boolean(remote, "xray_stats_enabled")
-    ssh_host = remote.get("ssh_host")
-    if not isinstance(ssh_host, str):
-        raise ValueError("ssh_host 必须是字符串")
-    ssh_host = ssh_host.strip()
-    if remote_enabled:
-        validate_ssh_host(ssh_host)
-    if xray_enabled and not remote_enabled:
-        raise ValueError("启用 Xray 统计前必须启用远端对账")
-    billing_mode = remote.get("billing_mode")
-    if billing_mode not in BILLING_MODES:
-        raise ValueError("billing_mode 只能是 both 或 outbound")
 
+def _settings_from_contract(raw: dict[str, Any], version_key: str) -> UserSettings:
+    if not isinstance(raw, dict) or raw.get(version_key) != CONFIG_SCHEMA:
+        raise ValueError("配置版本无效")
+    body = {key: value for key, value in raw.items() if key != version_key}
+    _require_exact_keys(body, CONTRACT_TOP_LEVEL_KEYS, "配置")
+    app = _require_table(body, "app")
+    _require_exact_keys(app, APP_KEYS, "[app]")
+    if app.get("menu_bar_mode") != "health":
+        raise ValueError("menu_bar_mode 只能是 health")
+    policies = body.get("policies")
+    sources = body.get("sources")
+    if not isinstance(policies, list) or not isinstance(sources, list):
+        raise ValueError("policies 和 sources 必须是数组")
+    traffic = next((item for item in policies if isinstance(item, dict) and item.get("id") == "network-traffic-alerts"), None)
+    if traffic is None or len(policies) != 1:
+        raise ValueError("当前必须且只能配置 network-traffic-alerts 策略")
+    _require_exact_keys(traffic, POLICY_KEYS, "流量策略")
+    if traffic.get("kind") != "traffic.threshold" or traffic.get("resource_id") != "network":
+        raise ValueError("network-traffic-alerts 策略无效")
     return UserSettings(
-        warning_window_minutes=_integer(monitor, "warning_window_minutes", 1, 120),
-        warning_mib=_integer(monitor, "warning_mib", 1, 1_048_576),
-        critical_window_minutes=_integer(monitor, "critical_window_minutes", 1, 240),
-        critical_mib=_integer(monitor, "critical_mib", 1, 1_048_576),
-        remote_enabled=remote_enabled,
-        ssh_host=ssh_host,
-        xray_stats_enabled=xray_enabled,
-        billing_cycle_start_day=_integer(remote, "billing_cycle_start_day", 1, 31),
-        billing_mode=str(billing_mode),
+        warning_window_minutes=_integer(traffic, "warning_window_minutes", 1, 120),
+        warning_mib=_integer(traffic, "warning_mib", 1, 1_048_576),
+        critical_window_minutes=_integer(traffic, "critical_window_minutes", 1, 240),
+        critical_mib=_integer(traffic, "critical_mib", 1, 1_048_576),
+        remote_servers=_parse_remote_sources(sources),
     )
 
 
+def parse_settings(payload: dict[str, Any]) -> UserSettings:
+    """Validate the date-versioned native settings bridge payload."""
+    return _settings_from_contract(payload, "schema")
+
+
 def settings_payload(settings: UserSettings) -> dict[str, Any]:
+    sources: list[dict[str, Any]] = [{"id": "local-mihomo", "kind": "network.mihomo", "enabled": True}]
+    sources.extend({"id": server["id"], "kind": "network.linux-xray", "label": server["label"],
+                    "enabled": server["enabled"], "ssh_host": server["ssh_host"],
+                    "xray_stats_enabled": server["xray_stats_enabled"],
+                    "billing_cycle_start_day": server["billing_cycle_start_day"], "billing_mode": server["billing_mode"]}
+                   for server in settings.remote_servers)
     return {
         "schema": SETTINGS_SCHEMA,
-        "monitor": {
-            "warning_window_minutes": settings.warning_window_minutes,
-            "warning_mib": settings.warning_mib,
-            "critical_window_minutes": settings.critical_window_minutes,
-            "critical_mib": settings.critical_mib,
-        },
-        "remote": {
-            "enabled": settings.remote_enabled,
-            "ssh_host": settings.ssh_host,
-            "xray_stats_enabled": settings.xray_stats_enabled,
-            "billing_cycle_start_day": settings.billing_cycle_start_day,
-            "billing_mode": settings.billing_mode,
-        },
+        "app": {"menu_bar_mode": "health"},
+        "policies": [{
+            "id": "network-traffic-alerts", "kind": "traffic.threshold", "resource_id": "network",
+            "warning_window_minutes": settings.warning_window_minutes, "warning_mib": settings.warning_mib,
+            "critical_window_minutes": settings.critical_window_minutes, "critical_mib": settings.critical_mib,
+        }],
+        "sources": sources,
     }
 
 
 def serialize_settings(settings: UserSettings) -> str:
-    return (
-        "# Managed by Traffic Sentinel Settings.\n"
-        "# Local Mihomo discovery, sampling frequency, remote endpoints, and log\n"
-        "# retention are fixed product behavior rather than user configuration.\n"
-        "\n"
-        "[monitor]\n"
-        f"warning_window_minutes = {settings.warning_window_minutes}\n"
-        f"warning_mib = {settings.warning_mib}\n"
-        f"critical_window_minutes = {settings.critical_window_minutes}\n"
-        f"critical_mib = {settings.critical_mib}\n"
-        "\n"
-        "[remote]\n"
-        f"enabled = {'true' if settings.remote_enabled else 'false'}\n"
-        f"ssh_host = {json.dumps(settings.ssh_host, ensure_ascii=False)}\n"
-        f"xray_stats_enabled = {'true' if settings.xray_stats_enabled else 'false'}\n"
-        f"billing_cycle_start_day = {settings.billing_cycle_start_day}\n"
-        f"billing_mode = {json.dumps(settings.billing_mode)}\n"
-    )
+    lines = [
+        "# Managed by Infra Sentinel. Schema identifiers use YYYYMMDD.revision.",
+        "# Local Mihomo discovery and sampling frequency are fixed product behavior.",
+        f'schema_version = "{CONFIG_SCHEMA}"', "",
+        "[app]", 'menu_bar_mode = "health"', "",
+        "[[policies]]", 'id = "network-traffic-alerts"', 'kind = "traffic.threshold"', 'resource_id = "network"',
+        f"warning_window_minutes = {settings.warning_window_minutes}", f"warning_mib = {settings.warning_mib}",
+        f"critical_window_minutes = {settings.critical_window_minutes}", f"critical_mib = {settings.critical_mib}", "",
+        "[[sources]]", 'id = "local-mihomo"', 'kind = "network.mihomo"', "enabled = true",
+    ]
+    for server in settings.remote_servers:
+        lines.extend(["", "[[sources]]", f"id = {json.dumps(server['id'])}", 'kind = "network.linux-xray"',
+                      f"label = {json.dumps(server['label'], ensure_ascii=False)}",
+                      f"enabled = {'true' if server['enabled'] else 'false'}",
+                      f"ssh_host = {json.dumps(server['ssh_host'], ensure_ascii=False)}",
+                      f"xray_stats_enabled = {'true' if server['xray_stats_enabled'] else 'false'}",
+                      f"billing_cycle_start_day = {int(server['billing_cycle_start_day'])}",
+                      f"billing_mode = {json.dumps(server['billing_mode'])}"])
+    return "\n".join(lines) + "\n"
+
+
+def _legacy_settings(raw: dict[str, Any]) -> UserSettings:
+    if not isinstance(raw, dict):
+        raise ValueError("配置根节点必须是表")
+    _require_exact_keys(raw, LEGACY_TOP_LEVEL_KEYS, "旧配置")
+    monitor = _require_table(raw, "monitor")
+    remote = _require_table(raw, "remote")
+    _require_exact_keys(monitor, MONITOR_KEYS, "[monitor]")
+    if set(remote) == LEGACY_REMOTE_KEYS:
+        host = remote.get("ssh_host") if isinstance(remote.get("ssh_host"), str) else ""
+        legacy_sources: list[Any] = [{"id": "legacy", "label": host.strip() or "VPS", **remote}]
+    else:
+        _require_exact_keys(remote, REMOTE_KEYS, "[remote]")
+        legacy_sources = remote.get("servers")
+    if not isinstance(legacy_sources, list):
+        raise ValueError("[remote].servers 必须是数组")
+    sources: list[dict[str, Any]] = [{"id": "local-mihomo", "kind": "network.mihomo", "enabled": True}]
+    for index, server in enumerate(legacy_sources):
+        if not isinstance(server, dict):
+            raise ValueError(f"远端服务器 #{index + 1} 必须是表")
+        _require_exact_keys(server, LEGACY_SERVER_KEYS, f"远端服务器 #{index + 1}")
+        sources.append({"kind": "network.linux-xray", **server})
+    return _settings_from_contract({
+        "schema": CONFIG_SCHEMA, "app": {"menu_bar_mode": "health"},
+        "policies": [{"id": "network-traffic-alerts", "kind": "traffic.threshold", "resource_id": "network", **monitor}],
+        "sources": sources,
+    }, "schema")
+
+
+def _write_atomic(path: Path, contents: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(contents, encoding="utf-8")
+    temporary.replace(path)
+
+
+def _migrate_legacy_config(path: Path, raw: dict[str, Any]) -> UserSettings:
+    settings = _legacy_settings(raw)
+    backup = path.with_name(f"{path.stem}.pre-{CONFIG_SCHEMA}{path.suffix}")
+    if not backup.exists():
+        backup.write_bytes(path.read_bytes())
+    _write_atomic(path, serialize_settings(settings))
+    return settings
 
 
 def read_user_settings(path: Path) -> UserSettings:
     with path.open("rb") as handle:
-        return parse_settings(tomllib.load(handle))
+        raw = tomllib.load(handle)
+    if raw.get("schema_version") == CONFIG_SCHEMA:
+        return _settings_from_contract(raw, "schema_version")
+    return _migrate_legacy_config(path, raw)
 
 
 def write_user_settings(path: Path, payload: dict[str, Any]) -> UserSettings:
-    if payload.get("schema") != SETTINGS_SCHEMA:
-        raise ValueError("设置数据版本无效")
-    settings = parse_settings({
-        "monitor": payload.get("monitor"),
-        "remote": payload.get("remote"),
-    })
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(serialize_settings(settings), encoding="utf-8")
-    temporary.replace(path)
+    settings = parse_settings(payload)
+    _write_atomic(path, serialize_settings(settings))
     return settings
 
 
 def runtime_config(settings: UserSettings, state_dir: Path) -> Config:
-    monitor = MonitorConfig(
-        sample_seconds=SAMPLE_SECONDS,
-        warning_window_seconds=settings.warning_window_minutes * 60,
-        warning_bytes=settings.warning_mib * 1024 * 1024,
-        critical_window_seconds=settings.critical_window_minutes * 60,
-        critical_bytes=settings.critical_mib * 1024 * 1024,
-    )
-    vps = VpsConfig(
-        enabled=settings.remote_enabled,
-        ssh_host=settings.ssh_host,
-        interface=VPS_INTERFACE,
-        poll_seconds=REMOTE_POLL_SECONDS,
-        billing_cycle_start_day=settings.billing_cycle_start_day,
-    )
-    xray_stats = XrayStatsConfig(
-        enabled=settings.remote_enabled and settings.xray_stats_enabled,
-        ssh_host=settings.ssh_host,
-        api_server=XRAY_API_SERVER,
-        binary_path=XRAY_BINARY_PATH,
-        poll_seconds=REMOTE_POLL_SECONDS,
-        expected_users=(),
-        flagged_users=(),
-    )
-    return Config(
-        monitor=monitor,
-        state=StateConfig(),
-        vps=vps,
-        xray_stats=xray_stats,
-        estimation=TrafficEstimationConfig(settings.billing_mode),
-        state_dir=state_dir,
-    )
+    monitor = MonitorConfig(SAMPLE_SECONDS, settings.warning_window_minutes * 60, settings.warning_mib * 1024 * 1024,
+                            settings.critical_window_minutes * 60, settings.critical_mib * 1024 * 1024)
+    remotes = []
+    for server in settings.remote_servers:
+        vps = VpsConfig(server_id=server["id"], label=server["label"], enabled=server["enabled"], ssh_host=server["ssh_host"],
+                        interface=VPS_INTERFACE, poll_seconds=REMOTE_POLL_SECONDS, billing_cycle_start_day=server["billing_cycle_start_day"], billing_mode=server["billing_mode"])
+        xray = XrayStatsConfig(server_id=server["id"], label=server["label"], enabled=server["enabled"] and server["xray_stats_enabled"],
+                               ssh_host=server["ssh_host"], api_server=XRAY_API_SERVER, binary_path=XRAY_BINARY_PATH,
+                               poll_seconds=REMOTE_POLL_SECONDS, expected_users=(), flagged_users=())
+        remotes.append(RemoteServerConfig(server["id"], server["label"], vps, xray, TrafficEstimationConfig(server["billing_mode"])))
+    return Config(monitor, StateConfig(), tuple(remotes), state_dir)
 
 
 def default_config_path() -> Path:
-    if DEFAULT_CONFIG.exists():
-        return DEFAULT_CONFIG
-    if SOURCE_EXAMPLE_CONFIG.exists():
-        return SOURCE_EXAMPLE_CONFIG
+    if DEFAULT_CONFIG.exists(): return DEFAULT_CONFIG
+    if SOURCE_EXAMPLE_CONFIG.exists(): return SOURCE_EXAMPLE_CONFIG
     return BUNDLED_EXAMPLE_CONFIG
 
 
 def read_config(path: Path | None) -> Config:
     selected = path or default_config_path()
-    settings = read_user_settings(selected)
-    configured_state_directory = os.environ.get(STATE_DIRECTORY_ENV)
-    state_dir = (
-        Path(configured_state_directory).expanduser()
-        if configured_state_directory
-        else selected.parent / "state"
-    )
-    return runtime_config(settings, state_dir)
+    state_dir = Path(os.environ[STATE_DIRECTORY_ENV]).expanduser() if os.environ.get(STATE_DIRECTORY_ENV) else selected.parent / "state"
+    return runtime_config(read_user_settings(selected), state_dir)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Traffic Sentinel settings bridge")
+    parser = argparse.ArgumentParser(description="Infra Sentinel settings bridge")
     parser.add_argument("command", choices=("defaults", "export", "write"))
     parser.add_argument("config", type=Path, nargs="?")
     args = parser.parse_args()
     try:
-        if args.command == "defaults":
-            settings = default_user_settings()
-        elif args.config is None:
-            raise ValueError("export 和 write 需要配置文件路径")
-        elif args.command == "export":
-            settings = read_user_settings(args.config)
+        if args.command == "defaults": settings = default_user_settings()
+        elif args.config is None: raise ValueError("export 和 write 需要配置文件路径")
+        elif args.command == "export": settings = read_user_settings(args.config)
         else:
             payload = json.load(sys.stdin)
-            if not isinstance(payload, dict):
-                raise ValueError("设置数据必须是 JSON 对象")
+            if not isinstance(payload, dict): raise ValueError("设置数据必须是 JSON 对象")
             settings = write_user_settings(args.config, payload)
         print(json.dumps(settings_payload(settings), ensure_ascii=False))
         return 0

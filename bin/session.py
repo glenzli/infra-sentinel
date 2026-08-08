@@ -9,11 +9,16 @@ import time
 from typing import Any
 
 from sample_timing import DEFAULT_EXPECTED_INTERVAL_SECONDS
-from traffic_estimation import TrafficEstimationConfig, estimate_traffic, minute_rate_trend
+from traffic_estimation import (
+    TrafficEstimationConfig,
+    estimate_fleet_traffic,
+    estimate_traffic,
+    minute_rate_trend,
+)
 from vps import VPS_SAMPLE_SCHEMA
 
 
-SESSION_SCHEMA = 5
+SESSION_SCHEMA = 6
 RESET_REQUEST_SCHEMA = 1
 HISTORY_LIMIT = 2_000
 HISTORY_WINDOW_SECONDS = 15 * 60
@@ -59,6 +64,7 @@ class SessionMeter:
         self.attribution_observed_bytes = 0
         self.attribution_unattributed_bytes = 0
         self.vps = self._empty_vps()
+        self.vps_servers: dict[str, dict[str, Any]] = {}
         self.vps_baselined_at: float | None = None
         self.last_vps_sample_epoch: float | None = None
         self.vps_intervals = 0
@@ -89,6 +95,24 @@ class SessionMeter:
             "packet_covered_out_bytes": 0,
         }
 
+    @staticmethod
+    def _empty_vps_server(label: str = "VPS", billing_mode: str = "both") -> dict[str, Any]:
+        return {
+            "id": "default",
+            "label": label,
+            "billing_mode": billing_mode,
+            "in_bytes": 0,
+            "out_bytes": 0,
+            "in_packets": 0,
+            "out_packets": 0,
+            "packet_covered_in_bytes": 0,
+            "packet_covered_out_bytes": 0,
+            "vps_baselined_at": None,
+            "last_vps_sample_epoch": None,
+            "vps_intervals": 0,
+            "vps_packet_intervals": 0,
+        }
+
     def _clear(self) -> None:
         self.kernel = self._empty_traffic()
         self.services = {}
@@ -96,6 +120,7 @@ class SessionMeter:
         self.attribution_observed_bytes = 0
         self.attribution_unattributed_bytes = 0
         self.vps = self._empty_vps()
+        self.vps_servers = {}
         self.vps_baselined_at = None
         self.last_vps_sample_epoch = None
         self.vps_intervals = 0
@@ -147,6 +172,25 @@ class SessionMeter:
                 "packet_covered_in_bytes": max(0, int(saved_vps.get("packet_covered_in_bytes", 0))),
                 "packet_covered_out_bytes": max(0, int(saved_vps.get("packet_covered_out_bytes", 0))),
             }
+            self.vps_servers = {}
+            for server_id, raw_server in payload.get("vps_servers", {}).items():
+                if not isinstance(raw_server, dict):
+                    continue
+                server = self._empty_vps_server(
+                    str(raw_server.get("label", server_id)),
+                    str(raw_server.get("billing_mode", "both")),
+                )
+                server["id"] = str(server_id)
+                for key in (
+                    "in_bytes", "out_bytes", "in_packets", "out_packets",
+                    "packet_covered_in_bytes", "packet_covered_out_bytes",
+                    "vps_intervals", "vps_packet_intervals",
+                ):
+                    server[key] = max(0, int(raw_server.get(key, 0)))
+                for key in ("vps_baselined_at", "last_vps_sample_epoch"):
+                    value = raw_server.get(key)
+                    server[key] = float(value) if value is not None else None
+                self.vps_servers[server["id"]] = server
             self.vps_intervals = max(0, int(payload.get("vps_intervals", 0)))
             self.vps_packet_intervals = max(0, int(payload.get("vps_packet_intervals", 0)))
             baseline = payload.get("vps_baselined_at")
@@ -173,6 +217,7 @@ class SessionMeter:
                 "unattributed_bytes": self.attribution_unattributed_bytes,
             },
             "vps": self.vps,
+            "vps_servers": self.vps_servers,
             "vps_intervals": self.vps_intervals,
             "vps_packet_intervals": self.vps_packet_intervals,
             "vps_baselined_at": self.vps_baselined_at,
@@ -189,16 +234,40 @@ class SessionMeter:
         self._clear()
         self._save()
 
-    def set_vps_baseline(self, vps_state: dict[str, Any]) -> None:
-        last = vps_state.get("last_sample", {})
-        if vps_state.get("status") == "error" or last.get("schema") != VPS_SAMPLE_SCHEMA:
-            self._save()
-            return
-        try:
-            self.last_vps_sample_epoch = float(last["epoch"])
-            self.vps_baselined_at = self.last_vps_sample_epoch
-        except (KeyError, TypeError, ValueError):
-            pass
+    @staticmethod
+    def _remote_rows(remote_state: Any) -> list[dict[str, Any]]:
+        if isinstance(remote_state, dict) and isinstance(remote_state.get("servers"), list):
+            return [row for row in remote_state["servers"] if isinstance(row, dict)]
+        # Keep the in-memory API useful for unit callers that supply one VPS state.
+        if isinstance(remote_state, dict):
+            return [{
+                "id": "default",
+                "label": "VPS",
+                "billing_mode": "both",
+                "vps": remote_state,
+                "xray_stats": {},
+            }]
+        return []
+
+    def set_vps_baseline(self, remote_state: dict[str, Any]) -> None:
+        for row in self._remote_rows(remote_state):
+            vps_state = row.get("vps", {})
+            last = vps_state.get("last_sample", {}) if isinstance(vps_state, dict) else {}
+            if vps_state.get("status") == "error" or last.get("schema") != VPS_SAMPLE_SCHEMA:
+                continue
+            server_id = str(row.get("id", "default"))
+            server = self.vps_servers.setdefault(
+                server_id,
+                self._empty_vps_server(str(row.get("label", server_id)), str(row.get("billing_mode", "both"))),
+            )
+            server["id"] = server_id
+            server["label"] = str(row.get("label", server.get("label", server_id)))
+            server["billing_mode"] = str(row.get("billing_mode", server.get("billing_mode", "both")))
+            try:
+                server["last_vps_sample_epoch"] = float(last["epoch"])
+                server["vps_baselined_at"] = server["last_vps_sample_epoch"]
+            except (KeyError, TypeError, ValueError):
+                continue
         self._save()
 
     @staticmethod
@@ -207,10 +276,10 @@ class SessionMeter:
         target["up_bytes"] += max(0, int(source.get("up_bytes", 0)))
         target["down_bytes"] += max(0, int(source.get("down_bytes", 0)))
 
-    def record(self, sample: dict[str, Any], vps_state: dict[str, Any]) -> None:
+    def record(self, sample: dict[str, Any], remote_state: dict[str, Any]) -> None:
         if self.started_epoch is None:
             self.reset(float(sample["epoch"]), "automatic")
-            self.set_vps_baseline(vps_state)
+            self.set_vps_baseline(remote_state)
             return
 
         self._add(self.kernel, sample.get("kernel"))
@@ -236,32 +305,49 @@ class SessionMeter:
         self.attribution_observed_bytes += max(0, int(attribution.get("observed_bytes", 0)))
         self.attribution_unattributed_bytes += max(0, int(attribution.get("unattributed_bytes", 0)))
 
-        last = vps_state.get("last_sample", {})
-        try:
-            vps_epoch = float(last["epoch"])
-            interval_start = float(last["interval_started_epoch"])
-        except (KeyError, TypeError, ValueError):
-            vps_epoch = None
-            interval_start = None
-        if vps_epoch is not None and vps_epoch != self.last_vps_sample_epoch:
-            self.last_vps_sample_epoch = vps_epoch
-            if self.vps_baselined_at is None or (
-                self.started_epoch is not None
-                and interval_start is not None
-                and interval_start >= self.started_epoch
+        for row in self._remote_rows(remote_state):
+            vps_state = row.get("vps", {})
+            last = vps_state.get("last_sample", {}) if isinstance(vps_state, dict) else {}
+            try:
+                vps_epoch = float(last["epoch"])
+                interval_start = float(last["interval_started_epoch"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            server_id = str(row.get("id", "default"))
+            server = self.vps_servers.setdefault(
+                server_id,
+                self._empty_vps_server(str(row.get("label", server_id)), str(row.get("billing_mode", "both"))),
+            )
+            server["label"] = str(row.get("label", server.get("label", server_id)))
+            server["billing_mode"] = str(row.get("billing_mode", server.get("billing_mode", "both")))
+            if vps_epoch == server.get("last_vps_sample_epoch"):
+                continue
+            server["last_vps_sample_epoch"] = vps_epoch
+            if server.get("vps_baselined_at") is None or (
+                self.started_epoch is not None and interval_start >= self.started_epoch
             ):
                 interval_in = max(0, int(last.get("in_bytes", 0)))
                 interval_out = max(0, int(last.get("out_bytes", 0)))
+                server["in_bytes"] += interval_in
+                server["out_bytes"] += interval_out
+                server["vps_intervals"] += 1
                 self.vps["in_bytes"] += interval_in
                 self.vps["out_bytes"] += interval_out
                 self.vps_intervals += 1
                 if last.get("packet_counters_ready"):
-                    self.vps["in_packets"] += max(0, int(last.get("in_packets", 0)))
-                    self.vps["out_packets"] += max(0, int(last.get("out_packets", 0)))
+                    in_packets = max(0, int(last.get("in_packets", 0)))
+                    out_packets = max(0, int(last.get("out_packets", 0)))
+                    server["in_packets"] += in_packets
+                    server["out_packets"] += out_packets
+                    server["packet_covered_in_bytes"] += interval_in
+                    server["packet_covered_out_bytes"] += interval_out
+                    server["vps_packet_intervals"] += 1
+                    self.vps["in_packets"] += in_packets
+                    self.vps["out_packets"] += out_packets
                     self.vps["packet_covered_in_bytes"] += interval_in
                     self.vps["packet_covered_out_bytes"] += interval_out
                     self.vps_packet_intervals += 1
-            self.vps_baselined_at = vps_epoch
+            server["vps_baselined_at"] = vps_epoch
 
         kernel = sample.get("kernel", {})
         routes = sample.get("routes", {})
@@ -288,8 +374,8 @@ class SessionMeter:
 
     def snapshot(
         self,
-        vps_enabled: bool,
-        estimation_config: TrafficEstimationConfig,
+        remote_state: dict[str, Any] | bool,
+        estimation_config: TrafficEstimationConfig | None = None,
         xray_stats: dict[str, Any] | None = None,
         now: float | None = None,
     ) -> dict[str, Any]:
@@ -329,32 +415,102 @@ class SessionMeter:
         proxy_observed = int(route_by_id["proxy"]["total_bytes"])
         unattributed = int(route_by_id["unattributed"]["total_bytes"])
         domain_attributed = max(0, kernel_total - unattributed)
-        vps_interface_total = self.vps["in_bytes"] + self.vps["out_bytes"]
-        vps_billable = estimation_config.billable_bytes(
-            self.vps["in_bytes"],
-            self.vps["out_bytes"],
-        )
-        vps_ready = bool(vps_enabled and self.vps_intervals > 0)
-        xray_state = xray_stats or {}
-        xray_logical_total = int(xray_state.get("total_bytes", 0))
-        xray_ready = bool(xray_state.get("ready") and int(xray_state.get("intervals", 0)) > 0)
-        vps_packet_count = estimation_config.billable_packets(
-            self.vps["in_packets"],
-            self.vps["out_packets"],
-        )
-        packet_covered_bytes = estimation_config.billable_bytes(
-            self.vps["packet_covered_in_bytes"],
-            self.vps["packet_covered_out_bytes"],
-        )
-        estimates = estimate_traffic(
-            vps_billable,
-            vps_packet_count,
-            packet_covered_bytes,
-            xray_logical_total,
-            vps_ready,
-            xray_ready,
-            estimation_config,
-        )
+        if isinstance(remote_state, bool):
+            # Retain a small in-memory compatibility path for callers embedding
+            # SessionMeter directly; persisted settings are intentionally owned by
+            # the date-versioned source/policy configuration contract.
+            mode = estimation_config.billing_mode if estimation_config is not None else "both"
+            remote_state = {
+                "servers": [{
+                    "id": "default",
+                    "label": "VPS",
+                    "billing_mode": mode,
+                    "vps": {"enabled": remote_state},
+                    "xray_stats": xray_stats or {},
+                }],
+            }
+        remote_rows = self._remote_rows(remote_state)
+        server_snapshots: list[dict[str, Any]] = []
+        fleet_rows: list[dict[str, Any]] = []
+        aggregate_vps = self._empty_vps()
+        vps_modes: set[str] = set()
+        vps_ready_count = 0
+        xray_ready_count = 0
+        enabled_count = 0
+        for row in remote_rows:
+            server_id = str(row.get("id", "default"))
+            mode = str(row.get("billing_mode", "both"))
+            if mode not in ("both", "outbound"):
+                mode = "both"
+            server = self.vps_servers.get(server_id, self._empty_vps_server(str(row.get("label", server_id)), mode))
+            server = {**server, "id": server_id, "label": str(row.get("label", server.get("label", server_id))), "billing_mode": mode}
+            xray_state = row.get("xray_stats", {}) if isinstance(row.get("xray_stats"), dict) else {}
+            config = TrafficEstimationConfig(mode)
+            interface_total = server["in_bytes"] + server["out_bytes"]
+            billable = config.billable_bytes(server["in_bytes"], server["out_bytes"])
+            packet_count = config.billable_packets(server["in_packets"], server["out_packets"])
+            packet_bytes = config.billable_bytes(server["packet_covered_in_bytes"], server["packet_covered_out_bytes"])
+            xray_logical = max(0, int(xray_state.get("total_bytes", 0)))
+            vps_is_enabled = bool(row.get("vps", {}).get("enabled", True))
+            xray_is_ready = bool(xray_state.get("ready") and int(xray_state.get("intervals", 0)) > 0)
+            vps_is_ready = bool(vps_is_enabled and server["vps_intervals"] > 0)
+            enabled_count += 1 if vps_is_enabled else 0
+            vps_ready_count += 1 if vps_is_ready else 0
+            xray_ready_count += 1 if xray_is_ready else 0
+            vps_modes.add(mode)
+            for key in aggregate_vps:
+                if key.endswith("bytes") or key.endswith("packets"):
+                    aggregate_vps[key] += int(server[key])
+            fleet_rows.append({
+                "id": server_id,
+                "billing_mode": mode,
+                "xray_logical_bytes": xray_logical,
+                "vps_billable_bytes": billable,
+                "vps_packet_count": packet_count,
+                "packet_covered_bytes": packet_bytes,
+                "vps_ready": vps_is_ready,
+                "xray_ready": xray_is_ready,
+            })
+            server_estimate = estimate_traffic(
+                billable,
+                packet_count,
+                packet_bytes,
+                xray_logical,
+                vps_is_ready,
+                xray_is_ready,
+                config,
+            )
+            server_snapshots.append({
+                "id": server_id,
+                "label": server["label"],
+                "billing_mode": mode,
+                "vps": {
+                    **server,
+                    "total_bytes": billable,
+                    "interface_total_bytes": interface_total,
+                    "total_packets": packet_count,
+                    "packet_intervals": server["vps_packet_intervals"],
+                    "baselined_at": iso_now(server["vps_baselined_at"]) if server["vps_baselined_at"] is not None else None,
+                    "intervals": server["vps_intervals"],
+                    "ready": vps_is_ready,
+                },
+                "xray_stats": xray_state,
+                "total_bytes": billable,
+                "interface_total_bytes": interface_total,
+                "xray_logical_bytes": xray_logical,
+                "vps_ready": vps_is_ready,
+                "xray_ready": xray_is_ready,
+                "breakdown": server_estimate,
+            })
+        vps_interface_total = aggregate_vps["in_bytes"] + aggregate_vps["out_bytes"]
+        vps_modes_label = next(iter(vps_modes)) if len(vps_modes) == 1 else ("mixed" if vps_modes else "both")
+        vps_packet_count = sum(int(row["vps_packet_count"]) for row in fleet_rows)
+        packet_covered_bytes = sum(int(row["packet_covered_bytes"]) for row in fleet_rows)
+        vps_billable = sum(int(server["total_bytes"]) for server in server_snapshots)
+        xray_logical_total = sum(int(row["xray_logical_bytes"]) for row in server_snapshots)
+        vps_ready = bool(enabled_count and vps_ready_count == enabled_count)
+        xray_ready = bool(enabled_count and xray_ready_count == enabled_count)
+        estimates = estimate_fleet_traffic(fleet_rows)
         duration_seconds = (
             max(0, int((now if now is not None else time.time()) - self.started_epoch))
             if self.started_epoch is not None
@@ -384,16 +540,19 @@ class SessionMeter:
                 ),
             },
             "vps": {
-                **self.vps,
+                **aggregate_vps,
                 "total_bytes": vps_billable,
                 "interface_total_bytes": vps_interface_total,
                 "total_packets": vps_packet_count,
-                "billing_mode": estimation_config.billing_mode,
+                "billing_mode": vps_modes_label,
                 "packet_intervals": self.vps_packet_intervals,
                 "baselined_at": iso_now(self.vps_baselined_at) if self.vps_baselined_at is not None else None,
                 "intervals": self.vps_intervals,
+                "ready": vps_ready,
             },
             "vps_ready": vps_ready,
+            "xray_ready": xray_ready,
+            "remote_servers": server_snapshots,
             "duration_seconds": duration_seconds,
             "breakdown": estimates,
             "trend": minute_rate_trend(

@@ -1,16 +1,20 @@
-# Managed by Traffic Sentinel Settings.
-# Local Mihomo discovery, sampling frequency, remote endpoints, and log
-# retention are fixed product behavior rather than user configuration.
+# Managed by Infra Sentinel. Schema identifiers use YYYYMMDD.revision.
+# Local Mihomo discovery and sampling frequency are fixed product behavior.
+schema_version = "20260808.1"
 
-[monitor]
+[app]
+menu_bar_mode = "health"
+
+[[policies]]
+id = "network-traffic-alerts"
+kind = "traffic.threshold"
+resource_id = "network"
 warning_window_minutes = 5
 warning_mib = 250
 critical_window_minutes = 10
 critical_mib = 1024
 
-[remote]
-enabled = false
-ssh_host = ""
-xray_stats_enabled = false
-billing_cycle_start_day = 1
-billing_mode = "both"
+[[sources]]
+id = "local-mihomo"
+kind = "network.mihomo"
+enabled = true

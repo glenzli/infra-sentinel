@@ -1,6 +1,7 @@
 #import "SettingsStore.h"
 
 static NSString *const TSSettingsErrorDomain = @"TrafficSentinel.Settings";
+static NSString *const TSSettingsSchema = @"20260808.1";
 
 @interface TSSettingsStore ()
 @property(nonatomic, copy) NSString *configPath;
@@ -101,7 +102,7 @@ static NSString *const TSSettingsErrorDomain = @"TrafficSentinel.Settings";
 
     NSError *decodeError = nil;
     id payload = [NSJSONSerialization JSONObjectWithData:output options:0 error:&decodeError];
-    if (![payload isKindOfClass:[NSDictionary class]] || [payload[@"schema"] integerValue] != 1) {
+    if (![payload isKindOfClass:[NSDictionary class]] || ![payload[@"schema"] isEqual:TSSettingsSchema]) {
         if (error != NULL) {
             *error = decodeError ?: [self errorWithCode:3 message:@"Settings helper returned invalid data"];
         }

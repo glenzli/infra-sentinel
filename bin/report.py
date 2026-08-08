@@ -72,7 +72,13 @@ def main() -> int:
         if since > until:
             raise ValueError("--since 不能晚于 --until")
         local_samples = [sample for sample in records(config, "samples") if sample.get("schema") == SAMPLE_SCHEMA and since <= float(sample.get("epoch", -1)) <= until]
-        vps_samples = [sample for sample in iter_vps_samples(config.state_dir) if sample.get("schema") in SUPPORTED_VPS_SAMPLE_SCHEMAS and since <= float(sample.get("epoch", -1)) <= until]
+        vps_by_server: list[tuple[Any, list[dict[str, Any]]]] = []
+        for server in config.remote_servers:
+            server_dir = config.state_dir / "remote" / server.id
+            samples = [sample for sample in iter_vps_samples(server_dir)
+                       if sample.get("schema") in SUPPORTED_VPS_SAMPLE_SCHEMAS
+                       and since <= float(sample.get("epoch", -1)) <= until]
+            vps_by_server.append((server, samples))
         matching_events = [event for event in records(config, "events") if isinstance(event.get("timestamp"), str) and event.get("sample", {}).get("schema") == SAMPLE_SCHEMA and since <= parse_timestamp(event["timestamp"]) <= until]
         print(f"时间段：{datetime.fromtimestamp(since).astimezone().isoformat(timespec='seconds')} 至 {datetime.fromtimestamp(until).astimezone().isoformat(timespec='seconds')}")
         print(f"本机采样数：{len(local_samples)}")
@@ -80,9 +86,14 @@ def main() -> int:
         print(f"Mihomo 本机总量：↑ {format_bytes(traffic['up_bytes'])}  ↓ {format_bytes(traffic['down_bytes'])}  合计 {format_bytes(traffic['up_bytes'] + traffic['down_bytes'])}")
         for service in sorted(traffic["services"].values(), key=lambda item: item["bytes"], reverse=True)[:10]:
             print(f"  {service['label']}：{format_bytes(service['bytes'])}")
-        vps = sum_vps_traffic(vps_samples)
-        if config.vps.enabled:
-            print(f"VPS 网卡（独立账本，入 + 出）：入 {format_bytes(vps['in_bytes'])}  出 {format_bytes(vps['out_bytes'])}  T {format_bytes(vps['total_bytes'])}")
+        enabled_servers = [(server, sum_vps_traffic(samples)) for server, samples in vps_by_server if server.vps.enabled]
+        if enabled_servers:
+            total_in = sum(item["in_bytes"] for _, item in enabled_servers)
+            total_out = sum(item["out_bytes"] for _, item in enabled_servers)
+            print(f"VPS 网卡合计（入 + 出）：入 {format_bytes(total_in)}  出 {format_bytes(total_out)}  T {format_bytes(total_in + total_out)}")
+            for server, item in enabled_servers:
+                billable = server.estimation.billable_bytes(item["in_bytes"], item["out_bytes"])
+                print(f"  {server.label}：入 {format_bytes(item['in_bytes'])}  出 {format_bytes(item['out_bytes'])}  T {format_bytes(billable)}")
         else:
             print("VPS 网卡：配置中未启用")
         if matching_events:

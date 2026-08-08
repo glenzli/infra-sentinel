@@ -4,5 +4,7 @@ __pycache__/
 *.py[cod]
 Codex Traffic Sentinel.app/
 Traffic Sentinel.app/
+Infra Sentinel.app/
 .build/
 dist/
+.DS_Store
