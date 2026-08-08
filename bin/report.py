@@ -11,7 +11,7 @@ import time
 from typing import Any, Iterable
 
 from configuration import Config, read_config
-from sentinel import SAMPLE_SCHEMA, format_bytes, iter_jsonl
+from infra_agent import SAMPLE_SCHEMA, format_bytes, iter_jsonl
 from vps import SUPPORTED_VPS_SAMPLE_SCHEMAS, iter_vps_samples
 
 

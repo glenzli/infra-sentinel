@@ -109,10 +109,22 @@ void TSDrawXrayUserTrafficPanel(NSRect rect, NSDictionary *rawState, TSLanguage 
                          [NSFont monospacedDigitSystemFontOfSize:10 weight:NSFontWeightMedium], [NSColor labelColor],
                          NSLineBreakByTruncatingHead);
             NSDictionary *vps = XrayDictionary(server[@"vps"]);
+            NSDictionary *estimate = XrayDictionary(server[@"breakdown"]);
             NSString *directions = [NSString stringWithFormat:TSLocalized(language, @"xray.directions_format"),
                                     TSFormatBytes(XrayNumber(vps[@"in_bytes"])), TSFormatBytes(XrayNumber(vps[@"out_bytes"]))];
+            NSString *comparisonStatus = XrayString(estimate[@"comparison_status"], @"waiting");
+            NSString *factor = @"";
+            if ([comparisonStatus isEqualToString:@"valid"]) {
+                factor = [NSString stringWithFormat:TSLocalized(language, @"xray.factor_valid_format"), [estimate[@"observed_multiplier"] doubleValue]];
+            } else if ([comparisonStatus isEqualToString:@"incomplete_route_coverage"]) {
+                factor = [NSString stringWithFormat:TSLocalized(language, @"xray.factor_incomplete_format"), [estimate[@"observed_multiplier"] doubleValue]];
+            } else {
+                factor = TSLocalized(language, @"xray.factor_waiting");
+            }
+            directions = [directions stringByAppendingFormat:@" · %@", factor];
             DrawXrayText(directions, NSMakeRect(detailX, y, detailWidth, 16),
-                         [NSFont monospacedDigitSystemFontOfSize:9 weight:NSFontWeightRegular], [NSColor secondaryLabelColor],
+                         [NSFont monospacedDigitSystemFontOfSize:9 weight:NSFontWeightRegular],
+                         [comparisonStatus isEqualToString:@"incomplete_route_coverage"] ? [NSColor systemOrangeColor] : [NSColor secondaryLabelColor],
                          NSLineBreakByTruncatingHead);
         }
         contentTop -= 31 + (CGFloat)visibleServers * 19.0;

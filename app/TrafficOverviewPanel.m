@@ -103,21 +103,34 @@ void TSDrawTrafficSummaryPanel(NSRect rect, NSDictionary *session, NSDictionary 
     );
 
     BOOL empiricalReady = [breakdown[@"empirical_ready"] boolValue];
-    NSString *billingLine = empiricalReady
-        ? [NSString stringWithFormat:TSLocalized(language, @"estimate.empirical_format"),
-           [breakdown[@"observed_multiplier"] doubleValue],
-           [breakdown[@"vps_billing_legs"] doubleValue],
-           [breakdown[@"billable_overhead_ratio"] doubleValue] * 100.0]
-        : TSLocalized(language, @"estimate.empirical_waiting");
-    NSInteger comparableServers = [breakdown[@"comparable_server_count"] integerValue];
-    if (empiricalReady && comparableServers > 0) {
-        billingLine = [billingLine stringByAppendingFormat:TSLocalized(language, @"estimate.comparable_scope_format"),
-                       (long)comparableServers];
+    NSString *comparisonStatus = [breakdown[@"comparison_status"] isKindOfClass:[NSString class]]
+        ? breakdown[@"comparison_status"] : @"waiting";
+    BOOL usesPerServerCalibration = [comparisonStatus isEqualToString:@"multiple_servers"];
+    NSString *billingLine = nil;
+    if (usesPerServerCalibration) {
+        billingLine = [NSString stringWithFormat:TSLocalized(language, @"estimate.per_vps_only_format"),
+                       (long)[breakdown[@"comparable_server_count"] integerValue]];
+    } else if ([comparisonStatus isEqualToString:@"incomplete_route_coverage"]) {
+        billingLine = [NSString stringWithFormat:TSLocalized(language, @"estimate.incomplete_coverage_format"),
+                       [breakdown[@"observed_multiplier"] doubleValue],
+                       [breakdown[@"minimum_expected_multiplier"] doubleValue]];
+    } else if (empiricalReady) {
+        billingLine = [NSString stringWithFormat:TSLocalized(language, @"estimate.empirical_format"),
+                       [breakdown[@"observed_multiplier"] doubleValue],
+                       [breakdown[@"vps_billing_legs"] doubleValue],
+                       [breakdown[@"billable_overhead_ratio"] doubleValue] * 100.0];
+    } else {
+        billingLine = TSLocalized(language, @"estimate.empirical_waiting");
     }
-    DrawOverviewText(billingLine, NSMakeRect(rect.origin.x + 2, cardY - 29, rect.size.width - 4, 20),
-                     [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold],
-                     empiricalReady ? [NSColor systemGreenColor] : [NSColor secondaryLabelColor],
-                     NSLineBreakByTruncatingTail);
+    if (empiricalReady) {
+        billingLine = [billingLine stringByAppendingString:TSLocalized(language, @"estimate.comparable_scope_format")];
+    }
+    if (!usesPerServerCalibration) {
+        DrawOverviewText(billingLine, NSMakeRect(rect.origin.x + 2, cardY - 29, rect.size.width - 4, 20),
+                         [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold],
+                         empiricalReady ? [NSColor systemGreenColor] : ([comparisonStatus isEqualToString:@"incomplete_route_coverage"] ? [NSColor systemOrangeColor] : [NSColor secondaryLabelColor]),
+                         NSLineBreakByTruncatingTail);
+    }
 
     NSString *packagingLine = @"";
     if (empiricalReady && [breakdown[@"packet_breakdown_ready"] boolValue]) {
@@ -129,14 +142,21 @@ void TSDrawTrafficSummaryPanel(NSRect rect, NSDictionary *session, NSDictionary 
     } else if (empiricalReady) {
         packagingLine = [NSString stringWithFormat:TSLocalized(language, @"estimate.packet_waiting_format"),
                          [breakdown[@"billable_overhead_share"] doubleValue] * 100.0];
+    } else if ([comparisonStatus isEqualToString:@"multiple_servers"]) {
+        packagingLine = TSLocalized(language, @"estimate.per_vps_only_detail");
+    } else if ([comparisonStatus isEqualToString:@"incomplete_route_coverage"]) {
+        packagingLine = TSLocalized(language, @"estimate.incomplete_coverage_detail");
     } else {
         packagingLine = TSLocalized(language, @"estimate.alignment_pending");
     }
-    DrawOverviewText(packagingLine, NSMakeRect(rect.origin.x + 2, cardY - 49, rect.size.width - 4, 17),
-                     [NSFont systemFontOfSize:11.5 weight:NSFontWeightMedium],
-                     [NSColor secondaryLabelColor], NSLineBreakByTruncatingTail);
+    if (!usesPerServerCalibration) {
+        DrawOverviewText(packagingLine, NSMakeRect(rect.origin.x + 2, cardY - 49, rect.size.width - 4, 17),
+                         [NSFont systemFontOfSize:11.5 weight:NSFontWeightMedium],
+                         [NSColor secondaryLabelColor], NSLineBreakByTruncatingTail);
+    }
 
-    NSRect breakdownRect = NSMakeRect(rect.origin.x, rect.origin.y, rect.size.width, cardY - rect.origin.y - 64);
+    CGFloat breakdownTopGap = usesPerServerCalibration ? 16.0 : 64.0;
+    NSRect breakdownRect = NSMakeRect(rect.origin.x, rect.origin.y, rect.size.width, cardY - rect.origin.y - breakdownTopGap);
     [[NSColor controlBackgroundColor] setFill];
     [[NSBezierPath bezierPathWithRoundedRect:breakdownRect xRadius:12 yRadius:12] fill];
     CGFloat inset = 16.0;

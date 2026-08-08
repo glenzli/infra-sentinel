@@ -11,7 +11,7 @@ import uuid
 from typing import Any
 
 from configuration import Config, read_config
-from sentinel import ensure_state_dir, iso_now, latest_jsonl
+from infra_agent import ensure_state_dir, iso_now, latest_jsonl
 
 
 def create_snapshot(config: Config, event: dict[str, Any]) -> Path:

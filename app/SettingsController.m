@@ -122,20 +122,20 @@ static NSTextField *SettingsIntegerField(NSRect frame, NSInteger minimum, NSInte
     [content addSubview:self.titleLabel];
     [content addSubview:self.subtitleLabel];
 
-    // Remote routes are the primary configuration, so keep them directly
+    // Host configuration is the primary input, so keep it directly
     // beneath the title and leave a clear gap before alert thresholds.
-    self.monitorBox = [[NSBox alloc] initWithFrame:NSMakeRect(24, 170, 612, 138)];
+    self.monitorBox = [[NSBox alloc] initWithFrame:NSMakeRect(24, 170, 612, 154)];
     [content addSubview:self.monitorBox];
-    self.warningLabel = SettingsLabel(NSMakeRect(18, 78, 140, 22), 13, NSFontWeightMedium);
-    self.criticalLabel = SettingsLabel(NSMakeRect(18, 39, 140, 22), 13, NSFontWeightMedium);
-    self.warningWindowField = SettingsIntegerField(NSMakeRect(175, 76, 58, 24), 1, 120);
-    self.warningMinutesLabel = SettingsLabel(NSMakeRect(240, 78, 55, 20), 12, NSFontWeightRegular);
-    self.warningThresholdField = SettingsIntegerField(NSMakeRect(340, 76, 92, 24), 1, 1048576);
-    self.warningMiBLabel = SettingsLabel(NSMakeRect(440, 78, 55, 20), 12, NSFontWeightRegular);
-    self.criticalWindowField = SettingsIntegerField(NSMakeRect(175, 37, 58, 24), 1, 240);
-    self.criticalMinutesLabel = SettingsLabel(NSMakeRect(240, 39, 55, 20), 12, NSFontWeightRegular);
-    self.criticalThresholdField = SettingsIntegerField(NSMakeRect(340, 37, 92, 24), 1, 1048576);
-    self.criticalMiBLabel = SettingsLabel(NSMakeRect(440, 39, 55, 20), 12, NSFontWeightRegular);
+    self.warningLabel = SettingsLabel(NSMakeRect(24, 90, 138, 22), 13, NSFontWeightMedium);
+    self.criticalLabel = SettingsLabel(NSMakeRect(24, 45, 138, 22), 13, NSFontWeightMedium);
+    self.warningWindowField = SettingsIntegerField(NSMakeRect(176, 88, 62, 26), 1, 120);
+    self.warningMinutesLabel = SettingsLabel(NSMakeRect(246, 91, 54, 20), 12, NSFontWeightRegular);
+    self.warningThresholdField = SettingsIntegerField(NSMakeRect(338, 88, 94, 26), 1, 1048576);
+    self.warningMiBLabel = SettingsLabel(NSMakeRect(440, 91, 55, 20), 12, NSFontWeightRegular);
+    self.criticalWindowField = SettingsIntegerField(NSMakeRect(176, 43, 62, 26), 1, 240);
+    self.criticalMinutesLabel = SettingsLabel(NSMakeRect(246, 46, 54, 20), 12, NSFontWeightRegular);
+    self.criticalThresholdField = SettingsIntegerField(NSMakeRect(338, 43, 94, 26), 1, 1048576);
+    self.criticalMiBLabel = SettingsLabel(NSMakeRect(440, 46, 55, 20), 12, NSFontWeightRegular);
     for (NSView *view in @[self.warningLabel, self.criticalLabel, self.warningWindowField,
                            self.warningMinutesLabel, self.warningThresholdField, self.warningMiBLabel,
                            self.criticalWindowField, self.criticalMinutesLabel, self.criticalThresholdField,
@@ -157,7 +157,7 @@ static NSTextField *SettingsIntegerField(NSRect frame, NSInteger minimum, NSInte
     self.serverScrollView.hasVerticalScroller = YES;
     self.serverScrollView.documentView = self.serverDocumentView;
     [self.remoteBox addSubview:self.serverScrollView];
-    self.remoteDetailLabel = SettingsLabel(NSMakeRect(18, 13, 576, 28), 11, NSFontWeightRegular);
+    self.remoteDetailLabel = SettingsLabel(NSMakeRect(18, 18, 576, 20), 11, NSFontWeightRegular);
     self.remoteDetailLabel.textColor = [NSColor secondaryLabelColor];
     self.remoteDetailLabel.maximumNumberOfLines = 2;
     [self.remoteBox addSubview:self.remoteDetailLabel];
@@ -201,6 +201,8 @@ static NSTextField *SettingsIntegerField(NSRect frame, NSInteger minimum, NSInte
     for (NSMutableDictionary *row in self.serverRows) {
         ((NSButton *)row[@"xray"]).title = TSLocalized(language, @"settings.xray_enable_short");
         ((NSButton *)row[@"budget"]).title = TSLocalized(language, @"settings.billing_budget_short");
+        ((NSTextField *)row[@"cycleLabel"]).stringValue = TSLocalized(language, @"settings.billing_cycle_short");
+        ((NSTextField *)row[@"dayUnit"]).stringValue = TSLocalized(language, @"settings.day_short");
         ((NSTextField *)row[@"warningBudgetLabel"]).stringValue = TSLocalized(language, @"settings.billing_warning_short");
         ((NSTextField *)row[@"criticalBudgetLabel"]).stringValue = TSLocalized(language, @"settings.billing_critical_short");
         ((NSButton *)row[@"remove"]).title = @"−";
@@ -224,16 +226,16 @@ static NSTextField *SettingsIntegerField(NSRect frame, NSInteger minimum, NSInte
     CGFloat rowsHeight = MAX(72.0, MIN(190.0, self.serverRows.count * 72.0));
     // Reserve a real top inset so the header and add button do not touch the
     // rounded panel edge.
-    CGFloat remoteHeight = 105.0 + rowsHeight;
+    CGFloat remoteHeight = 113.0 + rowsHeight;
     CGFloat remoteTop = 616.0;
     NSRect remoteFrame = NSMakeRect(24, remoteTop - remoteHeight, 612, remoteHeight);
     self.remoteBox.frame = remoteFrame;
-    self.addServerButton.frame = NSMakeRect(454, remoteHeight - 60, 124, 25);
-    self.serverHeaderLabel.frame = NSMakeRect(18, remoteHeight - 58, 420, 20);
-    self.serverScrollView.frame = NSMakeRect(18, 48, 576, rowsHeight);
-    // Keep a visible breathing gap between remote reconciliation and alerts.
-    self.monitorBox.frame = NSMakeRect(24, remoteFrame.origin.y - 180, 612, 138);
-    self.statusLabel.frame = NSMakeRect(26, self.monitorBox.frame.origin.y - 70, 608, 34);
+    self.addServerButton.frame = NSMakeRect(454, remoteHeight - 52, 124, 25);
+    self.serverHeaderLabel.frame = NSMakeRect(18, remoteHeight - 50, 420, 20);
+    self.serverScrollView.frame = NSMakeRect(18, 56, 576, rowsHeight);
+    // Keep a visible breathing gap between host configuration and alerts.
+    self.monitorBox.frame = NSMakeRect(24, remoteFrame.origin.y - 190, 612, 154);
+    self.statusLabel.frame = NSMakeRect(26, self.monitorBox.frame.origin.y - 62, 608, 34);
     CGFloat height = MAX(1.0, self.serverRows.count * 72.0);
     self.serverDocumentView.frame = NSMakeRect(0, 0, 556, height);
     for (NSUInteger index = 0; index < self.serverRows.count; index++) {
@@ -270,9 +272,8 @@ static NSTextField *SettingsIntegerField(NSRect frame, NSInteger minimum, NSInte
     xray.state = [server[@"xray_stats_enabled"] boolValue] ? NSControlStateValueOn : NSControlStateValueOff;
     NSPopUpButton *billing = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(366, 41, 110, 26) pullsDown:NO];
     [view addSubview:enabled]; [view addSubview:label]; [view addSubview:ssh]; [view addSubview:xray]; [view addSubview:billing];
-    NSTextField *day = SettingsIntegerField(NSMakeRect(480, 42, 40, 24), 1, 31);
+    NSTextField *day = SettingsIntegerField(NSMakeRect(164, 7, 42, 24), 1, 31);
     day.integerValue = [server[@"billing_cycle_start_day"] integerValue] ?: 1;
-    [view addSubview:day];
     NSButton *remove = [NSButton buttonWithTitle:@"−" target:self action:@selector(removeServer:)];
     remove.bezelStyle = NSBezelStyleTexturedRounded;
     remove.frame = NSMakeRect(524, 41, 28, 26);
@@ -280,24 +281,29 @@ static NSTextField *SettingsIntegerField(NSRect frame, NSInteger minimum, NSInte
     NSButton *budget = [NSButton checkboxWithTitle:TSLocalized(self.language, @"settings.billing_budget_short") target:self action:@selector(serverBudgetToggled:)];
     budget.frame = NSMakeRect(30, 7, 80, 24);
     budget.state = [server[@"billing_alert_enabled"] boolValue] ? NSControlStateValueOn : NSControlStateValueOff;
-    NSTextField *warningBudget = SettingsIntegerField(NSMakeRect(196, 7, 60, 24), 1, 1048576);
+    NSTextField *warningBudget = SettingsIntegerField(NSMakeRect(284, 7, 60, 24), 1, 1048576);
     warningBudget.integerValue = [server[@"billing_warning_gib"] integerValue] ?: 1;
-    NSTextField *criticalBudget = SettingsIntegerField(NSMakeRect(400, 7, 60, 24), 1, 1048576);
+    NSTextField *criticalBudget = SettingsIntegerField(NSMakeRect(454, 7, 60, 24), 1, 1048576);
     criticalBudget.integerValue = [server[@"billing_critical_gib"] integerValue] ?: 2;
-    NSTextField *warningBudgetLabel = SettingsLabel(NSMakeRect(116, 9, 80, 20), 11, NSFontWeightRegular);
+    NSTextField *warningBudgetLabel = SettingsLabel(NSMakeRect(220, 9, 58, 20), 11, NSFontWeightRegular);
     warningBudgetLabel.stringValue = TSLocalized(self.language, @"settings.billing_warning_short");
-    NSTextField *criticalBudgetLabel = SettingsLabel(NSMakeRect(304, 9, 90, 20), 11, NSFontWeightRegular);
+    NSTextField *criticalBudgetLabel = SettingsLabel(NSMakeRect(380, 9, 68, 20), 11, NSFontWeightRegular);
     criticalBudgetLabel.stringValue = TSLocalized(self.language, @"settings.billing_critical_short");
-    NSTextField *warningUnit = SettingsLabel(NSMakeRect(262, 9, 34, 20), 11, NSFontWeightRegular);
+    NSTextField *warningUnit = SettingsLabel(NSMakeRect(350, 9, 28, 20), 11, NSFontWeightRegular);
     warningUnit.stringValue = @"GiB";
-    NSTextField *criticalUnit = SettingsLabel(NSMakeRect(466, 9, 34, 20), 11, NSFontWeightRegular);
+    NSTextField *criticalUnit = SettingsLabel(NSMakeRect(520, 9, 28, 20), 11, NSFontWeightRegular);
     criticalUnit.stringValue = @"GiB";
-    for (NSView *control in @[budget, warningBudget, criticalBudget, warningBudgetLabel, criticalBudgetLabel, warningUnit, criticalUnit]) [view addSubview:control];
+    NSTextField *cycleLabel = SettingsLabel(NSMakeRect(116, 9, 42, 20), 11, NSFontWeightRegular);
+    cycleLabel.stringValue = TSLocalized(self.language, @"settings.billing_cycle_short");
+    NSTextField *dayUnit = SettingsLabel(NSMakeRect(212, 9, 24, 20), 11, NSFontWeightRegular);
+    dayUnit.stringValue = TSLocalized(self.language, @"settings.day_short");
+    for (NSView *control in @[budget, cycleLabel, day, dayUnit, warningBudget, criticalBudget, warningBudgetLabel, criticalBudgetLabel, warningUnit, criticalUnit]) [view addSubview:control];
     NSMutableDictionary *row = [@{ @"id": serverID, @"view": view, @"enabled": enabled, @"label": label,
                                    @"ssh": ssh, @"xray": xray, @"billing": billing, @"day": day, @"remove": remove,
                                    @"budget": budget, @"warningBudget": warningBudget, @"criticalBudget": criticalBudget,
                                    @"warningBudgetLabel": warningBudgetLabel, @"criticalBudgetLabel": criticalBudgetLabel,
-                                   @"warningUnit": warningUnit, @"criticalUnit": criticalUnit } mutableCopy];
+                                   @"warningUnit": warningUnit, @"criticalUnit": criticalUnit, @"cycleLabel": cycleLabel,
+                                   @"dayUnit": dayUnit } mutableCopy];
     [self.serverRows addObject:row];
     [self.serverDocumentView addSubview:view];
     [self updateBillingPopup:row];

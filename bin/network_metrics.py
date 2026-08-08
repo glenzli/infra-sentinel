@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
+from infra_collectors import CallableCollector, CollectorCapability, CollectorContext, CollectorRegistry
 from infra_model import MetricPoint
 
 
@@ -109,6 +110,71 @@ def remote_state_metrics(remote: dict[str, Any]) -> list[MetricPoint]:
     return points
 
 
+def _server(remote: dict[str, Any], server_id: str) -> dict[str, Any] | None:
+    for candidate in remote.get("servers", []):
+        if isinstance(candidate, dict) and str(candidate.get("id") or "") == server_id:
+            return candidate
+    return None
+
+
+def _vps_collector(server_id: str) -> CallableCollector:
+    return CallableCollector(
+        capability=CollectorCapability(
+            id=f"network.vps:{server_id}",
+            source_id=f"vps:{server_id}",
+            source_kind="network.linux-vps",
+            resource_id="network",
+            metrics=("network.billable_bytes",),
+        ),
+        collect=lambda context: _vps_metrics_for_server(context, server_id),
+    )
+
+
+def _xray_collector(server_id: str) -> CallableCollector:
+    return CallableCollector(
+        capability=CollectorCapability(
+            id=f"network.xray:{server_id}",
+            source_id=f"xray:{server_id}",
+            source_kind="network.xray",
+            resource_id="network",
+            metrics=("network.logical_bytes",),
+        ),
+        collect=lambda context: _xray_metrics_for_server(context, server_id),
+    )
+
+
+def _vps_metrics_for_server(context: CollectorContext, server_id: str) -> Iterable[MetricPoint]:
+    server = _server(context.remote_state, server_id)
+    vps = server.get("vps") if isinstance(server, dict) else None
+    sample = vps.get("last_sample") if isinstance(vps, dict) else None
+    return vps_sample_metrics(server_id, sample) if isinstance(sample, dict) else ()
+
+
+def _xray_metrics_for_server(context: CollectorContext, server_id: str) -> Iterable[MetricPoint]:
+    server = _server(context.remote_state, server_id)
+    xray = server.get("xray_stats") if isinstance(server, dict) else None
+    sample = xray.get("last_sample") if isinstance(xray, dict) else None
+    return xray_sample_metrics(server_id, sample) if isinstance(sample, dict) else ()
+
+
+def network_collector_registry(server_ids: Iterable[str]) -> CollectorRegistry:
+    """Register exact network adapters; one remote source cannot block another."""
+    collectors = [CallableCollector(
+        capability=CollectorCapability(
+            id="network.mihomo",
+            source_id="local-mihomo",
+            source_kind="network.mihomo",
+            resource_id="network",
+            metrics=("network.bytes", "network.route_bytes"),
+        ),
+        collect=lambda context: local_sample_metrics(context.local_sample),
+    )]
+    for server_id in dict.fromkeys(str(item) for item in server_ids if str(item)):
+        collectors.extend((_vps_collector(server_id), _xray_collector(server_id)))
+    return CollectorRegistry(collectors)
+
+
 def network_metrics(sample: dict[str, Any], remote: dict[str, Any]) -> Iterable[MetricPoint]:
+    """Legacy functional facade kept for import and fixture equivalence checks."""
     yield from local_sample_metrics(sample)
     yield from remote_state_metrics(remote)

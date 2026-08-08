@@ -9,6 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "bin"))
 
 from infra_projection import build_infra_projection  # noqa: E402
+from infra_collectors import CollectorCapability, CollectorRun  # noqa: E402
 
 
 def sample() -> dict[str, object]:
@@ -63,6 +64,28 @@ class InfraProjectionTests(unittest.TestCase):
             "none",
         )
         self.assertEqual(projection["overall"]["status"], "degraded")
+
+    def test_metric_adapter_failure_is_exposed_as_source_health(self) -> None:
+        run = CollectorRun(
+            capability=CollectorCapability(
+                id="network.mihomo", source_id="local-mihomo", source_kind="network.mihomo",
+                resource_id="network", metrics=("network.bytes",),
+            ),
+            status="error",
+            error_kind="ValueError",
+        )
+
+        projection = build_infra_projection(
+            sample(),
+            {"kernel": {"total_bytes": 1}, "vps": {"total_bytes": 0}},
+            {"enabled": False, "status": "disabled", "servers": []},
+            "none",
+            (run,),
+        )
+
+        self.assertEqual(projection["overall"]["status"], "degraded")
+        self.assertEqual(projection["sources"][0]["status"], "error")
+        self.assertEqual(projection["collectors"][0]["error_kind"], "ValueError")
 
 
 if __name__ == "__main__":

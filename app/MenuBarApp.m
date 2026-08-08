@@ -7,6 +7,7 @@
 #import "TrafficFormatting.h"
 
 static NSString *const TSPythonSearchPath = @"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin";
+static NSString *const TSProjectionSchema = @"20260808.4";
 
 static NSDictionary *DictionaryValue(id value) {
     return [value isKindOfClass:[NSDictionary class]] ? value : @{};
@@ -55,16 +56,16 @@ static NSImage *TSStatusImage(NSString *status) {
 
 @interface AppDelegate : NSObject <NSApplicationDelegate, UNUserNotificationCenterDelegate>
 @property(nonatomic, copy) NSString *supportPath;
-@property(nonatomic, copy) NSString *statePath;
+@property(nonatomic, copy) NSString *projectionPath;
 @property(nonatomic, copy) NSString *configPath;
-@property(nonatomic, copy) NSString *helperPath;
+@property(nonatomic, copy) NSString *agentPath;
 @property(nonatomic, copy) NSString *configurationHelperPath;
 @property(nonatomic, copy) NSString *notificationStatePath;
 @property(nonatomic, copy) NSString *monitorStatus;
 @property(nonatomic, strong) NSStatusItem *statusItem;
 @property(nonatomic, strong) NSMenu *menu;
 @property(nonatomic, strong) NSTimer *refreshTimer;
-@property(nonatomic, strong) NSTask *sentinelTask;
+@property(nonatomic, strong) NSTask *agentTask;
 @property(nonatomic, strong) DashboardController *dashboardController;
 @property(nonatomic, strong) TSSettingsController *settingsController;
 @property(nonatomic, assign) BOOL isQuitting;
@@ -104,7 +105,7 @@ static NSImage *TSStatusImage(NSString *status) {
                     return;
                 }
                 [strongSelf.dashboardController showNotice:TSLocalized(strongSelf.language, @"notice.settings_applied")];
-                [strongSelf restartSentinel:nil];
+                [strongSelf restartAgent:nil];
             }];
     [self.settingsController setLanguage:self.language];
     [self.dashboardController setSettingsHandler:^{
@@ -112,7 +113,7 @@ static NSImage *TSStatusImage(NSString *status) {
     }];
     [self configureNotifications];
     if (prepared) {
-        [self startSentinelIfNeeded];
+        [self startAgentIfNeeded];
     }
     [self refresh:nil];
     self.refreshTimer = [NSTimer scheduledTimerWithTimeInterval:2.0
@@ -133,7 +134,7 @@ static NSImage *TSStatusImage(NSString *status) {
 - (void)applicationWillTerminate:(NSNotification *)notification {
     self.isQuitting = YES;
     [self.refreshTimer invalidate];
-    [self.sentinelTask terminate];
+    [self.agentTask terminate];
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
@@ -149,10 +150,10 @@ static NSImage *TSStatusImage(NSString *status) {
     NSURL *applicationSupport = [[NSFileManager defaultManager] URLsForDirectory:NSApplicationSupportDirectory
                                                                          inDomains:NSUserDomainMask].firstObject;
     self.supportPath = [[applicationSupport URLByAppendingPathComponent:@"Infra Sentinel" isDirectory:YES] path];
-    self.statePath = [self.supportPath stringByAppendingPathComponent:@"state/menubar.json"];
+    self.projectionPath = [self.supportPath stringByAppendingPathComponent:@"state/projection.json"];
     self.configPath = [self.supportPath stringByAppendingPathComponent:@"config.toml"];
     self.notificationStatePath = [self.supportPath stringByAppendingPathComponent:@"notification-state.json"];
-    self.helperPath = [[NSBundle mainBundle] pathForResource:@"sentinel" ofType:@"py" inDirectory:@"Sentinel"];
+    self.agentPath = [[NSBundle mainBundle] pathForResource:@"infra_agent" ofType:@"py" inDirectory:@"Sentinel"];
     self.configurationHelperPath = [[NSBundle mainBundle] pathForResource:@"configuration" ofType:@"py" inDirectory:@"Sentinel"];
 }
 
@@ -174,23 +175,23 @@ static NSImage *TSStatusImage(NSString *status) {
             return NO;
         }
     }
-    return self.helperPath.length > 0 && self.configurationHelperPath.length > 0;
+    return self.agentPath.length > 0 && self.configurationHelperPath.length > 0;
 }
 
-- (void)startSentinelIfNeeded {
-    if (self.sentinelTask != nil && self.sentinelTask.running) {
+- (void)startAgentIfNeeded {
+    if (self.agentTask != nil && self.agentTask.running) {
         return;
     }
     NSTask *task = [[NSTask alloc] init];
     task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/env"];
-    task.arguments = @[ @"python3", self.helperPath, @"--config", self.configPath, @"--watch" ];
+    task.arguments = @[ @"python3", self.agentPath, @"--config", self.configPath, @"--watch" ];
     task.currentDirectoryURL = [NSURL fileURLWithPath:self.supportPath isDirectory:YES];
     NSMutableDictionary<NSString *, NSString *> *environment = [NSProcessInfo processInfo].environment.mutableCopy;
     environment[@"PATH"] = TSPythonSearchPath;
     environment[@"PYTHONDONTWRITEBYTECODE"] = @"1";
-    environment[@"TRAFFIC_SENTINEL_STATE_DIR"] = [self.supportPath stringByAppendingPathComponent:@"state"];
-    environment[@"TRAFFIC_SENTINEL_PARENT_PID"] = [NSString stringWithFormat:@"%d", [NSProcessInfo processInfo].processIdentifier];
-    environment[@"TRAFFIC_SENTINEL_APP_NOTIFICATIONS"] = @"1";
+    environment[@"INFRA_SENTINEL_STATE_DIR"] = [self.supportPath stringByAppendingPathComponent:@"state"];
+    environment[@"INFRA_SENTINEL_PARENT_PID"] = [NSString stringWithFormat:@"%d", [NSProcessInfo processInfo].processIdentifier];
+    environment[@"INFRA_SENTINEL_APP_NOTIFICATIONS"] = @"1";
     task.environment = environment;
     task.standardOutput = [NSFileHandle fileHandleWithNullDevice];
     task.standardError = [NSFileHandle fileHandleWithNullDevice];
@@ -199,17 +200,17 @@ static NSImage *TSStatusImage(NSString *status) {
     task.terminationHandler = ^(NSTask *finishedTask) {
         dispatch_async(dispatch_get_main_queue(), ^{
             AppDelegate *strongSelf = weakSelf;
-            if (strongSelf == nil || strongSelf.sentinelTask != finishedTask) {
+            if (strongSelf == nil || strongSelf.agentTask != finishedTask) {
                 return;
             }
-            strongSelf.sentinelTask = nil;
+            strongSelf.agentTask = nil;
             if (strongSelf.isQuitting || strongSelf.isRestarting) {
                 return;
             }
             strongSelf.monitorStatus = [NSString stringWithFormat:TSLocalized(strongSelf.language, @"monitor.exit_format"), finishedTask.terminationStatus];
             [strongSelf refresh:nil];
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                [strongSelf startSentinelIfNeeded];
+                [strongSelf startAgentIfNeeded];
             });
         });
     };
@@ -219,21 +220,21 @@ static NSImage *TSStatusImage(NSString *status) {
         self.monitorStatus = [NSString stringWithFormat:TSLocalized(self.language, @"monitor.launch_failed_format"), error.localizedDescription ?: TSLocalized(self.language, @"error.unknown")];
         return;
     }
-    self.sentinelTask = task;
+    self.agentTask = task;
     self.monitorStatus = TSLocalized(self.language, @"monitor.running");
 }
 
 - (NSDictionary *)loadState {
-    NSData *data = [NSData dataWithContentsOfFile:self.statePath];
+    NSData *data = [NSData dataWithContentsOfFile:self.projectionPath];
     if (data == nil) {
         return nil;
     }
     id parsed = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-    return [parsed isKindOfClass:[NSDictionary class]] ? parsed : nil;
+    return [parsed isKindOfClass:[NSDictionary class]] && [parsed[@"schema"] isEqual:TSProjectionSchema] ? parsed : nil;
 }
 
 - (NSDictionary *)loadHealth {
-    NSString *healthPath = [[self.statePath stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"health.json"];
+    NSString *healthPath = [[self.projectionPath stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"health.json"];
     NSData *data = [NSData dataWithContentsOfFile:healthPath];
     id parsed = data == nil ? nil : [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
     return [parsed isKindOfClass:[NSDictionary class]] ? parsed : nil;
@@ -354,7 +355,7 @@ static NSImage *TSStatusImage(NSString *status) {
 
 - (void)addFooterItems {
     [self.menu addItem:[NSMenuItem separatorItem]];
-    [self addActionItem:TSLocalized(self.language, @"menu.restart") action:@selector(restartSentinel:)];
+    [self addActionItem:TSLocalized(self.language, @"menu.restart") action:@selector(restartAgent:)];
     [self addActionItem:TSLocalized(self.language, @"menu.settings") action:@selector(showSettings:)];
     [self addActionItem:TSLocalized(self.language, @"menu.state") action:@selector(showStateFolder:)];
     NSMenuItem *languageItem = [[NSMenuItem alloc] initWithTitle:TSLocalized(self.language, @"menu.language") action:nil keyEquivalent:@""];
@@ -392,8 +393,8 @@ static NSImage *TSStatusImage(NSString *status) {
         return;
     }
     if (state == nil) {
-        [self setStatusIcon:[self.sentinelTask isRunning] ? @"starting" : @"degraded"
-                     tooltip:[self.sentinelTask isRunning] ? TSLocalized(self.language, @"status.starting") : TSLocalized(self.language, @"status.abnormal")];
+        [self setStatusIcon:[self.agentTask isRunning] ? @"starting" : @"degraded"
+                     tooltip:[self.agentTask isRunning] ? TSLocalized(self.language, @"status.starting") : TSLocalized(self.language, @"status.abnormal")];
         [self addActionItem:TSLocalized(self.language, @"menu.open") action:@selector(showDashboard:)];
         [self addDisabledItem:TSLocalized(self.language, @"status.first_sample")];
         [self addFooterItems];
@@ -437,14 +438,14 @@ static NSImage *TSStatusImage(NSString *status) {
     [self.settingsController showSettings:sender];
 }
 
-- (void)restartSentinel:(id)sender {
+- (void)restartAgent:(id)sender {
     self.isRestarting = YES;
     self.monitorStatus = TSLocalized(self.language, @"monitor.restarting");
     [self refresh:nil];
-    [self.sentinelTask terminate];
+    [self.agentTask terminate];
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         self.isRestarting = NO;
-        [self startSentinelIfNeeded];
+        [self startAgentIfNeeded];
         [self refresh:nil];
     });
 }

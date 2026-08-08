@@ -17,6 +17,55 @@ AttributionMethod = Literal["exact", "mapped", "inferred", "residual"]
 
 
 @dataclass(frozen=True)
+class Resource:
+    """A user-visible class of infrastructure usage, such as ``network``."""
+
+    id: str
+    label: str
+
+
+@dataclass(frozen=True)
+class Source:
+    """A configured origin of facts for one resource."""
+
+    id: str
+    kind: str
+    resource_id: str
+    enabled: bool
+    label: str | None = None
+
+
+@dataclass(frozen=True)
+class Entity:
+    """A stable, privacy-safe subject within a resource source."""
+
+    id: str
+    source_id: str
+    resource_id: str
+    kind: str
+    label: str | None = None
+
+
+@dataclass(frozen=True)
+class Attribution:
+    """Explains how a metric is associated with a source or entity."""
+
+    method: AttributionMethod
+    confidence: Confidence
+    entity_id: str | None = None
+
+
+@dataclass(frozen=True)
+class Policy:
+    """A configured evaluation rule; runtime results remain separate events."""
+
+    id: str
+    kind: str
+    resource_id: str
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
 class MetricPoint:
     """A measured interval or point-in-time fact with privacy-safe dimensions."""
 

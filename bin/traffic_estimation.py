@@ -58,7 +58,7 @@ def estimate_traffic(
 def estimate_fleet_traffic(
     servers: Iterable[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Measure a fleet only from VPS/Xray pairs that are comparable on both sides."""
+    """Expose a factor only for one physical VPS/Xray measurement pair."""
     server_rows = list(servers)
     comparable = [
         row for row in server_rows
@@ -72,17 +72,30 @@ def estimate_fleet_traffic(
     modes = {str(row.get("billing_mode", "both")) for row in comparable}
     billing_mode = next(iter(modes)) if len(modes) == 1 else "mixed"
     effective_legs = ideal_billable_bytes / xray_logical_bytes if xray_logical_bytes > 0 else 0.0
-    result = _estimate_traffic(
-        sum(max(0, int(row.get("vps_billable_bytes", 0))) for row in comparable),
-        sum(max(0, int(row.get("vps_packet_count", 0))) for row in comparable),
-        sum(max(0, int(row.get("packet_covered_bytes", 0))) for row in comparable),
-        xray_logical_bytes,
-        ideal_billable_bytes,
-        bool(comparable),
-        bool(comparable),
-        billing_mode,
-        effective_legs,
-    )
+    if len(comparable) == 1:
+        row = comparable[0]
+        result = estimate_traffic(
+            int(row.get("vps_billable_bytes", 0)),
+            int(row.get("vps_packet_count", 0)),
+            int(row.get("packet_covered_bytes", 0)),
+            int(row.get("xray_logical_bytes", 0)),
+            True,
+            True,
+            TrafficEstimationConfig(str(row.get("billing_mode", "both"))),
+        )
+    elif comparable:
+        result = _estimate_traffic(
+            0, 0, 0, xray_logical_bytes, ideal_billable_bytes,
+            False, False, billing_mode, effective_legs,
+        )
+        result.update({
+            "method": "per_vps_only",
+            "comparison_status": "multiple_servers",
+            "xray_logical_bytes": xray_logical_bytes,
+            "ideal_billable_bytes": int(round(ideal_billable_bytes)),
+        })
+    else:
+        result = _estimate_traffic(0, 0, 0, 0, 0, False, False, "both", 0.0)
     result["comparable_server_count"] = len(comparable)
     result["excluded_server_count"] = len(server_rows) - len(comparable)
     result["comparable_server_ids"] = [str(row.get("id", "remote")) for row in comparable]
@@ -107,6 +120,8 @@ def _estimate_traffic(
         "vps_billing_legs": billing_legs,
         "xray_logical_bytes": xray_logical_bytes,
         "empirical_ready": empirical_ready,
+        "comparison_status": "waiting",
+        "minimum_expected_multiplier": billing_legs,
         "observed_multiplier": None,
         "ideal_billable_bytes": None,
         "billable_overhead_bytes": None,
@@ -125,8 +140,18 @@ def _estimate_traffic(
     ideal_billable = int(round(ideal_billable_bytes))
     overhead_bytes = max(0, vps_billable_bytes - ideal_billable)
     overhead_share = overhead_bytes / vps_billable_bytes if vps_billable_bytes > 0 else 0.0
+    observed_multiplier = vps_billable_bytes / xray_logical_bytes
+    result["observed_multiplier"] = observed_multiplier
+    if observed_multiplier < billing_legs:
+        result.update({
+            "method": "incomplete_route_coverage",
+            "empirical_ready": False,
+            "comparison_status": "incomplete_route_coverage",
+        })
+        return result
+
     result.update({
-        "observed_multiplier": vps_billable_bytes / xray_logical_bytes,
+        "comparison_status": "valid",
         "ideal_billable_bytes": ideal_billable,
         "billable_overhead_bytes": overhead_bytes,
         "billable_overhead_ratio": overhead_bytes / ideal_billable if ideal_billable > 0 else 0.0,

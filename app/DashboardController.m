@@ -220,17 +220,27 @@ static void DrawDashboardText(NSString *text, NSRect rect, NSFont *font, NSColor
     if (![self confirmSessionReset]) {
         return;
     }
+    NSString *commandID = [NSUUID UUID].UUIDString.lowercaseString;
     NSDictionary *request = @{
-        @"schema": @1,
-        @"id": [NSUUID UUID].UUIDString,
-        @"requested_at": @([[NSDate date] timeIntervalSince1970]),
+        @"schema": @"20260808.4",
+        @"id": commandID,
+        @"type": @"session.reset",
+        @"requested_at": [[NSDate date] description],
+        @"payload": @{},
     };
     NSError *error = nil;
     NSData *data = [NSJSONSerialization dataWithJSONObject:request options:0 error:&error];
-    NSString *path = [self.stateDirectory stringByAppendingPathComponent:@"session-reset.request.json"];
+    NSString *commandsDirectory = [self.stateDirectory stringByAppendingPathComponent:@"commands"];
+    if (![[NSFileManager defaultManager] createDirectoryAtPath:commandsDirectory
+                                    withIntermediateDirectories:YES attributes:nil error:&error]) {
+        self.dashboardView.notice = [NSString stringWithFormat:TSLocalized(self.language, @"notice.reset_failed"),
+                                     error.localizedDescription ?: TSLocalized(self.language, @"error.unknown")];
+        return;
+    }
+    NSString *path = [commandsDirectory stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.request.json", commandID]];
     BOOL written = data != nil && [data writeToFile:path options:NSDataWritingAtomic error:&error];
     self.dashboardView.notice = written
-        ? TSLocalized(self.language, @"notice.reset")
+        ? TSLocalized(self.language, @"notice.reset_requested")
         : [NSString stringWithFormat:TSLocalized(self.language, @"notice.reset_failed"),
            error.localizedDescription ?: TSLocalized(self.language, @"error.unknown")];
 }

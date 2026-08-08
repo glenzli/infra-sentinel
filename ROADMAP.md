@@ -23,7 +23,7 @@ Infra Sentinel 面向个人拥有或控制的本地设备、代理链路、VPS �
 | 阶段 | 建议版本 | 结果 | 状态 |
 | --- | --- | --- | --- |
 | 0 | 1.1 | 稳定多 VPS 与现有网络统计 | 进行中 |
-| 1 | 1.2 | 建立统一指标和 Collector 合同 | 进行中 |
+| 1 | 1.2 | 建立统一指标和 Collector 合同 | 最小闭环已完成 |
 | 2 | 1.3 | SQLite 时序存储与一次性迁移 | 进行中 |
 | 3 | 2.0 | Infra Sentinel 外壳与健康状态菜单栏 | 进行中 |
 | 4 | 2.1 | 首个 API 使用与配额模块 | 候选 |
@@ -68,7 +68,7 @@ UI projections ── Notifications ── Insights
 - **Projections**：为菜单栏、仪表板、报告和通知生成只读视图；
 - **Native App**：窗口、导航、交互和本地化，不承担业务计算。
 
-现有 Mihomo、VPS 和 Xray 逻辑迁入网络 Collector。`sentinel.py` 最终只负责组合与生命周期，Dashboard Controller 最终只负责界面路由。
+现有 Mihomo、VPS 和 Xray 逻辑迁入网络 Collector。`infra_agent.py` 负责组合、生命周期、Projection 与本地命令；Dashboard Controller 只负责界面路由与协议消费。
 
 ## 统一指标模型
 
@@ -157,7 +157,7 @@ critical_bytes = 1374389534720
 | Xray 用户统计 | `network.xray` Collector / attribution input | 保留用户维度，输出标准指标 |
 | `SessionMeter` | 查询范围与会话投影 | 会话不再拥有一套独立账本 |
 | `events.jsonl` 与 AlertEngine | Policies 与 Incidents | 保留告警状态机语义 |
-| `menubar.json` | Overview projection | 作为派生视图，不作为事实来源 |
+| `menubar.json` | `projection.json` | 版本化本地 Agent Projection，不作为事实来源 |
 | JSONL 主存储 | SQLite 主存储 | 单次导入后停止双写；JSONL 仅用于导出和诊断 |
 | `[monitor]` / `[remote]` | `[[sources]]` / `[[policies]]` | 已实施一次性迁移并备份旧配置 |
 
@@ -186,7 +186,7 @@ critical_bytes = 1374389534720
 
 ### 1. 建立 Infra Core
 
-状态：进行中。
+状态：最小闭环已完成；后续资源模块接入时继续扩展。
 
 范围：
 
@@ -201,7 +201,7 @@ critical_bytes = 1374389534720
 - 新增一个虚拟 Collector 不需要修改 Runtime、存储和 UI 核心；
 - 单位、counter/gauge 语义和来源身份拥有固定测试；
 - 网络标准指标与当前流量账本在 fixtures 上完全对得上；
-- 没有把新模型塞回 `sentinel.py` 或 Native Controller。
+- 没有把新模型塞回 `infra_agent.py` 或 Native Controller。
 
 ### 2. SQLite 时序存储与一次性迁移
 
@@ -353,12 +353,12 @@ critical_bytes = 1374389534720
 
 ## 当前建议的下一步
 
-在当前多 VPS 修改稳定并提交后，启动阶段 1，但只完成以下最小闭环：
+阶段 1 的最小闭环已经落地：
 
-1. 定义标准指标与 Source 合同；
-2. 建立 Collector 注册与隔离生命周期；
-3. 用适配器把 Mihomo、VPS、Xray 输出为标准网络指标；
-4. 用 fixtures 验证新旧流量结果完全一致；
-5. 暂不改菜单栏、不迁 SQLite、不增加 API/GPU/磁盘采集。
+1. `MetricPoint`、Source、Resource、Entity、Attribution 与 Policy 的基础合同已建立；
+2. Mihomo、每台 VPS、每台 VPS 的 Xray 都通过独立 Collector 注册，失败互不阻塞；
+3. 网络适配器输出与此前账本在 fixtures 中逐点相等；
+4. Collector 健康状态作为运行时状态进入 Projection，不与业务流量或告警混算；
+5. 没有新增 API、GPU 或磁盘采集，也没有把新模型塞回 Native Controller。
 
-这个闭环完成后，阶段 2 和阶段 3 才有稳定基础，也能避免边做新 UI 边反复修改底层数据合同。
+下一步先完成阶段 0 的稳定性观察与网络 golden fixtures；随后再进入阶段 2 的查询、保留与降采样闭环，不以增加新资源模块为借口跳过数据基础设施。

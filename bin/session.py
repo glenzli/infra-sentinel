@@ -19,31 +19,13 @@ from vps import VPS_SAMPLE_SCHEMA
 
 
 SESSION_SCHEMA = 6
-RESET_REQUEST_SCHEMA = 1
 HISTORY_LIMIT = 2_000
 HISTORY_WINDOW_SECONDS = 15 * 60
-RESET_REQUEST_NAME = "session-reset.request.json"
 ROUTES = ("proxy", "direct", "blocked", "unknown", "unattributed")
 
 
 def iso_now(epoch: float | None = None) -> str:
     return datetime.fromtimestamp(time.time() if epoch is None else epoch).astimezone().isoformat(timespec="seconds")
-
-
-def consume_reset_request(state_dir: Path) -> dict[str, Any] | None:
-    """Consume a dashboard request exactly once; malformed requests are ignored."""
-    path = state_dir / RESET_REQUEST_NAME
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    try:
-        path.unlink()
-    except OSError:
-        return None
-    if payload.get("schema") != RESET_REQUEST_SCHEMA or not isinstance(payload.get("id"), str):
-        return None
-    return payload
 
 
 class SessionMeter:

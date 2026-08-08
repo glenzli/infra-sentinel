@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 import sys
 import tempfile
@@ -18,14 +19,21 @@ from configuration import (  # noqa: E402
     read_config,
 )
 from billing_policy import BillingBudgetPolicy, BillingBudgetTransition  # noqa: E402
+from agent_protocol import (  # noqa: E402
+    COMMAND_SCHEMA,
+    PROJECTION_SCHEMA,
+    complete_command,
+    consume_commands,
+)
 from remote import RemoteServerConfig  # noqa: E402
-from sentinel import (  # noqa: E402
+from infra_agent import (  # noqa: E402
     AlertEngine,
     SAMPLE_SCHEMA,
+    apply_agent_commands,
     build_billing_event,
     latest_delta_event,
     totals_for_window,
-    write_menubar_state,
+    write_projection_state,
 )
 from sample_timing import (  # noqa: E402
     CATCH_UP_INTERVAL,
@@ -33,7 +41,7 @@ from sample_timing import (  # noqa: E402
     annotate_sample_timing,
     classify_interval,
 )
-from session import RESET_REQUEST_SCHEMA, SessionMeter, consume_reset_request  # noqa: E402
+from session import SessionMeter  # noqa: E402
 from snapshot import create_snapshot  # noqa: E402
 from traffic_estimation import (  # noqa: E402
     TrafficEstimationConfig,
@@ -120,11 +128,11 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config.monitor.sample_seconds, 5)
         self.assertEqual(len(config.remote_servers), 0)
 
-    def test_menubar_state_contains_generic_infra_projection(self) -> None:
+    def test_agent_projection_contains_generic_infra_projection(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             state_dir = Path(temporary)
             config = make_config(state_dir)
-            write_menubar_state(
+            write_projection_state(
                 config,
                 sample(100, 40, 60),
                 {"up_bytes": 40, "down_bytes": 60},
@@ -133,8 +141,9 @@ class RuntimeConfigTests(unittest.TestCase):
                 {"enabled": False, "status": "disabled", "servers": []},
                 {"kernel": {"total_bytes": 100}, "vps": {"total_bytes": 0}},
             )
-            payload = json.loads((state_dir / "menubar.json").read_text(encoding="utf-8"))
-            self.assertEqual(payload["schema"], "20260808.3")
+            payload = json.loads((state_dir / "projection.json").read_text(encoding="utf-8"))
+            self.assertEqual(payload["schema"], PROJECTION_SCHEMA)
+            self.assertEqual(payload["protocol"]["transport"], "local-file")
             self.assertEqual(payload["infra"]["resources"][0]["id"], "network")
 
 class AlertEngineTests(unittest.TestCase):
@@ -289,6 +298,20 @@ class TrafficEstimationTests(unittest.TestCase):
         self.assertFalse(result["empirical_ready"])
         self.assertIsNone(result["observed_multiplier"])
 
+    def test_marks_a_below_baseline_factor_as_incomplete_route_coverage(self) -> None:
+        result = estimate_traffic(
+            150,
+            1,
+            150,
+            100,
+            True,
+            True,
+            TrafficEstimationConfig("both"),
+        )
+        self.assertEqual(result["comparison_status"], "incomplete_route_coverage")
+        self.assertFalse(result["empirical_ready"])
+        self.assertEqual(result["observed_multiplier"], 1.5)
+
     def test_trend_normalizes_services_and_exact_total(self) -> None:
         result = minute_rate_trend([
             {
@@ -364,7 +387,9 @@ class SessionMeterTests(unittest.TestCase):
             self.assertEqual(snapshot["vps"]["out_bytes"], 170)
             self.assertEqual([row["id"] for row in snapshot["remote_servers"]], ["one", "two"])
             self.assertEqual(snapshot["breakdown"]["xray_logical_bytes"], 120)
-            self.assertEqual(snapshot["breakdown"]["observed_multiplier"], 2.5)
+            self.assertEqual(snapshot["breakdown"]["comparison_status"], "multiple_servers")
+            self.assertIsNone(snapshot["breakdown"]["observed_multiplier"])
+            self.assertEqual([server["breakdown"]["observed_multiplier"] for server in snapshot["remote_servers"]], [2.5, 2.5])
 
     def test_fleet_multiplier_excludes_vps_without_an_aligned_xray_pair(self) -> None:
         def remote(epoch: float, first_in: int, first_out: int, second_in: int, second_out: int) -> dict[str, object]:
@@ -474,15 +499,62 @@ class SessionMeterTests(unittest.TestCase):
             self.assertEqual(snapshot["breakdown"]["vps_billing_legs"], 1.0)
             self.assertEqual(snapshot["breakdown"]["observed_multiplier"], 1.375)
 
-    def test_consumes_a_dashboard_reset_request_once(self) -> None:
+    def test_consumes_and_completes_a_dashboard_reset_command(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "session-reset.request.json"
+            commands = Path(temporary) / "commands"
+            commands.mkdir()
+            command_id = "b7adfb24-f31b-4c7d-8a2b-6f198844a263"
+            path = commands / f"{command_id}.request.json"
             path.write_text(
-                json.dumps({"schema": RESET_REQUEST_SCHEMA, "id": "reset-1"}),
+                json.dumps({
+                    "schema": COMMAND_SCHEMA,
+                    "id": command_id,
+                    "type": "session.reset",
+                    "requested_at": "2026-08-08T12:00:00+08:00",
+                    "payload": {},
+                }),
                 encoding="utf-8",
             )
-            self.assertEqual(consume_reset_request(Path(temporary))["id"], "reset-1")
-            self.assertIsNone(consume_reset_request(Path(temporary)))
+            command = next(consume_commands(Path(temporary)))
+            self.assertEqual(command.id, command_id)
+            self.assertFalse(path.exists())
+            complete_command(command, status="ok")
+            result = json.loads((commands / f"{command_id}.result.json").read_text(encoding="utf-8"))
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(list(consume_commands(Path(temporary))), [])
+
+    def test_agent_applies_reset_through_the_local_command_protocol(self) -> None:
+        class RemoteMonitor:
+            def reset_session(self, epoch: float) -> dict[str, object]:
+                return {"enabled": False, "status": "disabled", "servers": [], "epoch": epoch}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary)
+            config = make_config(state_dir)
+            command_id = "b7adfb24-f31b-4c7d-8a2b-6f198844a263"
+            commands = state_dir / "commands"
+            commands.mkdir()
+            (commands / f"{command_id}.request.json").write_text(json.dumps({
+                "schema": COMMAND_SCHEMA,
+                "id": command_id,
+                "type": "session.reset",
+                "requested_at": "2026-08-08T12:00:00+08:00",
+                "payload": {},
+            }), encoding="utf-8")
+            meter = SessionMeter(state_dir)
+
+            remote_state = apply_agent_commands(
+                config,
+                100.0,
+                RemoteMonitor(),  # type: ignore[arg-type]
+                meter,
+                logging.getLogger("infra-agent-test"),
+            )
+
+            self.assertEqual(remote_state["status"], "disabled")
+            self.assertEqual(meter.started_reason, "manual")
+            result = json.loads((commands / f"{command_id}.result.json").read_text(encoding="utf-8"))
+            self.assertEqual(result["status"], "ok")
 
     def test_catch_up_bytes_stay_in_totals_but_not_rate_trend(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
+from infra_collectors import CollectorRun
 from infra_model import MetricPoint, SourceStatus
 from infra_registry import DEFAULT_SOURCE_REGISTRY
 
@@ -18,17 +20,26 @@ def _number(value: Any) -> int:
         return 0
 
 
-def _status_for(level: str, remote: dict[str, Any]) -> str:
+def _collector_status(source_id: str, configured_status: str, runs: Iterable[CollectorRun]) -> str:
+    for run in runs:
+        if run.capability.source_id == source_id and run.status == "error":
+            return "error"
+    return configured_status
+
+
+def _status_for(level: str, remote: dict[str, Any], runs: Iterable[CollectorRun]) -> str:
     if level == "critical":
         return "critical"
     if level == "warning":
         return "warning"
+    if any(run.status == "error" for run in runs):
+        return "degraded"
     if remote.get("enabled") and remote.get("status") == "error":
         return "degraded"
     return "healthy"
 
 
-def _remote_sources(remote: dict[str, Any]) -> list[SourceStatus]:
+def _remote_sources(remote: dict[str, Any], runs: Iterable[CollectorRun]) -> list[SourceStatus]:
     sources: list[SourceStatus] = []
     for server in remote.get("servers", []):
         if not isinstance(server, dict):
@@ -41,7 +52,11 @@ def _remote_sources(remote: dict[str, Any]) -> list[SourceStatus]:
             kind="network.linux-vps",
             resource_id="network",
             enabled=enabled,
-            status=str(vps.get("status") or ("waiting" if enabled else "disabled")),
+            status=_collector_status(
+                f"vps:{server_id}",
+                str(vps.get("status") or ("waiting" if enabled else "disabled")),
+                runs,
+            ),
             label=str(server.get("label") or server_id),
             updated_at=vps.get("updated_at") if isinstance(vps.get("updated_at"), str) else None,
         ))
@@ -52,7 +67,7 @@ def _remote_sources(remote: dict[str, Any]) -> list[SourceStatus]:
                 kind="network.xray",
                 resource_id="network",
                 enabled=True,
-                status=str(xray.get("status") or "waiting"),
+                status=_collector_status(f"xray:{server_id}", str(xray.get("status") or "waiting"), runs),
                 label=str(server.get("label") or server_id),
                 updated_at=xray.get("updated_at") if isinstance(xray.get("updated_at"), str) else None,
             ))
@@ -64,6 +79,7 @@ def build_infra_projection(
     session: dict[str, Any],
     remote: dict[str, Any],
     alert_level: str,
+    collector_runs: tuple[CollectorRun, ...] = (),
 ) -> dict[str, Any]:
     """Produce a generic overview without changing existing network accounting."""
 
@@ -80,11 +96,11 @@ def build_infra_projection(
         kind="network.mihomo",
         resource_id="network",
         enabled=True,
-        status="ok",
+        status=_collector_status("local-mihomo", "ok", collector_runs),
         label="Mihomo",
         updated_at=timestamp or None,
     )]
-    sources.extend(_remote_sources(remote))
+    sources.extend(_remote_sources(remote, collector_runs))
     source_dicts = [source.as_dict() for source in sources]
     active_sources = [source for source in sources if source.enabled]
     online_sources = [source for source in active_sources if source.status == "ok"]
@@ -114,12 +130,12 @@ def build_infra_projection(
         "schema": PROJECTION_SCHEMA,
         "product": {"id": "infra-sentinel", "mode": "network"},
         "overall": {
-            "status": _status_for(alert_level, remote),
+            "status": _status_for(alert_level, remote, collector_runs),
             "active_alerts": 0 if alert_level == "none" else 1,
         },
         "resources": [{
             "id": "network",
-            "status": _status_for(alert_level, remote),
+            "status": _status_for(alert_level, remote, collector_runs),
             "enabled": True,
             "primary_metric": "network.billable_bytes" if billing_available else "network.local_bytes",
             "primary_value": primary_total,
@@ -131,4 +147,5 @@ def build_infra_projection(
         "sources": source_dicts,
         "metrics": metrics,
         "capabilities": DEFAULT_SOURCE_REGISTRY.capabilities(),
+        "collectors": [run.as_dict() for run in collector_runs],
     }

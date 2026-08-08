@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Network runtime and Infra Sentinel overview projection producer."""
+"""Infra Agent runtime: sample, store, project, and serve local commands."""
 
 from __future__ import annotations
 
@@ -20,7 +20,9 @@ from typing import Any
 import uuid
 
 from billing_policy import BillingBudgetEngine, BillingBudgetTransition
+from agent_protocol import PROJECTION_SCHEMA, complete_command, consume_commands, write_projection
 from configuration import Config, StateConfig, read_config
+from infra_collectors import CollectorContext, CollectorRegistry, CollectorRun, collected_points
 from infra_projection import build_infra_projection
 from metric_store import MetricStore
 from mihomo_traffic import (
@@ -33,16 +35,16 @@ from mihomo_traffic import (
     load_tracker,
     save_tracker,
 )
-from network_metrics import network_metrics
+from network_metrics import network_collector_registry
 from sample_timing import annotate_sample_timing, sample_is_realtime
 from remote import RemoteFleetMonitor
-from session import SessionMeter, consume_reset_request
+from session import SessionMeter
 
 
-PARENT_PROCESS_ENV = "TRAFFIC_SENTINEL_PARENT_PID"
-APP_NOTIFICATIONS_ENV = "TRAFFIC_SENTINEL_APP_NOTIFICATIONS"
+PARENT_PROCESS_ENV = "INFRA_SENTINEL_PARENT_PID"
+APP_NOTIFICATIONS_ENV = "INFRA_SENTINEL_APP_NOTIFICATIONS"
 SAMPLE_SCHEMA = 5
-MENUBAR_STATE_SCHEMA = "20260808.3"
+AGENT_RUNTIME_SCHEMA = PROJECTION_SCHEMA
 
 
 def iso_now(epoch: float | None = None) -> str:
@@ -64,7 +66,7 @@ def ensure_state_dir(config: Config) -> None:
 
 
 def acquire_watch_lock(config: Config) -> Any | None:
-    handle = (config.state_dir / "sentinel.lock").open("a", encoding="utf-8")
+    handle = (config.state_dir / "infra-agent.lock").open("a", encoding="utf-8")
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -311,7 +313,7 @@ def notify_billing(transition: BillingBudgetTransition) -> None:
     )
 
 
-def write_menubar_state(
+def write_projection_state(
     config: Config,
     sample: dict[str, Any],
     warning: dict[str, int],
@@ -319,6 +321,7 @@ def write_menubar_state(
     level: str,
     remote: dict[str, Any],
     session: dict[str, Any],
+    collector_runs: tuple[CollectorRun, ...] = (),
     storage: dict[str, Any] | None = None,
 ) -> None:
     remote_servers = remote.get("servers", [])
@@ -333,7 +336,7 @@ def write_menubar_state(
     else:
         xray_status = "ok"
     state = {
-        "schema": MENUBAR_STATE_SCHEMA,
+        "agent_runtime_schema": AGENT_RUNTIME_SCHEMA,
         "updated_at": sample["timestamp"],
         "epoch": sample["epoch"],
         "observed_seconds": sample["observed_seconds"],
@@ -372,14 +375,13 @@ def write_menubar_state(
         },
         "session": session,
         "storage": storage or {"schema": "20260808.2", "kind": "sqlite", "status": "waiting"},
+        "collectors": [run.as_dict() for run in collector_runs],
         # This is a derived, generic resource projection.  The legacy-shaped
         # network fields above remain facts for the detailed network panel.
-        "infra": build_infra_projection(sample, session, remote, level),
+        "infra": build_infra_projection(sample, session, remote, level, collector_runs),
         "last_event": latest_delta_event(config.state_dir / "events.jsonl"),
     }
-    temporary = config.state_dir / ".menubar.json.tmp"
-    temporary.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-    temporary.replace(config.state_dir / "menubar.json")
+    write_projection(config.state_dir, state)
 
 
 def write_health_state(config: Config, status: str, message: str | None = None) -> None:
@@ -392,11 +394,11 @@ def write_health_state(config: Config, status: str, message: str | None = None) 
 
 
 def configure_logger(config: Config) -> logging.Logger:
-    logger = logging.getLogger("net-traffic-sentinel")
+    logger = logging.getLogger("infra-agent")
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
     handler = RotatingFileHandler(
-        config.state_dir / "sentinel.log",
+        config.state_dir / "infra-agent.log",
         maxBytes=config.state.max_log_bytes,
         backupCount=config.state.backups,
         encoding="utf-8",
@@ -404,6 +406,33 @@ def configure_logger(config: Config) -> logging.Logger:
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logger.addHandler(handler)
     return logger
+
+
+def apply_agent_commands(
+    config: Config,
+    sample_epoch: float,
+    remote_monitor: RemoteFleetMonitor,
+    session_meter: SessionMeter,
+    logger: logging.Logger,
+) -> dict[str, Any] | None:
+    """Apply idempotent local commands before recording the current interval."""
+    reset_remote_state: dict[str, Any] | None = None
+    for command in consume_commands(config.state_dir):
+        if command.type != "session.reset":
+            complete_command(command, status="rejected", message="unsupported command")
+            continue
+        try:
+            session_meter.reset(sample_epoch, "manual")
+            remote_state = remote_monitor.reset_session(sample_epoch)
+            session_meter.set_vps_baseline(remote_state)
+        except Exception as exc:
+            complete_command(command, status="error", message=type(exc).__name__)
+            logger.warning("agent command failed id=%s type=%s", command.id, command.type)
+            continue
+        complete_command(command, status="ok")
+        logger.info("agent command applied id=%s type=%s", command.id, command.type)
+        reset_remote_state = remote_state
+    return reset_remote_state
 
 
 def handle_sample(
@@ -416,6 +445,7 @@ def handle_sample(
     remote_monitor: RemoteFleetMonitor,
     session_meter: SessionMeter,
     metric_store: MetricStore,
+    collector_registry: CollectorRegistry,
     logger: logging.Logger,
 ) -> dict[str, Any]:
     sample = collect_interval(client, tracker, config.monitor.sample_seconds)
@@ -454,12 +484,15 @@ def handle_sample(
         append_jsonl(config.state_dir / "events.jsonl", event, config.state)
         notify(event_type, level, warning, critical, config)
 
-    reset_request = consume_reset_request(config.state_dir)
-    if reset_request is not None:
-        session_meter.reset(float(sample["epoch"]), "manual")
-        remote_state = remote_monitor.reset_session(float(sample["epoch"]))
-        session_meter.set_vps_baseline(remote_state)
-        logger.info("dashboard session reset id=%s", reset_request["id"])
+    reset_remote_state = apply_agent_commands(
+        config,
+        float(sample["epoch"]),
+        remote_monitor,
+        session_meter,
+        logger,
+    )
+    if reset_remote_state is not None:
+        remote_state = reset_remote_state
     elif session_meter.started_epoch is None:
         remote_state = remote_monitor.maybe_poll(sample["epoch"])
         session_meter.reset(float(sample["epoch"]), "automatic")
@@ -476,8 +509,12 @@ def handle_sample(
         event = build_billing_event(transition)
         append_jsonl(config.state_dir / "events.jsonl", event, config.state)
         notify_billing(transition)
-    metric_store.write(network_metrics(sample, remote_state))
-    write_menubar_state(
+    collector_runs = collector_registry.collect(CollectorContext(sample, remote_state))
+    for run in collector_runs:
+        if run.status == "error":
+            logger.warning("metric collector failed id=%s kind=%s", run.capability.id, run.error_kind)
+    metric_store.write(collected_points(collector_runs))
+    write_projection_state(
         config,
         sample,
         warning,
@@ -487,6 +524,7 @@ def handle_sample(
         ),
         remote_state,
         session_snapshot,
+        collector_runs,
         metric_store.summary(),
     )
     write_health_state(config, "ok")
@@ -514,11 +552,11 @@ def print_current(client: MihomoApiClient) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="通过 Mihomo 本机接口分析代理流量")
+    parser = argparse.ArgumentParser(description="Infra Sentinel local agent")
     parser.add_argument("--config", type=Path, help="TOML 配置；本机 Mihomo 无需配置")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--once", action="store_true", help="显示当前 Mihomo 累计与活跃域名")
-    mode.add_argument("--watch", action="store_true", help="持续采样并更新 App")
+    mode.add_argument("--watch", action="store_true", help="持续采样并发布本地 Projection")
     args = parser.parse_args()
     try:
         config = read_config(args.config)
@@ -542,11 +580,12 @@ def main() -> int:
         if lock is None:
             raise RuntimeError("另一个监控实例已经在运行")
         metric_store = MetricStore(config.state_dir)
+        collector_registry = network_collector_registry(server.id for server in config.remote_servers)
         imported = metric_store.import_legacy_network()
         if imported:
             logger.info("imported legacy network metric points=%s", imported)
         logger.info(
-            "monitor started local=%ss remote_servers=%s",
+            "agent started local=%ss remote_servers=%s",
             config.monitor.sample_seconds,
             len(config.remote_servers),
         )
@@ -563,6 +602,7 @@ def main() -> int:
                         remote_monitor,
                         session_meter,
                         metric_store,
+                        collector_registry,
                         logger,
                     )
                 except Exception as exc:
