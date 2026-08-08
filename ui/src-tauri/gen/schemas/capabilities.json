@@ -1,0 +1,1 @@
+{"main-window":{"identifier":"main-window","description":"Only exposes the narrow Infra Agent bridge to the dashboard.","local":true,"windows":["main"],"permissions":["core:default"]}}

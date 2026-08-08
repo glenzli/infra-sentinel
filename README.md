@@ -28,6 +28,11 @@ Infra Sentinel 是一个本地优先的个人 AI Infra 资源归因面板。当�
 - Linux `/sys/class/net` 网卡累计计数；
 - 仅监听远端 `127.0.0.1:10085` 的 Xray StatsService。
 
+桌面 UI 正在迁移到 Tauri。当前 `ui/` 已提供跨平台的只读 Projection 壳；
+它复用同一份本地 Agent 协议，而不会读取任意文件或运行任意命令。完整的
+Agent sidecar 打包与现有网络详情/设置迁移仍在进行中，macOS 原生 App 目前
+仍是正式发行入口。
+
 当前不支持：
 
 - 任意 TCP Controller；

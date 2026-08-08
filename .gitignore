@@ -7,4 +7,7 @@ Traffic Sentinel.app/
 Infra Sentinel.app/
 .build/
 dist/
+ui/node_modules/
+ui/dist/
+ui/src-tauri/target/
 .DS_Store

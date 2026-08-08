@@ -227,7 +227,10 @@ critical_bytes = 1374389534720
 
 ### 3. Infra Sentinel App 外壳
 
-状态：计划。
+状态：进行中。首个 Tauri 跨平台桌面壳已建立：它只读取版本化
+Projection，并通过受限桥接提交既有 Agent 命令。Python Agent 仍是数据与
+策略的唯一所有者；下一步将把它封装为每个目标平台的 sidecar，再完成网络
+详情、设置与托盘生命周期迁移。
 
 范围：
 
@@ -237,6 +240,8 @@ critical_bytes = 1374389534720
 - 建立概览、资源使用、归因、预算与告警、数据源、分析建议和设置导航；第一轮先交付概览、Network 资源卡和数据源健康摘要；
 - 卡片由 Projection 提供，未启用的资源模块不显示；
 - 网络模块成为第一张正式资源卡片。
+- UI 实现迁移到 `ui/`：Web 前端负责渲染，Rust bridge 只负责最小本地协议
+  访问；不将 Collector、SQLite 或账单计算移入前端或 Rust bridge。
 
 退出标准：
 
