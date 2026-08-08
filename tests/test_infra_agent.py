@@ -16,7 +16,10 @@ from configuration import (  # noqa: E402
     Config,
     MonitorConfig,
     StateConfig,
+    default_user_settings,
     read_config,
+    settings_payload,
+    write_user_settings,
 )
 from billing_policy import BillingBudgetPolicy, BillingBudgetTransition  # noqa: E402
 from agent_protocol import (  # noqa: E402
@@ -545,8 +548,9 @@ class SessionMeterTests(unittest.TestCase):
             }), encoding="utf-8")
             meter = SessionMeter(state_dir)
 
-            remote_state = apply_agent_commands(
+            effects = apply_agent_commands(
                 config,
+                state_dir / "config.toml",
                 100.0,
                 MetricStore(state_dir),
                 RemoteMonitor(),  # type: ignore[arg-type]
@@ -554,7 +558,8 @@ class SessionMeterTests(unittest.TestCase):
                 logging.getLogger("infra-agent-test"),
             )
 
-            self.assertEqual(remote_state["status"], "disabled")
+            self.assertEqual(effects.remote_state["status"], "disabled")
+            self.assertFalse(effects.restart_requested)
             self.assertEqual(meter.started_reason, "manual")
             result = json.loads((commands / f"{command_id}.result.json").read_text(encoding="utf-8"))
             self.assertEqual(result["status"], "ok")
@@ -590,8 +595,9 @@ class SessionMeterTests(unittest.TestCase):
                 "payload": {"since_epoch": 60, "until_epoch": 119, "metric": "network.bytes"},
             }), encoding="utf-8")
 
-            remote_state = apply_agent_commands(
+            effects = apply_agent_commands(
                 config,
+                state_dir / "config.toml",
                 120.0,
                 store,
                 RemoteMonitor(),  # type: ignore[arg-type]
@@ -599,10 +605,57 @@ class SessionMeterTests(unittest.TestCase):
                 logging.getLogger("infra-agent-test"),
             )
 
-            self.assertIsNone(remote_state)
+            self.assertIsNone(effects.remote_state)
+            self.assertFalse(effects.restart_requested)
             result = json.loads((commands / f"{command_id}.result.json").read_text(encoding="utf-8"))
             self.assertEqual(result["status"], "ok")
             self.assertEqual(result["payload"]["points"][0]["value"], 42.0)
+
+    def test_agent_reads_and_updates_configuration_through_the_local_command_protocol(self) -> None:
+        class RemoteMonitor:
+            def reset_session(self, epoch: float) -> dict[str, object]:
+                return {"enabled": False, "status": "disabled", "servers": [], "epoch": epoch}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary)
+            config = make_config(state_dir)
+            config_path = state_dir / "config.toml"
+            write_user_settings(config_path, settings_payload(default_user_settings()))
+            commands = state_dir / "commands"
+            commands.mkdir()
+            get_id = "2fa7fb24-f31b-4c7d-8a2b-6f198844a263"
+            (commands / f"{get_id}.request.json").write_text(json.dumps({
+                "schema": COMMAND_SCHEMA,
+                "id": get_id,
+                "type": "configuration.get",
+                "requested_at": "2026-08-08T12:00:00+08:00",
+                "payload": {},
+            }), encoding="utf-8")
+            effects = apply_agent_commands(
+                config, config_path, 120.0, MetricStore(state_dir), RemoteMonitor(),  # type: ignore[arg-type]
+                SessionMeter(state_dir), logging.getLogger("infra-agent-test"),
+            )
+            self.assertFalse(effects.restart_requested)
+            exported = json.loads((commands / f"{get_id}.result.json").read_text(encoding="utf-8"))
+            self.assertEqual(exported["status"], "ok")
+            settings = exported["payload"]["settings"]
+            settings["policies"][0]["warning_mib"] = 512
+
+            update_id = "3fa7fb24-f31b-4c7d-8a2b-6f198844a263"
+            (commands / f"{update_id}.request.json").write_text(json.dumps({
+                "schema": COMMAND_SCHEMA,
+                "id": update_id,
+                "type": "configuration.update",
+                "requested_at": "2026-08-08T12:00:05+08:00",
+                "payload": settings,
+            }), encoding="utf-8")
+            effects = apply_agent_commands(
+                config, config_path, 125.0, MetricStore(state_dir), RemoteMonitor(),  # type: ignore[arg-type]
+                SessionMeter(state_dir), logging.getLogger("infra-agent-test"),
+            )
+            self.assertTrue(effects.restart_requested)
+            updated = json.loads((commands / f"{update_id}.result.json").read_text(encoding="utf-8"))
+            self.assertEqual(updated["payload"]["settings"]["policies"][0]["warning_mib"], 512)
 
     def test_catch_up_bytes_stay_in_totals_but_not_rate_trend(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

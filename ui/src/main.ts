@@ -1,5 +1,6 @@
 import "./styles.css";
 import { AgentProjection, OverallStatus, ResourceProjection, SourceProjection, readProjection, resetSession } from "./bridge";
+import { loadSettings, renderSettings } from "./settings_view";
 
 function appRoot(): HTMLDivElement {
   const root = document.querySelector<HTMLDivElement>("#app");
@@ -8,6 +9,7 @@ function appRoot(): HTMLDivElement {
 }
 
 const root = appRoot();
+let activeView: "overview" | "settings" = "overview";
 
 const formatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
 
@@ -77,6 +79,7 @@ function renderProjection(projection: AgentProjection): void {
           <p class="lede">一个本地优先的资源监控面板。当前已接入网络模块，其他模块只在真正启用后出现。</p>
         </div>
         <div class="hero-actions">
+          <button class="button button--subtle" id="settings">Settings / 设置</button>
           <button class="button button--subtle" id="refresh">Refresh / 刷新</button>
           <button class="button button--danger" id="reset">Reset totals / 重置统计</button>
         </div>
@@ -118,6 +121,7 @@ function renderProjection(projection: AgentProjection): void {
 
   document.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", () => void refresh());
   document.querySelector<HTMLButtonElement>("#reset")?.addEventListener("click", () => void requestReset());
+  document.querySelector<HTMLButtonElement>("#settings")?.addEventListener("click", () => void openSettings());
 }
 
 function renderWaiting(message: string): void {
@@ -130,6 +134,7 @@ function renderWaiting(message: string): void {
 }
 
 async function refresh(): Promise<void> {
+  if (activeView !== "overview") return;
   try {
     const projection = await readProjection();
     if (!projection) {
@@ -139,6 +144,26 @@ async function refresh(): Promise<void> {
     renderProjection(projection);
   } catch (error) {
     renderWaiting(`Cannot read local state / 无法读取本地状态：${String(error)}`);
+  }
+}
+
+async function openSettings(): Promise<void> {
+  activeView = "settings";
+  root.innerHTML = `<main class="shell shell--waiting"><header class="topbar"><div class="brand"><span class="brand-mark" aria-hidden="true"><i></i></span><span>Infra Sentinel</span></div></header><section class="empty-state"><span class="pulse" aria-hidden="true"></span><h1>Loading settings / 正在读取设置</h1></section></main>`;
+  try {
+    const settings = await loadSettings();
+    if (activeView !== "settings") return;
+    renderSettings(root, settings, {
+      cancel: () => { activeView = "overview"; void refresh(); },
+      saved: () => {
+        activeView = "overview";
+        renderWaiting("Settings applied; waiting for the Agent restart / 设置已应用，等待 Agent 重启");
+        window.setTimeout(() => void refresh(), 1_000);
+      },
+    });
+  } catch (error) {
+    root.innerHTML = `<main class="shell shell--waiting"><header class="topbar"><div class="brand"><span class="brand-mark" aria-hidden="true"><i></i></span><span>Infra Sentinel</span></div></header><section class="empty-state"><h1>Unable to load settings / 无法读取设置</h1><p>${escapeHtml(String(error))}</p><button class="button button--subtle" id="back">Back to overview / 返回概览</button></section></main>`;
+    root.querySelector<HTMLButtonElement>("#back")?.addEventListener("click", () => { activeView = "overview"; void refresh(); });
   }
 }
 

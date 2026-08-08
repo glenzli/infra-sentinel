@@ -6,6 +6,7 @@ fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             agent_bridge::read_projection,
+            agent_bridge::read_agent_command_result,
             agent_bridge::submit_agent_command,
         ])
         .run(tauri::generate_context!())

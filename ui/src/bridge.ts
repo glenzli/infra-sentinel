@@ -41,13 +41,27 @@ export interface CommandReceipt {
   id: string;
 }
 
+export interface AgentCommandResult {
+  schema: string;
+  id: string;
+  type: string;
+  status: "ok" | "rejected" | "error";
+  message?: string;
+  payload?: Record<string, unknown>;
+}
+
 export function readProjection(): Promise<AgentProjection | null> {
   return invoke<AgentProjection | null>("read_projection");
 }
 
 export function resetSession(): Promise<CommandReceipt> {
-  return invoke<CommandReceipt>("submit_agent_command", {
-    commandType: "session.reset",
-    payload: {},
-  });
+  return submitAgentCommand("session.reset", {});
+}
+
+export function submitAgentCommand(commandType: string, payload: Record<string, unknown>): Promise<CommandReceipt> {
+  return invoke<CommandReceipt>("submit_agent_command", { commandType, payload });
+}
+
+export function readAgentCommandResult(commandId: string): Promise<AgentCommandResult | null> {
+  return invoke<AgentCommandResult | null>("read_agent_command_result", { commandId });
 }

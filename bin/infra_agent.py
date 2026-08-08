@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 from collections import deque
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime
 import fcntl
 import json
@@ -21,7 +22,15 @@ import uuid
 
 from billing_policy import BillingBudgetEngine, BillingBudgetTransition
 from agent_protocol import PROJECTION_SCHEMA, complete_command, consume_commands, write_projection
-from configuration import Config, StateConfig, read_config
+from configuration import (
+    Config,
+    StateConfig,
+    default_config_path,
+    read_config,
+    read_user_settings,
+    settings_payload,
+    write_user_settings,
+)
 from infra_collectors import CollectorContext, CollectorRegistry, CollectorRun, collected_points
 from infra_projection import build_infra_projection
 from metric_query import BUCKET_SECONDS, MAX_RANGE_SECONDS, QUERY_SCHEMA, MetricQuery, execute_metric_query
@@ -46,6 +55,14 @@ PARENT_PROCESS_ENV = "INFRA_SENTINEL_PARENT_PID"
 APP_NOTIFICATIONS_ENV = "INFRA_SENTINEL_APP_NOTIFICATIONS"
 SAMPLE_SCHEMA = 5
 AGENT_RUNTIME_SCHEMA = PROJECTION_SCHEMA
+
+
+@dataclass(frozen=True)
+class AgentCommandEffects:
+    """Command results that alter Agent lifecycle after a sample completes."""
+
+    remote_state: dict[str, Any] | None = None
+    restart_requested: bool = False
 
 
 def iso_now(epoch: float | None = None) -> str:
@@ -418,15 +435,34 @@ def configure_logger(config: Config) -> logging.Logger:
 
 def apply_agent_commands(
     config: Config,
+    config_path: Path,
     sample_epoch: float,
     metric_store: MetricStore,
     remote_monitor: RemoteFleetMonitor,
     session_meter: SessionMeter,
     logger: logging.Logger,
-) -> dict[str, Any] | None:
+) -> AgentCommandEffects:
     """Apply idempotent local commands before recording the current interval."""
     reset_remote_state: dict[str, Any] | None = None
+    restart_requested = False
     for command in consume_commands(config.state_dir):
+        if command.type == "configuration.get":
+            try:
+                complete_command(command, status="ok", payload={"settings": settings_payload(read_user_settings(config_path))})
+            except (OSError, ValueError) as exc:
+                complete_command(command, status="error", message=str(exc))
+            continue
+        if command.type == "configuration.update":
+            try:
+                settings = write_user_settings(config_path, command.payload)
+                complete_command(command, status="ok", payload={
+                    "settings": settings_payload(settings),
+                    "restart_required": True,
+                })
+                restart_requested = True
+            except (OSError, ValueError) as exc:
+                complete_command(command, status="rejected", message=str(exc))
+            continue
         if command.type == "metrics.query":
             try:
                 query = MetricQuery.from_payload(command.payload, now=sample_epoch)
@@ -448,11 +484,12 @@ def apply_agent_commands(
         complete_command(command, status="ok")
         logger.info("agent command applied id=%s type=%s", command.id, command.type)
         reset_remote_state = remote_state
-    return reset_remote_state
+    return AgentCommandEffects(reset_remote_state, restart_requested)
 
 
 def handle_sample(
     config: Config,
+    config_path: Path,
     history: deque[dict[str, Any]],
     client: MihomoApiClient,
     tracker: MihomoTrafficTracker,
@@ -463,7 +500,7 @@ def handle_sample(
     metric_store: MetricStore,
     collector_registry: CollectorRegistry,
     logger: logging.Logger,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], bool]:
     sample = collect_interval(client, tracker, config.monitor.sample_seconds)
     sample["schema"] = SAMPLE_SCHEMA
     annotate_sample_timing(sample, config.monitor.sample_seconds)
@@ -500,16 +537,17 @@ def handle_sample(
         append_jsonl(config.state_dir / "events.jsonl", event, config.state)
         notify(event_type, level, warning, critical, config)
 
-    reset_remote_state = apply_agent_commands(
+    command_effects = apply_agent_commands(
         config,
+        config_path,
         float(sample["epoch"]),
         metric_store,
         remote_monitor,
         session_meter,
         logger,
     )
-    if reset_remote_state is not None:
-        remote_state = reset_remote_state
+    if command_effects.remote_state is not None:
+        remote_state = command_effects.remote_state
     elif session_meter.started_epoch is None:
         remote_state = remote_monitor.maybe_poll(sample["epoch"])
         session_meter.reset(float(sample["epoch"]), "automatic")
@@ -545,7 +583,7 @@ def handle_sample(
         metric_store.summary(),
     )
     write_health_state(config, "ok")
-    return sample
+    return sample, command_effects.restart_requested
 
 
 def print_current(client: MihomoApiClient) -> None:
@@ -576,7 +614,8 @@ def main() -> int:
     mode.add_argument("--watch", action="store_true", help="持续采样并发布本地 Projection")
     args = parser.parse_args()
     try:
-        config = read_config(args.config)
+        config_path = args.config or default_config_path()
+        config = read_config(config_path)
         ensure_state_dir(config)
         client = MihomoApiClient()
         if args.once:
@@ -609,8 +648,9 @@ def main() -> int:
         try:
             while not parent_process_exited():
                 try:
-                    handle_sample(
+                    _sample, restart_requested = handle_sample(
                         config,
+                        config_path,
                         history,
                         client,
                         tracker,
@@ -622,6 +662,9 @@ def main() -> int:
                         collector_registry,
                         logger,
                     )
+                    if restart_requested:
+                        logger.info("configuration updated; Agent restart requested")
+                        return 0
                 except Exception as exc:
                     logger.exception("sample failed")
                     write_health_state(config, "error", str(exc))

@@ -80,7 +80,10 @@ App 自动发现本地 Mihomo Socket，并读取 `/connections`：
 - `state/commands/<uuid>.request.json`：UI 提交的命令；
 - `state/commands/<uuid>.result.json`：Agent 执行结果。
 
-当前正式命令为 `session.reset` 与只读的 `metrics.query`。后者只能按时间、资源、来源与指标读取 counter，并限定为 90 天窗口、分钟/小时/天级桶和最多 10,000 个结果点；UI 无法执行 SQL 或写入指标。命令与 Projection 均不包含密钥、提示词、请求正文、URL 路径或网络载荷。未来若替换为仅回环的 IPC/HTTP，保留相同 JSON 合同即可，Collector、存储和 UI 业务语义无需改动。
+当前正式命令为 `session.reset`、只读的 `metrics.query`，以及
+`configuration.get` / `configuration.update`。后者仍由 Python 配置所有者
+校验和原子写入；成功后 Agent 会请求受监督的重启，使新配置成为新的运行时。
+查询只能按时间、资源、来源与指标读取 counter，并限定为 90 天窗口、分钟/小时/天级桶和最多 10,000 个结果点；UI 无法执行 SQL 或写入指标。命令与 Projection 均不包含密钥、提示词、请求正文、URL 路径或网络载荷。未来若替换为仅回环的 IPC/HTTP，保留相同 JSON 合同即可，Collector、存储和 UI 业务语义无需改动。
 
 内置的宽泛服务标签包括：
 

@@ -31,7 +31,10 @@ fn state_dir() -> Result<PathBuf, String> {
 }
 
 fn command_allowed(command_type: &str) -> bool {
-    matches!(command_type, "session.reset" | "metrics.query")
+    matches!(
+        command_type,
+        "session.reset" | "metrics.query" | "configuration.get" | "configuration.update"
+    )
 }
 
 fn requested_at() -> String {
@@ -92,6 +95,27 @@ pub fn read_projection() -> Result<Option<Value>, String> {
 }
 
 #[tauri::command]
+pub fn read_agent_command_result(command_id: String) -> Result<Option<Value>, String> {
+    let command_id = Uuid::parse_str(&command_id)
+        .map_err(|_| "Agent command id is invalid".to_owned())?
+        .to_string();
+    let path = state_dir()?.join("commands").join(format!("{command_id}.result.json"));
+    let document = match fs::read_to_string(path) {
+        Ok(document) => document,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("cannot read Agent command result: {error}")),
+    };
+    let result: Value = serde_json::from_str(&document)
+        .map_err(|error| format!("Agent command result is not valid JSON: {error}"))?;
+    if result.get("schema").and_then(Value::as_str) != Some(PROTOCOL_SCHEMA)
+        || result.get("id").and_then(Value::as_str) != Some(command_id.as_str())
+    {
+        return Err("Agent command result protocol is invalid".to_owned());
+    }
+    Ok(Some(result))
+}
+
+#[tauri::command]
 pub fn submit_agent_command(command_type: String, payload: Value) -> Result<CommandReceipt, String> {
     let object = payload
         .as_object()
@@ -110,6 +134,8 @@ mod tests {
     fn bridge_only_exposes_public_agent_commands() {
         assert!(command_allowed("session.reset"));
         assert!(command_allowed("metrics.query"));
+        assert!(command_allowed("configuration.get"));
+        assert!(command_allowed("configuration.update"));
         assert!(!command_allowed("shell.execute"));
         assert!(!command_allowed("configuration.write"));
     }
