@@ -24,6 +24,7 @@ from agent_protocol import PROJECTION_SCHEMA, complete_command, consume_commands
 from configuration import Config, StateConfig, read_config
 from infra_collectors import CollectorContext, CollectorRegistry, CollectorRun, collected_points
 from infra_projection import build_infra_projection
+from metric_query import BUCKET_SECONDS, MAX_RANGE_SECONDS, QUERY_SCHEMA, MetricQuery, execute_metric_query
 from metric_store import MetricStore
 from mihomo_traffic import (
     MIHOMO_SAMPLE_SCHEMA,
@@ -375,6 +376,13 @@ def write_projection_state(
         },
         "session": session,
         "storage": storage or {"schema": "20260808.2", "kind": "sqlite", "status": "waiting"},
+        "query": {
+            "schema": QUERY_SCHEMA,
+            "command": "metrics.query",
+            "instrument": "counter",
+            "bucket_seconds": sorted(BUCKET_SECONDS),
+            "max_range_seconds": MAX_RANGE_SECONDS,
+        },
         "collectors": [run.as_dict() for run in collector_runs],
         # This is a derived, generic resource projection.  The legacy-shaped
         # network fields above remain facts for the detailed network panel.
@@ -411,6 +419,7 @@ def configure_logger(config: Config) -> logging.Logger:
 def apply_agent_commands(
     config: Config,
     sample_epoch: float,
+    metric_store: MetricStore,
     remote_monitor: RemoteFleetMonitor,
     session_meter: SessionMeter,
     logger: logging.Logger,
@@ -418,6 +427,13 @@ def apply_agent_commands(
     """Apply idempotent local commands before recording the current interval."""
     reset_remote_state: dict[str, Any] | None = None
     for command in consume_commands(config.state_dir):
+        if command.type == "metrics.query":
+            try:
+                query = MetricQuery.from_payload(command.payload, now=sample_epoch)
+                complete_command(command, status="ok", payload=execute_metric_query(metric_store, query))
+            except (ValueError, TypeError) as exc:
+                complete_command(command, status="rejected", message=str(exc))
+            continue
         if command.type != "session.reset":
             complete_command(command, status="rejected", message="unsupported command")
             continue
@@ -487,6 +503,7 @@ def handle_sample(
     reset_remote_state = apply_agent_commands(
         config,
         float(sample["epoch"]),
+        metric_store,
         remote_monitor,
         session_meter,
         logger,

@@ -35,6 +35,8 @@ from infra_agent import (  # noqa: E402
     totals_for_window,
     write_projection_state,
 )
+from metric_store import MetricStore  # noqa: E402
+from infra_model import MetricPoint  # noqa: E402
 from sample_timing import (  # noqa: E402
     CATCH_UP_INTERVAL,
     REALTIME_INTERVAL,
@@ -546,6 +548,7 @@ class SessionMeterTests(unittest.TestCase):
             remote_state = apply_agent_commands(
                 config,
                 100.0,
+                MetricStore(state_dir),
                 RemoteMonitor(),  # type: ignore[arg-type]
                 meter,
                 logging.getLogger("infra-agent-test"),
@@ -555,6 +558,51 @@ class SessionMeterTests(unittest.TestCase):
             self.assertEqual(meter.started_reason, "manual")
             result = json.loads((commands / f"{command_id}.result.json").read_text(encoding="utf-8"))
             self.assertEqual(result["status"], "ok")
+
+    def test_agent_returns_metrics_query_through_the_local_command_protocol(self) -> None:
+        class RemoteMonitor:
+            def reset_session(self, epoch: float) -> dict[str, object]:
+                return {"enabled": False, "status": "disabled", "servers": [], "epoch": epoch}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary)
+            config = make_config(state_dir)
+            store = MetricStore(state_dir)
+            store.write([MetricPoint(
+                observed_at="2026-08-08T12:00:00+08:00",
+                observed_epoch=100.0,
+                metric="network.bytes",
+                instrument="counter",
+                value=42,
+                unit="bytes",
+                source_id="local-mihomo",
+                resource_id="network",
+                dimensions={"direction": "up"},
+            )])
+            command_id = "1fa7fb24-f31b-4c7d-8a2b-6f198844a263"
+            commands = state_dir / "commands"
+            commands.mkdir()
+            (commands / f"{command_id}.request.json").write_text(json.dumps({
+                "schema": COMMAND_SCHEMA,
+                "id": command_id,
+                "type": "metrics.query",
+                "requested_at": "2026-08-08T12:00:00+08:00",
+                "payload": {"since_epoch": 60, "until_epoch": 119, "metric": "network.bytes"},
+            }), encoding="utf-8")
+
+            remote_state = apply_agent_commands(
+                config,
+                120.0,
+                store,
+                RemoteMonitor(),  # type: ignore[arg-type]
+                SessionMeter(state_dir),
+                logging.getLogger("infra-agent-test"),
+            )
+
+            self.assertIsNone(remote_state)
+            result = json.loads((commands / f"{command_id}.result.json").read_text(encoding="utf-8"))
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["payload"]["points"][0]["value"], 42.0)
 
     def test_catch_up_bytes_stay_in_totals_but_not_rate_trend(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

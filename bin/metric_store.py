@@ -196,3 +196,80 @@ class MetricStore:
             "metric_points": count,
             "legacy_import_complete": imported is not None,
         }
+
+    def query_points(
+        self,
+        *,
+        since_epoch: float,
+        until_epoch: float,
+        resource_id: str | None = None,
+        source_id: str | None = None,
+        metric: str | None = None,
+        instrument: str | None = None,
+        bucket_seconds: int | None = None,
+        limit: int = 10_000,
+    ) -> list[dict[str, Any]]:
+        """Read canonical points with parameterized filters and optional sums.
+
+        Query policy lives in ``metric_query``. This owner only executes a
+        bounded, deterministic SQLite read over its own schema.
+        """
+        if until_epoch < since_epoch:
+            raise ValueError("until_epoch must not precede since_epoch")
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        clauses = ["observed_epoch >= ?", "observed_epoch <= ?"]
+        parameters: list[Any] = [float(since_epoch), float(until_epoch)]
+        for column, value in (("resource_id", resource_id), ("source_id", source_id), ("metric", metric), ("instrument", instrument)):
+            if value is not None:
+                clauses.append(f"{column} = ?")
+                parameters.append(value)
+        where = " AND ".join(clauses)
+        self.initialize()
+        with self._transaction() as connection:
+            if bucket_seconds is None:
+                rows = connection.execute(f"""
+                    SELECT observed_epoch, observed_at, metric, instrument, value, unit,
+                           source_id, resource_id, dimensions_json, attribution_method,
+                           confidence, estimated
+                    FROM metric_points
+                    WHERE {where}
+                    ORDER BY observed_epoch, metric, source_id, dimensions_json
+                    LIMIT ?
+                """, (*parameters, limit)).fetchall()
+            else:
+                rows = connection.execute(f"""
+                    SELECT CAST(observed_epoch / ? AS INTEGER) * ? AS bucket_epoch,
+                           metric, instrument, SUM(value) AS value, unit,
+                           source_id, resource_id, dimensions_json, attribution_method,
+                           confidence, estimated
+                    FROM metric_points
+                    WHERE {where}
+                    GROUP BY bucket_epoch, metric, instrument, unit, source_id, resource_id,
+                             dimensions_json, attribution_method, confidence, estimated
+                    ORDER BY bucket_epoch, metric, source_id, dimensions_json
+                    LIMIT ?
+                """, (bucket_seconds, bucket_seconds, *parameters, limit)).fetchall()
+        points: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                dimensions = json.loads(row["dimensions_json"])
+            except (TypeError, json.JSONDecodeError):
+                dimensions = {}
+            point = {
+                "observed_epoch": float(row["observed_epoch"] if bucket_seconds is None else row["bucket_epoch"]),
+                "metric": row["metric"],
+                "instrument": row["instrument"],
+                "value": row["value"],
+                "unit": row["unit"],
+                "source_id": row["source_id"],
+                "resource_id": row["resource_id"],
+                "dimensions": dimensions if isinstance(dimensions, dict) else {},
+                "attribution_method": row["attribution_method"],
+                "confidence": row["confidence"],
+                "estimated": bool(row["estimated"]),
+            }
+            if bucket_seconds is None:
+                point["observed_at"] = row["observed_at"]
+            points.append(point)
+        return points

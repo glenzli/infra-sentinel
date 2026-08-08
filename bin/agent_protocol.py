@@ -125,7 +125,13 @@ def consume_commands(state_dir: Path) -> Iterable[AgentCommand]:
         yield AgentCommand(command_id, command_type, payload, requested_at, processing_path)
 
 
-def complete_command(command: AgentCommand, *, status: str, message: str | None = None) -> None:
+def complete_command(
+    command: AgentCommand,
+    *,
+    status: str,
+    message: str | None = None,
+    payload: dict[str, Any] | None = None,
+) -> None:
     if status not in {"ok", "rejected", "error"}:
         raise ValueError("invalid command completion status")
     result = {
@@ -137,5 +143,7 @@ def complete_command(command: AgentCommand, *, status: str, message: str | None 
     }
     if message:
         result["message"] = message
+    if payload is not None:
+        result["payload"] = payload
     _atomic_json(_result_path(command.processing_path.parent, command.id), result)
     command.processing_path.unlink(missing_ok=True)
