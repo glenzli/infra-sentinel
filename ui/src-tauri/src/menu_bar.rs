@@ -1,0 +1,156 @@
+//! Persistent macOS menu-bar presence for Infra Sentinel.
+//!
+//! The Dock icon is intentionally colorful; the menu-bar icon is a separate
+//! monochrome template image designed for a 16–18 px status area. It reflects
+//! only the public Agent Projection and never performs collection itself.
+
+use crate::app_paths::state_dir;
+use serde_json::Value;
+use std::fs;
+use std::thread;
+use std::time::Duration;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Manager};
+
+const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Indicator {
+    Starting,
+    Normal,
+    Warning,
+    Critical,
+}
+
+impl Indicator {
+    fn icon(self) -> tauri::image::Image<'static> {
+        match self {
+            Self::Starting => tauri::include_image!("./icons/menu-starting.png"),
+            Self::Normal => tauri::include_image!("./icons/menu-normal.png"),
+            Self::Warning => tauri::include_image!("./icons/menu-warning.png"),
+            Self::Critical => tauri::include_image!("./icons/menu-critical.png"),
+        }
+    }
+
+    fn tooltip(self) -> &'static str {
+        match self {
+            Self::Starting => "Infra Sentinel — starting",
+            Self::Normal => "Infra Sentinel — monitoring",
+            Self::Warning => "Infra Sentinel — warning",
+            Self::Critical => "Infra Sentinel — action needed",
+        }
+    }
+}
+
+fn status_from_projection(document: &str) -> Indicator {
+    let projection: Value = match serde_json::from_str(document) {
+        Ok(projection) => projection,
+        Err(_) => return Indicator::Critical,
+    };
+    match projection
+        .pointer("/overall/status")
+        .and_then(Value::as_str)
+        .unwrap_or("starting")
+    {
+        "healthy" | "ok" | "none" => Indicator::Normal,
+        "warning" => Indicator::Warning,
+        "critical" | "degraded" | "error" => Indicator::Critical,
+        _ => Indicator::Starting,
+    }
+}
+
+fn current_indicator() -> Indicator {
+    let projection = match state_dir() {
+        Ok(state) => state.join("projection.json"),
+        Err(_) => return Indicator::Critical,
+    };
+    match fs::read_to_string(projection) {
+        Ok(document) => status_from_projection(&document),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Indicator::Starting,
+        Err(_) => Indicator::Critical,
+    }
+}
+
+fn show_dashboard(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
+fn watch_indicator(tray: tauri::tray::TrayIcon) {
+    thread::Builder::new()
+        .name("infra-menu-bar".to_owned())
+        .spawn(move || {
+            let mut previous = None;
+            loop {
+                let current = current_indicator();
+                if previous != Some(current) {
+                    let _ = tray.set_icon_with_as_template(Some(current.icon()), true);
+                    let _ = tray.set_tooltip(Some(current.tooltip()));
+                    previous = Some(current);
+                }
+                thread::sleep(REFRESH_INTERVAL);
+            }
+        })
+        .expect("cannot start Infra Sentinel menu-bar watcher");
+}
+
+pub fn install(app: &AppHandle) -> Result<(), String> {
+    let open = MenuItem::with_id(app, "open-dashboard", "Open Infra Sentinel", true, None::<&str>)
+        .map_err(|error| error.to_string())?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Infra Sentinel", true, None::<&str>)
+        .map_err(|error| error.to_string())?;
+    let menu = Menu::with_items(app, &[&open, &quit]).map_err(|error| error.to_string())?;
+    let initial = current_indicator();
+    let tray = TrayIconBuilder::with_id("infra-sentinel")
+        .menu(&menu)
+        .icon(initial.icon())
+        .icon_as_template(true)
+        .tooltip(initial.tooltip())
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "open-dashboard" => show_dashboard(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                }
+            ) {
+                show_dashboard(tray.app_handle());
+            }
+        })
+        .build(app)
+        .map_err(|error| error.to_string())?;
+    watch_indicator(tray);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{status_from_projection, Indicator};
+
+    #[test]
+    fn projection_status_maps_to_a_small_set_of_menu_bar_states() {
+        assert_eq!(
+            status_from_projection(r#"{"overall":{"status":"healthy"}}"#),
+            Indicator::Normal
+        );
+        assert_eq!(
+            status_from_projection(r#"{"overall":{"status":"warning"}}"#),
+            Indicator::Warning
+        );
+        assert_eq!(
+            status_from_projection(r#"{"overall":{"status":"critical"}}"#),
+            Indicator::Critical
+        );
+        assert_eq!(status_from_projection("not-json"), Indicator::Critical);
+    }
+}
