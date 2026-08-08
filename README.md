@@ -82,6 +82,7 @@ Google 流量不会被推断为某个具体客户端。未知域名也会直接�
 - 每台远端 VPS 的启用状态、显示名称、`~/.ssh/config` 主机别名；
 - 每台 VPS 是否读取 Xray 用户逻辑流量；
 - 每台 VPS 的计费周期开始日，以及收发均计费（2.0×）或仅出站计费（1.0×）。
+- 每台 VPS 独立的账单周期预算：警告与严重阈值均以 GiB 输入，按该 VPS 的计费方向计算。
 
 以下行为固定，不进入配置：
 
@@ -99,10 +100,10 @@ Google 流量不会被推断为某个具体客户端。未知域名也会直接�
 ~/Library/Application Support/Infra Sentinel/config.toml
 ```
 
-当前配置契约为 `20260808.1`。版本采用 `YYYYMMDD.修订号`：同一天内迭代修订号，跨日发布使用新的日期。
+当前配置契约为 `20260808.3`。版本采用 `YYYYMMDD.修订号`：同一天内迭代修订号，跨日发布使用新的日期。
 
 ```toml
-schema_version = "20260808.1"
+schema_version = "20260808.3"
 
 [app]
 menu_bar_mode = "health"
@@ -130,11 +131,18 @@ ssh_host = "my-vps"
 xray_stats_enabled = true
 billing_cycle_start_day = 1
 billing_mode = "both"
+
+[[policies]]
+id = "primary-billing-budget"
+kind = "network.billing.budget"
+source_id = "primary"
+warning_gib = 600
+critical_gib = 800
 ```
 
 `local-mihomo` 是固定启用的本机数据源；远端 `network.linux-xray` 数据源可以有零个或多个。每个远端 `id` 对应一套独立的 VPS 网卡计数、Xray 计数和本地基线。仪表板顶部显示所有启用 VPS 的合计，远端明细区按名称分别列出各路账单量。
 
-第一次读取旧版 `[monitor]` / `[remote]` 配置时，App 会在同目录写入 `config.pre-20260808.1.toml` 备份，然后原子改写为当前结构；迁移完成后不维护旧格式分支。
+首次读取旧版 `[monitor]` / `[remote]` 或上一日期配置时，App 会在同目录写入 `config.pre-20260808.3.toml` 备份，然后原子改写为当前结构；迁移完成后不维护旧格式分支。
 
 ## VPS 与 Xray 对账
 
@@ -229,6 +237,8 @@ VPS 账单量     = RX + TX
 
 - 5 分钟单方向超过 250 MiB：警告；
 - 10 分钟上下行合计超过 1 GiB：严重。
+
+启用某台 VPS 的“预算”后，它不会与本机 5/10 分钟流量告警混算：当前计费周期的 VPS 可计费字节达到该行的警告或严重 GiB 阈值时，单独产生带 VPS 名称的通知。收发均计费按 `RX + TX`，仅出站计费按 `TX`。
 
 App 或采样器中断后的累计差额仍进入本周期总量，但标记为补记，不进入实时告警和速率趋势。点击通知会打开仪表板。
 

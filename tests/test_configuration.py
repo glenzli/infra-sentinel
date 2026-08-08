@@ -42,7 +42,7 @@ def payload(*, billing_mode: str = "both") -> dict[str, object]:
 class ConfigurationTests(unittest.TestCase):
     def test_example_is_the_complete_date_versioned_contract(self) -> None:
         settings = read_user_settings(PROJECT_ROOT / "config.example.toml")
-        self.assertEqual(CONFIG_SCHEMA, "20260808.1")
+        self.assertEqual(CONFIG_SCHEMA, "20260808.3")
         self.assertEqual(settings.warning_window_minutes, 5)
         self.assertEqual(settings.warning_mib, 250)
         self.assertEqual(settings.remote_servers, ())
@@ -53,7 +53,7 @@ class ConfigurationTests(unittest.TestCase):
             saved = write_user_settings(path, payload(billing_mode="outbound"))
             self.assertEqual(settings_payload(read_user_settings(path)), settings_payload(saved))
             document = path.read_text(encoding="utf-8")
-            self.assertIn('schema_version = "20260808.1"', document)
+            self.assertIn('schema_version = "20260808.3"', document)
             self.assertIn('kind = "network.linux-xray"', document)
             runtime = read_config(path)
             self.assertEqual(runtime.monitor.warning_window_seconds, 7 * 60)
@@ -78,6 +78,33 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual([server.id for server in runtime.remote_servers], ["primary", "secondary"])
             self.assertEqual(runtime.remote_servers[1].estimation.billing_mode, "outbound")
 
+    def test_vps_billing_budget_is_an_independent_source_policy(self) -> None:
+        data = payload()
+        data["policies"].append({
+            "id": "primary-billing-budget", "kind": "network.billing.budget", "source_id": "primary",
+            "warning_gib": 600, "critical_gib": 800,
+        })
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "config.toml"
+            write_user_settings(path, data)
+            runtime = read_config(path)
+            self.assertEqual(len(runtime.remote_billing_policies), 1)
+            budget = runtime.remote_billing_policies[0]
+            self.assertEqual((budget.source_id, budget.warning_bytes, budget.critical_bytes),
+                             ("primary", 600 * 1024 ** 3, 800 * 1024 ** 3))
+            exported = settings_payload(read_user_settings(path))
+            self.assertIn("primary-billing-budget", [policy["id"] for policy in exported["policies"]])
+
+    def test_prior_date_schema_is_migrated_once_before_runtime_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "config.toml"
+            write_user_settings(path, payload())
+            path.write_text(path.read_text(encoding="utf-8").replace('schema_version = "20260808.3"', 'schema_version = "20260808.1"'), encoding="utf-8")
+            settings = read_user_settings(path)
+            self.assertEqual(settings.remote_servers[0]["id"], "primary")
+            self.assertTrue((Path(temporary) / "config.pre-20260808.3.toml").exists())
+            self.assertIn('schema_version = "20260808.3"', path.read_text(encoding="utf-8"))
+
     def test_legacy_config_migrates_once_with_a_backup(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "config.toml"
@@ -87,8 +114,8 @@ class ConfigurationTests(unittest.TestCase):
             )
             settings = read_user_settings(path)
             self.assertEqual(settings.remote_servers, ())
-            self.assertTrue((Path(temporary) / "config.pre-20260808.1.toml").exists())
-            self.assertIn('schema_version = "20260808.1"', path.read_text(encoding="utf-8"))
+            self.assertTrue((Path(temporary) / "config.pre-20260808.3.toml").exists())
+            self.assertIn('schema_version = "20260808.3"', path.read_text(encoding="utf-8"))
 
     def test_unknown_configuration_fields_are_rejected(self) -> None:
         data = payload()

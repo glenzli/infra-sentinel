@@ -282,6 +282,11 @@ static NSImage *TSStatusImage(NSString *status) {
     if ([type isEqualToString:@"deescalated"]) {
         return TSLocalized(self.language, @"notification.deescalated_body");
     }
+    if ([event[@"scope"] isEqualToString:@"vps_billing_cycle"]) {
+        return [NSString stringWithFormat:TSLocalized(self.language, @"notification.billing_budget_body"),
+                TSFormatBytes([event[@"billable_bytes"] longLongValue]),
+                TSFormatBytes([event[@"threshold_bytes"] longLongValue])];
+    }
     NSDictionary *windows = DictionaryValue(event[@"windows"]);
     NSDictionary *windowSeconds = DictionaryValue(event[@"window_seconds"]);
     NSDictionary *warning = DictionaryValue(windows[@"warning"]);

@@ -19,7 +19,20 @@ static NSDictionary *NetworkTrafficPolicy(NSDictionary *settings) {
 static NSArray *RemoteNetworkSources(NSDictionary *settings) {
     NSMutableArray *sources = [NSMutableArray array];
     for (NSDictionary *source in SettingsArray(settings[@"sources"])) {
-        if ([source isKindOfClass:[NSDictionary class]] && [source[@"kind"] isEqualToString:@"network.linux-xray"]) [sources addObject:source];
+        if (![source isKindOfClass:[NSDictionary class]] || ![source[@"kind"] isEqualToString:@"network.linux-xray"]) continue;
+        NSMutableDictionary *row = [source mutableCopy];
+        row[@"billing_alert_enabled"] = @NO;
+        row[@"billing_warning_gib"] = @1;
+        row[@"billing_critical_gib"] = @2;
+        for (NSDictionary *policy in SettingsArray(settings[@"policies"])) {
+            if (![policy isKindOfClass:[NSDictionary class]] || ![policy[@"kind"] isEqualToString:@"network.billing.budget"]) continue;
+            if (![policy[@"source_id"] isEqual:source[@"id"]]) continue;
+            row[@"billing_alert_enabled"] = @YES;
+            row[@"billing_warning_gib"] = policy[@"warning_gib"] ?: @1;
+            row[@"billing_critical_gib"] = policy[@"critical_gib"] ?: @2;
+            break;
+        }
+        [sources addObject:row];
     }
     return sources;
 }
@@ -187,6 +200,9 @@ static NSTextField *SettingsIntegerField(NSRect frame, NSInteger minimum, NSInte
     self.saveButton.title = TSLocalized(language, @"settings.save");
     for (NSMutableDictionary *row in self.serverRows) {
         ((NSButton *)row[@"xray"]).title = TSLocalized(language, @"settings.xray_enable_short");
+        ((NSButton *)row[@"budget"]).title = TSLocalized(language, @"settings.billing_budget_short");
+        ((NSTextField *)row[@"warningBudgetLabel"]).stringValue = TSLocalized(language, @"settings.billing_warning_short");
+        ((NSTextField *)row[@"criticalBudgetLabel"]).stringValue = TSLocalized(language, @"settings.billing_critical_short");
         ((NSButton *)row[@"remove"]).title = @"−";
         [self updateBillingPopup:row];
     }
@@ -205,7 +221,7 @@ static NSTextField *SettingsIntegerField(NSRect frame, NSInteger minimum, NSInte
 }
 
 - (void)reloadServerRows {
-    CGFloat rowsHeight = MAX(48.0, MIN(190.0, self.serverRows.count * 48.0));
+    CGFloat rowsHeight = MAX(72.0, MIN(190.0, self.serverRows.count * 72.0));
     // Reserve a real top inset so the header and add button do not touch the
     // rounded panel edge.
     CGFloat remoteHeight = 105.0 + rowsHeight;
@@ -218,12 +234,12 @@ static NSTextField *SettingsIntegerField(NSRect frame, NSInteger minimum, NSInte
     // Keep a visible breathing gap between remote reconciliation and alerts.
     self.monitorBox.frame = NSMakeRect(24, remoteFrame.origin.y - 180, 612, 138);
     self.statusLabel.frame = NSMakeRect(26, self.monitorBox.frame.origin.y - 70, 608, 34);
-    CGFloat height = MAX(1.0, self.serverRows.count * 48.0);
+    CGFloat height = MAX(1.0, self.serverRows.count * 72.0);
     self.serverDocumentView.frame = NSMakeRect(0, 0, 556, height);
     for (NSUInteger index = 0; index < self.serverRows.count; index++) {
         NSMutableDictionary *row = self.serverRows[index];
         NSView *view = row[@"view"];
-        view.frame = NSMakeRect(0, height - (index + 1) * 48.0, 556, 46);
+        view.frame = NSMakeRect(0, height - (index + 1) * 72.0, 556, 70);
     }
     [self updateRemoteControlState];
 }
@@ -239,30 +255,49 @@ static NSTextField *SettingsIntegerField(NSRect frame, NSInteger minimum, NSInte
             if (!inUse) { serverID = candidate; break; }
         }
     }
-    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 556, 46)];
+    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 556, 70)];
     NSButton *enabled = [NSButton checkboxWithTitle:@"" target:self action:@selector(serverToggled:)];
-    enabled.frame = NSMakeRect(5, 12, 22, 22);
+    enabled.frame = NSMakeRect(5, 43, 22, 22);
     enabled.state = [server[@"enabled"] boolValue] ? NSControlStateValueOn : NSControlStateValueOff;
-    NSTextField *label = [[NSTextField alloc] initWithFrame:NSMakeRect(30, 11, 132, 24)];
+    NSTextField *label = [[NSTextField alloc] initWithFrame:NSMakeRect(30, 42, 132, 24)];
     label.placeholderString = TSLocalized(self.language, @"settings.server_label_placeholder");
     label.stringValue = [server[@"label"] isKindOfClass:[NSString class]] ? server[@"label"] : @"";
-    NSTextField *ssh = [[NSTextField alloc] initWithFrame:NSMakeRect(168, 11, 130, 24)];
+    NSTextField *ssh = [[NSTextField alloc] initWithFrame:NSMakeRect(168, 42, 130, 24)];
     ssh.placeholderString = TSLocalized(self.language, @"settings.ssh_placeholder");
     ssh.stringValue = [server[@"ssh_host"] isKindOfClass:[NSString class]] ? server[@"ssh_host"] : @"";
     NSButton *xray = [NSButton checkboxWithTitle:TSLocalized(self.language, @"settings.xray_enable_short") target:nil action:nil];
-    xray.frame = NSMakeRect(302, 11, 62, 24);
+    xray.frame = NSMakeRect(302, 42, 62, 24);
     xray.state = [server[@"xray_stats_enabled"] boolValue] ? NSControlStateValueOn : NSControlStateValueOff;
-    NSPopUpButton *billing = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(366, 10, 110, 26) pullsDown:NO];
+    NSPopUpButton *billing = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(366, 41, 110, 26) pullsDown:NO];
     [view addSubview:enabled]; [view addSubview:label]; [view addSubview:ssh]; [view addSubview:xray]; [view addSubview:billing];
-    NSTextField *day = SettingsIntegerField(NSMakeRect(480, 11, 40, 24), 1, 31);
+    NSTextField *day = SettingsIntegerField(NSMakeRect(480, 42, 40, 24), 1, 31);
     day.integerValue = [server[@"billing_cycle_start_day"] integerValue] ?: 1;
     [view addSubview:day];
     NSButton *remove = [NSButton buttonWithTitle:@"−" target:self action:@selector(removeServer:)];
     remove.bezelStyle = NSBezelStyleTexturedRounded;
-    remove.frame = NSMakeRect(524, 10, 28, 26);
+    remove.frame = NSMakeRect(524, 41, 28, 26);
     [view addSubview:remove];
+    NSButton *budget = [NSButton checkboxWithTitle:TSLocalized(self.language, @"settings.billing_budget_short") target:self action:@selector(serverBudgetToggled:)];
+    budget.frame = NSMakeRect(30, 7, 80, 24);
+    budget.state = [server[@"billing_alert_enabled"] boolValue] ? NSControlStateValueOn : NSControlStateValueOff;
+    NSTextField *warningBudget = SettingsIntegerField(NSMakeRect(196, 7, 60, 24), 1, 1048576);
+    warningBudget.integerValue = [server[@"billing_warning_gib"] integerValue] ?: 1;
+    NSTextField *criticalBudget = SettingsIntegerField(NSMakeRect(400, 7, 60, 24), 1, 1048576);
+    criticalBudget.integerValue = [server[@"billing_critical_gib"] integerValue] ?: 2;
+    NSTextField *warningBudgetLabel = SettingsLabel(NSMakeRect(116, 9, 80, 20), 11, NSFontWeightRegular);
+    warningBudgetLabel.stringValue = TSLocalized(self.language, @"settings.billing_warning_short");
+    NSTextField *criticalBudgetLabel = SettingsLabel(NSMakeRect(304, 9, 90, 20), 11, NSFontWeightRegular);
+    criticalBudgetLabel.stringValue = TSLocalized(self.language, @"settings.billing_critical_short");
+    NSTextField *warningUnit = SettingsLabel(NSMakeRect(262, 9, 34, 20), 11, NSFontWeightRegular);
+    warningUnit.stringValue = @"GiB";
+    NSTextField *criticalUnit = SettingsLabel(NSMakeRect(466, 9, 34, 20), 11, NSFontWeightRegular);
+    criticalUnit.stringValue = @"GiB";
+    for (NSView *control in @[budget, warningBudget, criticalBudget, warningBudgetLabel, criticalBudgetLabel, warningUnit, criticalUnit]) [view addSubview:control];
     NSMutableDictionary *row = [@{ @"id": serverID, @"view": view, @"enabled": enabled, @"label": label,
-                                   @"ssh": ssh, @"xray": xray, @"billing": billing, @"day": day, @"remove": remove } mutableCopy];
+                                   @"ssh": ssh, @"xray": xray, @"billing": billing, @"day": day, @"remove": remove,
+                                   @"budget": budget, @"warningBudget": warningBudget, @"criticalBudget": criticalBudget,
+                                   @"warningBudgetLabel": warningBudgetLabel, @"criticalBudgetLabel": criticalBudgetLabel,
+                                   @"warningUnit": warningUnit, @"criticalUnit": criticalUnit } mutableCopy];
     [self.serverRows addObject:row];
     [self.serverDocumentView addSubview:view];
     [self updateBillingPopup:row];
@@ -280,14 +315,18 @@ static NSTextField *SettingsIntegerField(NSRect frame, NSInteger minimum, NSInte
 }
 
 - (void)addServer:(id)sender {
-    [self addServerRow:@{ @"enabled": @NO, @"xray_stats_enabled": @NO, @"billing_mode": @"both", @"billing_cycle_start_day": @1 }];
+    [self addServerRow:@{ @"enabled": @NO, @"xray_stats_enabled": @NO, @"billing_mode": @"both", @"billing_cycle_start_day": @1,
+                          @"billing_alert_enabled": @NO, @"billing_warning_gib": @1, @"billing_critical_gib": @2 }];
     [self reloadServerRows];
 }
 
 - (void)updateRemoteControlState {
     for (NSMutableDictionary *row in self.serverRows) {
         BOOL enabled = ((NSButton *)row[@"enabled"]).state == NSControlStateValueOn;
-        for (NSControl *control in @[row[@"label"], row[@"ssh"], row[@"xray"], row[@"billing"], row[@"day"]]) control.enabled = enabled;
+        for (NSControl *control in @[row[@"label"], row[@"ssh"], row[@"xray"], row[@"billing"], row[@"day"], row[@"budget"]]) control.enabled = enabled;
+        BOOL budgetEnabled = enabled && ((NSButton *)row[@"budget"]).state == NSControlStateValueOn;
+        ((NSControl *)row[@"warningBudget"]).enabled = budgetEnabled;
+        ((NSControl *)row[@"criticalBudget"]).enabled = budgetEnabled;
     }
 }
 
@@ -298,6 +337,10 @@ static NSTextField *SettingsIntegerField(NSRect frame, NSInteger minimum, NSInte
             break;
         }
     }
+    [self updateRemoteControlState];
+}
+
+- (void)serverBudgetToggled:(id)sender {
     [self updateRemoteControlState];
 }
 
@@ -354,7 +397,10 @@ static NSTextField *SettingsIntegerField(NSRect frame, NSInteger minimum, NSInte
         NSString *mode = [row[@"billing"] selectedItem].representedObject ?: @"both";
         [servers addObject:@{ @"id": row[@"id"], @"label": label, @"enabled": @([(NSButton *)row[@"enabled"] state] == NSControlStateValueOn),
                               @"ssh_host": [row[@"ssh"] stringValue] ?: @"", @"xray_stats_enabled": @([(NSButton *)row[@"xray"] state] == NSControlStateValueOn),
-                              @"billing_cycle_start_day": @([(NSTextField *)row[@"day"] integerValue]), @"billing_mode": mode }];
+                              @"billing_cycle_start_day": @([(NSTextField *)row[@"day"] integerValue]), @"billing_mode": mode,
+                              @"billing_alert_enabled": @([(NSButton *)row[@"budget"] state] == NSControlStateValueOn),
+                              @"billing_warning_gib": @([(NSTextField *)row[@"warningBudget"] integerValue]),
+                              @"billing_critical_gib": @([(NSTextField *)row[@"criticalBudget"] integerValue]) }];
     }
     NSMutableArray *sources = [NSMutableArray arrayWithObject:@{ @"id": @"local-mihomo", @"kind": @"network.mihomo", @"enabled": @YES }];
     for (NSDictionary *server in servers) {
@@ -363,10 +409,16 @@ static NSTextField *SettingsIntegerField(NSRect frame, NSInteger minimum, NSInte
                               @"xray_stats_enabled": server[@"xray_stats_enabled"],
                               @"billing_cycle_start_day": server[@"billing_cycle_start_day"], @"billing_mode": server[@"billing_mode"] }];
     }
-    NSDictionary *settings = @{ @"schema": @"20260808.1", @"app": @{ @"menu_bar_mode": @"health" },
-        @"policies": @[@{ @"id": @"network-traffic-alerts", @"kind": @"traffic.threshold", @"resource_id": @"network",
-                             @"warning_window_minutes": @(self.warningWindowField.integerValue), @"warning_mib": @(self.warningThresholdField.integerValue),
-                             @"critical_window_minutes": @(self.criticalWindowField.integerValue), @"critical_mib": @(self.criticalThresholdField.integerValue) }],
+    NSMutableArray *policies = [NSMutableArray arrayWithObject:@{ @"id": @"network-traffic-alerts", @"kind": @"traffic.threshold", @"resource_id": @"network",
+        @"warning_window_minutes": @(self.warningWindowField.integerValue), @"warning_mib": @(self.warningThresholdField.integerValue),
+        @"critical_window_minutes": @(self.criticalWindowField.integerValue), @"critical_mib": @(self.criticalThresholdField.integerValue) }];
+    for (NSDictionary *server in servers) if ([server[@"billing_alert_enabled"] boolValue]) {
+        [policies addObject:@{ @"id": [NSString stringWithFormat:@"%@-billing-budget", server[@"id"]],
+                               @"kind": @"network.billing.budget", @"source_id": server[@"id"],
+                               @"warning_gib": server[@"billing_warning_gib"], @"critical_gib": server[@"billing_critical_gib"] }];
+    }
+    NSDictionary *settings = @{ @"schema": @"20260808.3", @"app": @{ @"menu_bar_mode": @"health" },
+        @"policies": policies,
         @"sources": sources };
     NSError *error = nil;
     if (![self.store saveSettings:settings error:&error]) { [self showError:error titleKey:@"settings.save_failed"]; return; }

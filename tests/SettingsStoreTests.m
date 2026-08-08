@@ -25,7 +25,7 @@ int main(int argc, const char *argv[]) {
                 @"default source list must contain local Mihomo");
 
         NSDictionary *settings = @{
-            @"schema": @"20260808.1",
+            @"schema": @"20260808.3",
             @"app": @{ @"menu_bar_mode": @"health" },
             @"policies": @[@{
                 @"id": @"network-traffic-alerts", @"kind": @"traffic.threshold", @"resource_id": @"network",

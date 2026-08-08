@@ -17,10 +17,12 @@ from configuration import (  # noqa: E402
     StateConfig,
     read_config,
 )
+from billing_policy import BillingBudgetPolicy, BillingBudgetTransition  # noqa: E402
 from remote import RemoteServerConfig  # noqa: E402
 from sentinel import (  # noqa: E402
     AlertEngine,
     SAMPLE_SCHEMA,
+    build_billing_event,
     latest_delta_event,
     totals_for_window,
     write_menubar_state,
@@ -49,6 +51,7 @@ def make_config(state_dir: Path) -> Config:
         monitor=MonitorConfig(5, 300, 100, 600, 1_000),
         state=StateConfig(1024 * 1024, 2),
         remote_servers=(RemoteServerConfig("default", "VPS", vps, xray, TrafficEstimationConfig("both")),),
+        remote_billing_policies=(),
         state_dir=state_dir,
     )
 
@@ -505,6 +508,20 @@ class SessionMeterTests(unittest.TestCase):
 
 
 class SnapshotAndEventTests(unittest.TestCase):
+    def test_vps_billing_event_is_visible_to_the_native_notification_projection(self) -> None:
+        transition = BillingBudgetTransition(
+            policy=BillingBudgetPolicy("primary-billing-budget", "primary", "Primary VPS", 100, 200),
+            event_type="alert", level="warning", billable_bytes=120, threshold_bytes=100,
+            cycle={"started_at": "2026-08-01T00:00:00+08:00"},
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "events.jsonl"
+            event = build_billing_event(transition)
+            path.write_text(json.dumps(event) + "\n", encoding="utf-8")
+            visible = latest_delta_event(path)
+            self.assertEqual((visible["scope"], visible["source_id"], visible["threshold_bytes"]),
+                             ("vps_billing_cycle", "primary", 100))
+
     def test_snapshot_contains_only_aggregate_mihomo_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             config = make_config(Path(temporary) / "state")

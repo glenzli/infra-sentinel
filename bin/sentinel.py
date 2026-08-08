@@ -19,6 +19,7 @@ import time
 from typing import Any
 import uuid
 
+from billing_policy import BillingBudgetEngine, BillingBudgetTransition
 from configuration import Config, StateConfig, read_config
 from infra_projection import build_infra_projection
 from metric_store import MetricStore
@@ -134,7 +135,7 @@ def latest_delta_event(path: Path) -> dict[str, Any] | None:
         if (
             sample.get("schema") == SAMPLE_SCHEMA
             and sample_is_realtime(sample)
-        ):
+        ) or record.get("scope") == "vps_billing_cycle":
             latest = record
     return latest
 
@@ -238,6 +239,23 @@ def build_event(
     }
 
 
+def build_billing_event(transition: BillingBudgetTransition) -> dict[str, Any]:
+    return {
+        "schema": 3,
+        "id": uuid.uuid4().hex,
+        "timestamp": iso_now(),
+        "type": transition.event_type,
+        "level": transition.level,
+        "scope": "vps_billing_cycle",
+        "alert_group": transition.policy.label,
+        "source_id": transition.policy.source_id,
+        "policy_id": transition.policy.id,
+        "billable_bytes": transition.billable_bytes,
+        "threshold_bytes": transition.threshold_bytes,
+        "cycle": transition.cycle,
+    }
+
+
 def notify(
     event_type: str,
     level: str,
@@ -257,6 +275,30 @@ def notify(
         title = "Traffic Sentinel 流量告警"
         minutes = config.monitor.warning_window_seconds // 60
         body = f"{minutes} 分钟 ↑{format_bytes(warning['up_bytes'])} ↓{format_bytes(warning['down_bytes'])}"
+    script = 'display notification (system attribute "TS_BODY") with title (system attribute "TS_TITLE")'
+    environment = os.environ.copy()
+    environment.update({"TS_TITLE": title, "TS_BODY": body})
+    subprocess.run(
+        ["/usr/bin/osascript", "-e", script],
+        env=environment,
+        capture_output=True,
+        timeout=5,
+        check=False,
+    )
+
+
+def notify_billing(transition: BillingBudgetTransition) -> None:
+    """Deliver a compact CLI notification when the native app is not hosting it."""
+    if os.environ.get(APP_NOTIFICATIONS_ENV) == "1":
+        return
+    label = transition.policy.label
+    if transition.event_type == "recovered":
+        title, body = f"{label} 账单恢复", "本计费周期账单已回落到警告阈值以下"
+    elif transition.event_type == "deescalated":
+        title, body = f"{label} 账单降级", "严重阈值已回落，仍处于警告范围"
+    else:
+        title = f"{label} {'严重' if transition.level == 'critical' else ''}账单告警"
+        body = f"本计费周期 {format_bytes(transition.billable_bytes)}，阈值 {format_bytes(transition.threshold_bytes)}"
     script = 'display notification (system attribute "TS_BODY") with title (system attribute "TS_TITLE")'
     environment = os.environ.copy()
     environment.update({"TS_TITLE": title, "TS_BODY": body})
@@ -370,6 +412,7 @@ def handle_sample(
     client: MihomoApiClient,
     tracker: MihomoTrafficTracker,
     alerts: AlertEngine,
+    billing_alerts: BillingBudgetEngine,
     remote_monitor: RemoteFleetMonitor,
     session_meter: SessionMeter,
     metric_store: MetricStore,
@@ -429,13 +472,19 @@ def handle_sample(
         remote_state,
         now=float(sample["epoch"]),
     )
+    for transition in billing_alerts.evaluate(remote_state, config.remote_billing_policies):
+        event = build_billing_event(transition)
+        append_jsonl(config.state_dir / "events.jsonl", event, config.state)
+        notify_billing(transition)
     metric_store.write(network_metrics(sample, remote_state))
     write_menubar_state(
         config,
         sample,
         warning,
         critical,
-        alerts.level,
+        "critical" if "critical" in (alerts.level, billing_alerts.level) else (
+            "warning" if "warning" in (alerts.level, billing_alerts.level) else "none"
+        ),
         remote_state,
         session_snapshot,
         metric_store.summary(),
@@ -482,6 +531,7 @@ def main() -> int:
         history = load_recent_samples(config, time.time())
         tracker = load_tracker(config.state_dir / "mihomo-baseline.json")
         alerts = AlertEngine()
+        billing_alerts = BillingBudgetEngine()
         remote_monitor = RemoteFleetMonitor(config.remote_servers, config.state_dir, config.state)
         session_meter = SessionMeter(
             config.state_dir,
@@ -509,6 +559,7 @@ def main() -> int:
                         client,
                         tracker,
                         alerts,
+                        billing_alerts,
                         remote_monitor,
                         session_meter,
                         metric_store,

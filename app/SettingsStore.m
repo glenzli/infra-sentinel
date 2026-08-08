@@ -1,7 +1,7 @@
 #import "SettingsStore.h"
 
 static NSString *const TSSettingsErrorDomain = @"TrafficSentinel.Settings";
-static NSString *const TSSettingsSchema = @"20260808.1";
+static NSString *const TSSettingsSchema = @"20260808.3";
 
 @interface TSSettingsStore ()
 @property(nonatomic, copy) NSString *configPath;
