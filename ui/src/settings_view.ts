@@ -17,7 +17,7 @@ export interface SettingsActions {
   languageChanged(): void;
 }
 
-type SettingsSection = "general" | "sources" | "policies";
+type SettingsSection = "general" | "network";
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({
@@ -44,7 +44,7 @@ function remoteSources(settings: SettingsPayload): JsonObject[] {
 }
 
 function budgetPolicy(settings: SettingsPayload, sourceId: string): JsonObject | undefined {
-  return settings.policies.find((item) => item.kind === "network.billing.budget" && item.source_id === sourceId);
+  return settings.policies.find((item) => item.kind === "network.daily.usage" && item.source_id === sourceId);
 }
 
 function nextSourceId(settings: SettingsPayload): string {
@@ -71,18 +71,18 @@ function sourceRow(source: JsonObject, budget: JsonObject | undefined): string {
       <div class="host-form-grid">
         <label>Display name / 显示名称<input name="label:${escapeHtml(id)}" value="${escapeHtml(source.label)}" required /></label>
         <label>SSH Host / SSH 别名<input name="ssh:${escapeHtml(id)}" value="${escapeHtml(source.ssh_host)}" placeholder="my-vps" /></label>
-        <label>Billing / 计费方式<select name="billing:${escapeHtml(id)}"><option value="both" ${source.billing_mode === "both" ? "selected" : ""}>Both directions / 双向</option><option value="outbound" ${source.billing_mode === "outbound" ? "selected" : ""}>Outbound / 仅出站</option></select></label>
-        <label>Cycle day / 周期日<input name="cycle:${escapeHtml(id)}" type="number" min="1" max="31" value="${number(source.billing_cycle_start_day, 1)}" required /></label>
+        <label>Billing comparison / 账单对比方式<select name="billing:${escapeHtml(id)}"><option value="both" ${source.billing_mode === "both" ? "selected" : ""}>Both directions / 双向</option><option value="outbound" ${source.billing_mode === "outbound" ? "selected" : ""}>Outbound / 仅出站</option></select></label>
       </div>
       <div class="host-toggles">
         <label><input name="enabled:${escapeHtml(id)}" type="checkbox" ${enabled ? "checked" : ""} /> Enable host / 启用主机</label>
         <label><input name="xray:${escapeHtml(id)}" type="checkbox" ${bool(source.xray_stats_enabled) ? "checked" : ""} ${enabled ? "" : "disabled"} /> Xray user stats / Xray 用户统计</label>
-        <label><input name="budget:${escapeHtml(id)}" type="checkbox" ${budgetEnabled ? "checked" : ""} ${enabled ? "" : "disabled"} /> Billing budget / 账单预算</label>
+        <label><input name="budget:${escapeHtml(id)}" type="checkbox" ${budgetEnabled ? "checked" : ""} ${enabled ? "" : "disabled"} /> Daily usage check / 每日用量检测</label>
       </div>
       <div class="host-budget ${budgetEnabled && enabled ? "" : "host-budget--disabled"}">
-        <label>Warning / 警告<input name="budget-warning:${escapeHtml(id)}" type="number" min="1" value="${warning}" ${budgetEnabled && enabled ? "" : "disabled"} /><span>GiB</span></label>
-        <label>Critical / 严重<input name="budget-critical:${escapeHtml(id)}" type="number" min="1" value="${critical}" ${budgetEnabled && enabled ? "" : "disabled"} /><span>GiB</span></label>
+        <label>Warning threshold / 警告阈值<input name="budget-warning:${escapeHtml(id)}" type="number" min="1" value="${warning}" ${budgetEnabled && enabled ? "" : "disabled"} /><span>GiB/day</span></label>
+        <label>Critical threshold / 严重阈值<input name="budget-critical:${escapeHtml(id)}" type="number" min="1" value="${critical}" ${budgetEnabled && enabled ? "" : "disabled"} /><span>GiB/day</span></label>
       </div>
+      <p class="host-budget-note">Daily check: resets at 00:00 in this Mac's timezone / 每日检测：按本机时区每日 00:00 重置</p>
     </article>`;
 }
 
@@ -112,7 +112,7 @@ function readForm(form: HTMLFormElement, existing: SettingsPayload): SettingsPay
   alert.critical_window_minutes = Number(field("critical-window").value);
   alert.critical_mib = Number(field("critical-mib").value);
   const remotes = remoteSources(draft);
-  draft.policies = draft.policies.filter((policy) => policy.kind !== "network.billing.budget");
+  draft.policies = draft.policies.filter((policy) => policy.kind !== "network.daily.usage");
   for (const source of remotes) {
     const id = String(source.id);
     const enabled = field(`enabled:${id}`).checked;
@@ -121,10 +121,9 @@ function readForm(form: HTMLFormElement, existing: SettingsPayload): SettingsPay
     source.enabled = enabled;
     source.xray_stats_enabled = enabled && field(`xray:${id}`).checked;
     source.billing_mode = (form.elements.namedItem(`billing:${id}`) as HTMLSelectElement).value;
-    source.billing_cycle_start_day = Number(field(`cycle:${id}`).value);
     if (enabled && field(`budget:${id}`).checked) {
       draft.policies.push({
-        id: `${id}-billing-budget`, kind: "network.billing.budget", source_id: id,
+        id: `${id}-daily-usage`, kind: "network.daily.usage", source_id: id,
         warning_gib: Number(field(`budget-warning:${id}`).value),
         critical_gib: Number(field(`budget-critical:${id}`).value),
       });
@@ -151,16 +150,16 @@ export function renderSettings(root: HTMLDivElement, initial: SettingsPayload, a
       <main class="shell">
         <header class="topbar"><button class="brand" id="back" type="button"><span class="brand-mark" aria-hidden="true"><i></i></span><span>Infra Sentinel</span></button><div class="topbar-actions"><button class="button button--subtle" id="back-overview">${icon("arrow-left")}<span>Back to overview / 返回概览</span></button></div></header>
         <section class="settings-header"><p class="eyebrow">CONFIGURATION</p><h1>Settings / 设置</h1><p>Local Mihomo is discovered automatically. Choose how Infra Sentinel appears, which hosts it observes, and when it should notify you.</p></section>
-        <div class="settings-layout"><nav class="settings-nav" aria-label="Settings sections"><button type="button" data-settings-section="general" class="${activeSection === "general" ? "is-active" : ""}">General / 通用</button><button type="button" data-settings-section="sources" class="${activeSection === "sources" ? "is-active" : ""}">Data sources / 数据源</button><button type="button" data-settings-section="policies" class="${activeSection === "policies" ? "is-active" : ""}">Policies / 策略</button></nav>
+        <div class="settings-layout"><nav class="settings-nav" aria-label="Settings sections"><button type="button" data-settings-section="general" class="${activeSection === "general" ? "is-active" : ""}">General / 通用</button><button type="button" data-settings-section="network" class="${activeSection === "network" ? "is-active" : ""}">Network configuration / 网络配置</button></nav>
         <form id="settings-form" class="settings-form">
           <section class="settings-section settings-panel ${activeSection === "general" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">GENERAL</p><h2>Appearance / 外观</h2></div></div>
             <div class="general-grid"><label class="setting-choice"><span>Language / 语言</span>${languagePicker()}</label></div>
           </section>
-          <section class="settings-section settings-panel ${activeSection === "sources" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">REMOTE HOSTS</p><h2>Host configuration / 主机配置</h2></div><button class="button button--subtle" type="button" id="add-host">${icon("plus")}<span>Add VPS / 添加 VPS</span></button></div>
+          <section class="settings-section settings-panel ${activeSection === "network" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">NETWORK SOURCES</p><h2>Remote host configuration / 远端主机配置</h2></div><button class="button button--subtle" type="button" id="add-host">${icon("plus")}<span>Add VPS / 添加 VPS</span></button></div>
             <p class="settings-note">Use a Host alias from <code>~/.ssh/config</code>. Xray StatsService remains limited to remote <code>127.0.0.1:10085</code>.</p>
             <div class="host-list">${hosts.map((source) => sourceRow(source, budgetPolicy(settings, String(source.id)))).join("") || "<p class=\"empty\">No remote host configured / 尚未配置远端主机</p>"}</div>
           </section>
-          <section class="settings-section settings-panel ${activeSection === "policies" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">TRAFFIC POLICY</p><h2>Traffic alerts / 流量告警</h2></div></div>
+          <section class="settings-section settings-panel ${activeSection === "network" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">NETWORK ALERTS</p><h2>Traffic alerts / 流量告警</h2></div></div>
             <div class="alert-grid">
               <label>Warning window / 警告窗口<input name="warning-window" type="number" min="1" max="120" value="${number(alert.warning_window_minutes, 5)}" required /><span>minutes / 分钟</span></label>
               <label>Warning threshold / 警告阈值<input name="warning-mib" type="number" min="1" value="${number(alert.warning_mib, 250)}" required /><span>MiB</span></label>
@@ -187,7 +186,7 @@ export function renderSettings(root: HTMLDivElement, initial: SettingsPayload, a
       render(notice);
     }));
     root.querySelector<HTMLButtonElement>("#add-host")?.addEventListener("click", () => {
-      settings.sources.push({ id: nextSourceId(settings), kind: "network.linux-xray", label: "New VPS", enabled: true, ssh_host: "", xray_stats_enabled: false, billing_cycle_start_day: 1, billing_mode: "both" });
+      settings.sources.push({ id: nextSourceId(settings), kind: "network.linux-xray", label: "New VPS", enabled: true, ssh_host: "", xray_stats_enabled: false, billing_mode: "both" });
       render();
     });
     root.querySelectorAll<HTMLButtonElement>("[data-remove-source]").forEach((button) => button.addEventListener("click", () => {
@@ -199,7 +198,7 @@ export function renderSettings(root: HTMLDivElement, initial: SettingsPayload, a
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const save = form.querySelector<HTMLButtonElement>("button[type=submit]");
-      if (save) { save.disabled = true; save.textContent = "Saving… / 正在保存…"; }
+      if (save) { save.disabled = true; save.textContent = tr("Saving…", "正在保存…"); }
       try {
         const candidate = readForm(form, settings);
         const result = await requestAgentCommand("configuration.update", candidate as unknown as Record<string, unknown>);

@@ -1,4 +1,4 @@
-"""Per-VPS billing-cycle budget policies and transition state."""
+"""Per-VPS daily-usage guardrails and transition state."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ GIB = 1024 * 1024 * 1024
 
 @dataclass(frozen=True)
 class BillingBudgetPolicy:
-    """A single VPS's billable-byte limits for its configured billing cycle."""
+    """A single VPS's local daily-usage limits."""
 
     id: str
     source_id: str
@@ -25,21 +25,21 @@ class BillingBudgetTransition:
     policy: BillingBudgetPolicy
     event_type: str
     level: str
-    billable_bytes: int
+    usage_bytes: int
     threshold_bytes: int
     cycle: dict[str, Any]
 
 
-def billable_cycle_bytes(server: dict[str, Any]) -> int:
-    """Apply this VPS's provider billing direction to its cycle counters."""
+def daily_usage_bytes(server: dict[str, Any]) -> int:
+    """Use full interface traffic for a local daily-risk guardrail, not provider billing."""
     cycle = server.get("vps", {}).get("cycle", {})
     incoming = max(0, int(cycle.get("in_bytes", 0)))
     outgoing = max(0, int(cycle.get("out_bytes", 0)))
-    return outgoing if server.get("billing_mode") == "outbound" else incoming + outgoing
+    return incoming + outgoing
 
 
 class BillingBudgetEngine:
-    """Own alert state independently for each configured VPS billing policy."""
+    """Own persistent alert state independently for each VPS daily-usage policy."""
 
     def __init__(self) -> None:
         self.levels: dict[str, str] = {}
@@ -69,7 +69,7 @@ class BillingBudgetEngine:
             server = servers.get(policy.source_id)
             if not isinstance(server, dict) or not server.get("vps", {}).get("enabled"):
                 continue
-            value = billable_cycle_bytes(server)
+            value = daily_usage_bytes(server)
             next_level = (
                 "critical" if value >= policy.critical_bytes
                 else "warning" if value >= policy.warning_bytes
@@ -89,10 +89,38 @@ class BillingBudgetEngine:
                 policy=policy,
                 event_type=event_type,
                 level=next_level,
-                billable_bytes=value,
+                usage_bytes=value,
                 threshold_bytes=threshold,
                 cycle=dict(server.get("vps", {}).get("cycle", {})),
             ))
         for policy_id in set(self.levels) - active_ids:
             del self.levels[policy_id]
         return transitions
+
+    def snapshots(
+        self,
+        remote_state: dict[str, Any],
+        policies: Iterable[BillingBudgetPolicy],
+    ) -> list[dict[str, Any]]:
+        """Expose durable per-host daily-usage state for the public Projection."""
+        servers = {
+            str(server.get("id")): server
+            for server in remote_state.get("servers", [])
+            if isinstance(server, dict)
+        }
+        rows: list[dict[str, Any]] = []
+        for policy in policies:
+            server = servers.get(policy.source_id)
+            if not isinstance(server, dict) or not server.get("vps", {}).get("enabled"):
+                continue
+            rows.append({
+                "id": policy.id,
+                "source_id": policy.source_id,
+                "label": policy.label,
+                "level": self.levels.get(policy.id, "none"),
+                "usage_bytes": daily_usage_bytes(server),
+                "warning_bytes": policy.warning_bytes,
+                "critical_bytes": policy.critical_bytes,
+                "cycle": dict(server.get("vps", {}).get("cycle", {})),
+            })
+        return rows

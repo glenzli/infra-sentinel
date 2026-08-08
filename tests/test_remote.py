@@ -23,7 +23,7 @@ def server(server_id: str, label: str, host: str) -> RemoteServerConfig:
     return RemoteServerConfig(
         server_id,
         label,
-        VpsConfig(True, host, "auto", 300, 1, server_id, label, "both"),
+        VpsConfig(True, host, "auto", 300, server_id, label, "both"),
         XrayStatsConfig(True, host, "127.0.0.1:10085", "/usr/local/bin/xray", 300, (), (), server_id, label),
         TrafficEstimationConfig("both"),
     )

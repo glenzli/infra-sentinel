@@ -27,8 +27,8 @@ from xray_stats import XrayStatsConfig
 
 
 STATE_DIRECTORY_ENV = "INFRA_SENTINEL_STATE_DIR"
-CONFIG_SCHEMA = "20260808.3"
-PREVIOUS_CONFIG_SCHEMA = "20260808.1"
+CONFIG_SCHEMA = "20260808.4"
+PREVIOUS_CONFIG_SCHEMA = "20260808.3"
 SETTINGS_SCHEMA = CONFIG_SCHEMA
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG = PROJECT_ROOT / "config.toml"
@@ -49,11 +49,11 @@ POLICY_KEYS = {
     "id", "kind", "resource_id", "warning_window_minutes", "warning_mib",
     "critical_window_minutes", "critical_mib",
 }
-REMOTE_BILLING_POLICY_KEYS = {"id", "kind", "source_id", "warning_gib", "critical_gib"}
+REMOTE_USAGE_POLICY_KEYS = {"id", "kind", "source_id", "warning_gib", "critical_gib"}
 LOCAL_SOURCE_KEYS = {"id", "kind", "enabled"}
 REMOTE_SOURCE_KEYS = {
     "id", "kind", "label", "enabled", "ssh_host", "xray_stats_enabled",
-    "billing_cycle_start_day", "billing_mode",
+    "billing_mode",
 }
 LEGACY_TOP_LEVEL_KEYS = {"monitor", "remote"}
 MONITOR_KEYS = {
@@ -61,11 +61,11 @@ MONITOR_KEYS = {
 }
 REMOTE_KEYS = {"servers"}
 LEGACY_REMOTE_KEYS = {
-    "enabled", "ssh_host", "xray_stats_enabled", "billing_cycle_start_day", "billing_mode",
+    "enabled", "ssh_host", "xray_stats_enabled", "billing_mode",
 }
 LEGACY_SERVER_KEYS = {
     "id", "label", "enabled", "ssh_host", "xray_stats_enabled",
-    "billing_cycle_start_day", "billing_mode",
+    "billing_mode",
 }
 SERVER_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}\Z")
 
@@ -186,11 +186,10 @@ def _parse_remote_sources(raw_sources: list[Any]) -> tuple[dict[str, Any], ...]:
             "enabled": enabled,
             "ssh_host": ssh_host,
             "xray_stats_enabled": xray_enabled,
-            "billing_cycle_start_day": _integer(raw_source, "billing_cycle_start_day", 1, 31),
             "billing_mode": str(billing_mode),
-            "billing_alert_enabled": False,
-            "billing_warning_gib": 0,
-            "billing_critical_gib": 0,
+            "usage_alert_enabled": False,
+            "usage_warning_gib": 0,
+            "usage_critical_gib": 0,
         })
     if not local_found:
         raise ValueError("缺少 local-mihomo 数据源")
@@ -233,23 +232,23 @@ def _settings_from_contract(
             raise ValueError("策略必须是表")
         if policy is traffic:
             continue
-        _require_exact_keys(policy, REMOTE_BILLING_POLICY_KEYS, "VPS 账单策略")
+        _require_exact_keys(policy, REMOTE_USAGE_POLICY_KEYS, "VPS 每日用量策略")
         source_id = policy.get("source_id")
-        if policy.get("kind") != "network.billing.budget" or not isinstance(source_id, str) or source_id not in servers:
-            raise ValueError("VPS 账单策略的数据源无效")
-        if policy.get("id") != f"{source_id}-billing-budget":
-            raise ValueError("VPS 账单策略 id 无效")
+        if policy.get("kind") != "network.daily.usage" or not isinstance(source_id, str) or source_id not in servers:
+            raise ValueError("VPS 每日用量策略的数据源无效")
+        if policy.get("id") != f"{source_id}-daily-usage":
+            raise ValueError("VPS 每日用量策略 id 无效")
         server = servers[source_id]
-        if server["billing_alert_enabled"]:
-            raise ValueError(f"VPS 账单策略重复：{source_id}")
+        if server["usage_alert_enabled"]:
+            raise ValueError(f"VPS 每日用量策略重复：{source_id}")
         warning_gib = _integer(policy, "warning_gib", 1, 1_048_576)
         critical_gib = _integer(policy, "critical_gib", 1, 1_048_576)
         if critical_gib <= warning_gib:
-            raise ValueError("VPS 严重账单阈值必须大于警告阈值")
+            raise ValueError("VPS 每日严重阈值必须大于警告阈值")
         server.update({
-            "billing_alert_enabled": True,
-            "billing_warning_gib": warning_gib,
-            "billing_critical_gib": critical_gib,
+            "usage_alert_enabled": True,
+            "usage_warning_gib": warning_gib,
+            "usage_critical_gib": critical_gib,
         })
     return settings
 
@@ -264,7 +263,7 @@ def settings_payload(settings: UserSettings) -> dict[str, Any]:
     sources.extend({"id": server["id"], "kind": "network.linux-xray", "label": server["label"],
                     "enabled": server["enabled"], "ssh_host": server["ssh_host"],
                     "xray_stats_enabled": server["xray_stats_enabled"],
-                    "billing_cycle_start_day": server["billing_cycle_start_day"], "billing_mode": server["billing_mode"]}
+                    "billing_mode": server["billing_mode"]}
                    for server in settings.remote_servers)
     policies: list[dict[str, Any]] = [{
         "id": "network-traffic-alerts", "kind": "traffic.threshold", "resource_id": "network",
@@ -272,9 +271,9 @@ def settings_payload(settings: UserSettings) -> dict[str, Any]:
         "critical_window_minutes": settings.critical_window_minutes, "critical_mib": settings.critical_mib,
     }]
     policies.extend({
-        "id": f"{server['id']}-billing-budget", "kind": "network.billing.budget", "source_id": server["id"],
-        "warning_gib": server["billing_warning_gib"], "critical_gib": server["billing_critical_gib"],
-    } for server in settings.remote_servers if server["billing_alert_enabled"])
+        "id": f"{server['id']}-daily-usage", "kind": "network.daily.usage", "source_id": server["id"],
+        "warning_gib": server["usage_warning_gib"], "critical_gib": server["usage_critical_gib"],
+    } for server in settings.remote_servers if server["usage_alert_enabled"])
     return {
         "schema": SETTINGS_SCHEMA,
         "app": {"menu_bar_mode": "health"},
@@ -295,18 +294,17 @@ def serialize_settings(settings: UserSettings) -> str:
         "[[sources]]", 'id = "local-mihomo"', 'kind = "network.mihomo"', "enabled = true",
     ]
     for server in settings.remote_servers:
-        if server["billing_alert_enabled"]:
-            policy_id = f"{server['id']}-billing-budget"
+        if server["usage_alert_enabled"]:
+            policy_id = f"{server['id']}-daily-usage"
             lines.extend(["", "[[policies]]", f"id = {json.dumps(policy_id)}",
-                          'kind = "network.billing.budget"', f"source_id = {json.dumps(server['id'])}",
-                          f"warning_gib = {int(server['billing_warning_gib'])}",
-                          f"critical_gib = {int(server['billing_critical_gib'])}"])
+                          'kind = "network.daily.usage"', f"source_id = {json.dumps(server['id'])}",
+                          f"warning_gib = {int(server['usage_warning_gib'])}",
+                          f"critical_gib = {int(server['usage_critical_gib'])}"])
         lines.extend(["", "[[sources]]", f"id = {json.dumps(server['id'])}", 'kind = "network.linux-xray"',
                       f"label = {json.dumps(server['label'], ensure_ascii=False)}",
                       f"enabled = {'true' if server['enabled'] else 'false'}",
                       f"ssh_host = {json.dumps(server['ssh_host'], ensure_ascii=False)}",
                       f"xray_stats_enabled = {'true' if server['xray_stats_enabled'] else 'false'}",
-                      f"billing_cycle_start_day = {int(server['billing_cycle_start_day'])}",
                       f"billing_mode = {json.dumps(server['billing_mode'])}"])
     return "\n".join(lines) + "\n"
 
@@ -331,7 +329,7 @@ def _legacy_settings(raw: dict[str, Any]) -> UserSettings:
         if not isinstance(server, dict):
             raise ValueError(f"远端服务器 #{index + 1} 必须是表")
         _require_exact_keys(server, LEGACY_SERVER_KEYS, f"远端服务器 #{index + 1}")
-        sources.append({"kind": "network.linux-xray", **server})
+        sources.append({"kind": "network.linux-xray", **{key: value for key, value in server.items() if key != "billing_cycle_start_day"}})
     return _settings_from_contract({
         "schema": CONFIG_SCHEMA, "app": {"menu_bar_mode": "health"},
         "policies": [{"id": "network-traffic-alerts", "kind": "traffic.threshold", "resource_id": "network", **monitor}],
@@ -355,18 +353,33 @@ def _migrate_legacy_config(path: Path, raw: dict[str, Any]) -> UserSettings:
     return settings
 
 
+def _migrate_previous_config(path: Path, raw: dict[str, Any]) -> UserSettings:
+    """One-time migration from the former billing-cycle guardrail to daily usage."""
+    document = json.loads(json.dumps(raw))
+    document["schema_version"] = CONFIG_SCHEMA
+    for source in document.get("sources", []):
+        if isinstance(source, dict) and source.get("kind") == "network.linux-xray":
+            source.pop("billing_cycle_start_day", None)
+    for policy in document.get("policies", []):
+        if isinstance(policy, dict) and policy.get("kind") == "network.billing.budget":
+            source_id = str(policy.get("source_id", ""))
+            policy["kind"] = "network.daily.usage"
+            policy["id"] = f"{source_id}-daily-usage"
+    settings = _settings_from_contract(document, "schema_version")
+    backup = path.with_name(f"{path.stem}.pre-{CONFIG_SCHEMA}{path.suffix}")
+    if not backup.exists():
+        backup.write_bytes(path.read_bytes())
+    _write_atomic(path, serialize_settings(settings))
+    return settings
+
+
 def read_user_settings(path: Path) -> UserSettings:
     with path.open("rb") as handle:
         raw = tomllib.load(handle)
     if raw.get("schema_version") == CONFIG_SCHEMA:
         return _settings_from_contract(raw, "schema_version")
     if raw.get("schema_version") == PREVIOUS_CONFIG_SCHEMA:
-        settings = _settings_from_contract(raw, "schema_version", PREVIOUS_CONFIG_SCHEMA)
-        backup = path.with_name(f"{path.stem}.pre-{CONFIG_SCHEMA}{path.suffix}")
-        if not backup.exists():
-            backup.write_bytes(path.read_bytes())
-        _write_atomic(path, serialize_settings(settings))
-        return settings
+        return _migrate_previous_config(path, raw)
     return _migrate_legacy_config(path, raw)
 
 
@@ -382,21 +395,21 @@ def runtime_config(settings: UserSettings, state_dir: Path) -> Config:
     remotes = []
     for server in settings.remote_servers:
         vps = VpsConfig(server_id=server["id"], label=server["label"], enabled=server["enabled"], ssh_host=server["ssh_host"],
-                        interface=VPS_INTERFACE, poll_seconds=REMOTE_POLL_SECONDS, billing_cycle_start_day=server["billing_cycle_start_day"], billing_mode=server["billing_mode"])
+                        interface=VPS_INTERFACE, poll_seconds=REMOTE_POLL_SECONDS, billing_mode=server["billing_mode"])
         xray = XrayStatsConfig(server_id=server["id"], label=server["label"], enabled=server["enabled"] and server["xray_stats_enabled"],
                                ssh_host=server["ssh_host"], api_server=XRAY_API_SERVER, binary_path=XRAY_BINARY_PATH,
                                poll_seconds=REMOTE_POLL_SECONDS, expected_users=(), flagged_users=())
         remotes.append(RemoteServerConfig(server["id"], server["label"], vps, xray, TrafficEstimationConfig(server["billing_mode"])))
     billing_policies = tuple(
         BillingBudgetPolicy(
-            id=f"{server['id']}-billing-budget",
+            id=f"{server['id']}-daily-usage",
             source_id=server["id"],
             label=server["label"],
-            warning_bytes=int(server["billing_warning_gib"]) * GIB,
-            critical_bytes=int(server["billing_critical_gib"]) * GIB,
+            warning_bytes=int(server["usage_warning_gib"]) * GIB,
+            critical_bytes=int(server["usage_critical_gib"]) * GIB,
         )
         for server in settings.remote_servers
-        if server["billing_alert_enabled"]
+        if server["usage_alert_enabled"]
     )
     return Config(monitor, StateConfig(), tuple(remotes), billing_policies, state_dir)
 

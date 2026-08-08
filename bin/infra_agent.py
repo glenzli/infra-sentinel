@@ -171,7 +171,7 @@ def latest_delta_event(path: Path) -> dict[str, Any] | None:
         if (
             sample.get("schema") == SAMPLE_SCHEMA
             and sample_is_realtime(sample)
-        ) or record.get("scope") == "vps_billing_cycle":
+        ) or record.get("scope") == "vps_daily_usage":
             latest = record
     return latest
 
@@ -282,11 +282,11 @@ def build_billing_event(transition: BillingBudgetTransition) -> dict[str, Any]:
         "timestamp": iso_now(),
         "type": transition.event_type,
         "level": transition.level,
-        "scope": "vps_billing_cycle",
+        "scope": "vps_daily_usage",
         "alert_group": transition.policy.label,
         "source_id": transition.policy.source_id,
         "policy_id": transition.policy.id,
-        "billable_bytes": transition.billable_bytes,
+        "usage_bytes": transition.usage_bytes,
         "threshold_bytes": transition.threshold_bytes,
         "cycle": transition.cycle,
     }
@@ -340,12 +340,12 @@ def notify_billing(transition: BillingBudgetTransition) -> None:
         return
     label = transition.policy.label
     if transition.event_type == "recovered":
-        title, body = f"{label} 账单恢复", "本计费周期账单已回落到警告阈值以下"
+        title, body = f"{label} 每日用量恢复", "今日用量已回落到警告阈值以下"
     elif transition.event_type == "deescalated":
-        title, body = f"{label} 账单降级", "严重阈值已回落，仍处于警告范围"
+        title, body = f"{label} 每日用量降级", "严重阈值已回落，仍处于警告范围"
     else:
-        title = f"{label} {'严重' if transition.level == 'critical' else ''}账单告警"
-        body = f"本计费周期 {format_bytes(transition.billable_bytes)}，阈值 {format_bytes(transition.threshold_bytes)}"
+        title = f"{label} {'严重' if transition.level == 'critical' else ''}每日用量告警"
+        body = f"今日 {format_bytes(transition.usage_bytes)}，阈值 {format_bytes(transition.threshold_bytes)}"
     send_native_notification(title, body)
 
 
@@ -393,6 +393,7 @@ def write_projection_state(
             "updated_at": remote.get("updated_at"),
             "cycle": remote.get("cycle", {}),
             "servers": remote.get("servers", []),
+            "daily_usage_guards": remote.get("daily_usage_guards", []),
         },
         "xray_stats": {
             "enabled": bool(active_xray),
@@ -614,6 +615,10 @@ def handle_sample(
         event = build_billing_event(transition)
         append_jsonl(config.state_dir / "events.jsonl", event, config.state)
         notify_billing(transition)
+    remote_state = {
+        **remote_state,
+        "daily_usage_guards": billing_alerts.snapshots(remote_state, config.remote_billing_policies),
+    }
     collector_runs = collector_registry.collect(CollectorContext(sample, remote_state))
     for run in collector_runs:
         if run.status == "error":

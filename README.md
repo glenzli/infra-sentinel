@@ -152,12 +152,11 @@ label = "Primary VPS"
 enabled = true
 ssh_host = "my-vps"
 xray_stats_enabled = true
-billing_cycle_start_day = 1
 billing_mode = "both"
 
 [[policies]]
-id = "primary-billing-budget"
-kind = "network.billing.budget"
+id = "primary-daily-usage"
+kind = "network.daily.usage"
 source_id = "primary"
 warning_gib = 600
 critical_gib = 800
@@ -165,7 +164,7 @@ critical_gib = 800
 
 `local-mihomo` 是固定启用的本机数据源；远端 `network.linux-xray` 数据源可以有零个或多个。每个远端 `id` 对应一套独立的 VPS 网卡计数、Xray 计数和本地基线。仪表板顶部显示所有启用 VPS 的合计，远端明细区按名称分别列出各路账单量。
 
-首次读取旧版 `[monitor]` / `[remote]` 或上一日期配置时，App 会在同目录写入 `config.pre-20260808.3.toml` 备份，然后原子改写为当前结构；迁移完成后不维护旧格式分支。
+首次读取旧版 `[monitor]` / `[remote]` 或上一日期配置时，App 会在同目录写入日期化备份，然后原子改写为当前结构；迁移完成后不维护旧格式分支。
 
 ## VPS 与 Xray 计量校验
 
@@ -252,9 +251,9 @@ VPS 账单量     = RX + TX
 
 - 点击菜单栏即可打开完整仪表板；完整数值、网络归因和趋势只在仪表板中展示。
 - 仪表板顶部先展示整体健康状态、正式资源模块和数据源数量；当前唯一正式资源模块为 Network。
-- Network 详情继续显示 VPS 账单、本机 Mihomo 总量、代理路径、域名归因、Xray 用户统计和最近 15 分钟的 `MiB/min` 趋势。
+- Network 详情继续显示 VPS 账单、本机 Mihomo 总量、代理路径、域名归因、Xray 用户统计和最近 1 小时的 `MiB/min` 趋势。
 
-仪表板显示 VPS 账单、本机 Mihomo 总量、代理路径、域名归因、Xray 用户统计和最近 15 分钟的 `MiB/min` 趋势。界面支持中文和 English 即时切换。
+仪表板显示 VPS 账单、本机 Mihomo 总量、代理路径、域名归因、Xray 用户统计和最近 1 小时的 `MiB/min` 趋势。界面支持中文和 English 即时切换。
 
 默认告警：
 

@@ -8,7 +8,7 @@ from typing import Any, Iterable
 from sample_timing import DEFAULT_EXPECTED_INTERVAL_SECONDS, sample_is_realtime
 
 
-TREND_WINDOW_MINUTES = 15
+TREND_WINDOW_MINUTES = 60
 TYPICAL_TCP_FRAME_OVERHEAD_BYTES = 66
 BILLING_MODES = ("both", "outbound")
 

@@ -1,6 +1,6 @@
 # Managed by Infra Sentinel. Schema identifiers use YYYYMMDD.revision.
 # Local Mihomo discovery and sampling frequency are fixed product behavior.
-schema_version = "20260808.3"
+schema_version = "20260808.4"
 
 [app]
 menu_bar_mode = "health"

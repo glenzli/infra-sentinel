@@ -55,10 +55,10 @@ fn notification_event(projection: &Value) -> Option<NotificationEvent> {
         (_, "critical") => format!("{label} 严重告警"),
         _ => format!("{label} 流量告警"),
     };
-    let body = if event.get("scope").and_then(Value::as_str) == Some("vps_billing_cycle") {
+    let body = if event.get("scope").and_then(Value::as_str) == Some("vps_daily_usage") {
         format!(
-            "本周期 {} · 阈值 {}",
-            bytes(number(event.get("billable_bytes"))),
+            "今日 {} · 阈值 {}",
+            bytes(number(event.get("usage_bytes"))),
             bytes(number(event.get("threshold_bytes")))
         )
     } else if event_type == "recovered" {
@@ -125,12 +125,12 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn billing_alerts_keep_the_host_label_and_byte_values() {
+    fn daily_usage_alerts_keep_the_host_label_and_byte_values() {
         let event = notification_event(&json!({
-            "last_event": {"id": "event-1", "type": "alert", "level": "critical", "scope": "vps_billing_cycle", "alert_group": "Primary VPS", "billable_bytes": 1073741824_u64, "threshold_bytes": 536870912_u64}
+            "last_event": {"id": "event-1", "type": "alert", "level": "critical", "scope": "vps_daily_usage", "alert_group": "Primary VPS", "usage_bytes": 1073741824_u64, "threshold_bytes": 536870912_u64}
         }))
         .expect("notification event");
         assert_eq!(event.title, "Primary VPS 严重告警");
-        assert_eq!(event.body, "本周期 1.0 GiB · 阈值 512.0 MiB");
+        assert_eq!(event.body, "今日 1.0 GiB · 阈值 512.0 MiB");
     }
 }

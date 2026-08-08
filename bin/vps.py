@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import calendar
 from dataclasses import dataclass
 from datetime import datetime
 import json
@@ -58,7 +57,6 @@ class VpsConfig:
     ssh_host: str
     interface: str
     poll_seconds: int
-    billing_cycle_start_day: int
     server_id: str = "default"
     label: str = "VPS"
     billing_mode: str = "both"
@@ -68,18 +66,10 @@ def iso_now(epoch: float | None = None) -> str:
     return datetime.fromtimestamp(time.time() if epoch is None else epoch).astimezone().isoformat(timespec="seconds")
 
 
-def billing_cycle_start_epoch(day: int, now: float | None = None) -> float:
-    """Return the local-time billing-cycle start, including short months."""
+def daily_usage_start_epoch(now: float | None = None) -> float:
+    """Return the current local-day boundary for user-facing usage guardrails."""
     current = datetime.fromtimestamp(now or time.time()).astimezone()
-    current_day = min(day, calendar.monthrange(current.year, current.month)[1])
-    start = current.replace(day=current_day, hour=0, minute=0, second=0, microsecond=0)
-    if current >= start:
-        return start.timestamp()
-    year, month = current.year, current.month - 1
-    if month == 0:
-        year, month = year - 1, 12
-    prior_day = min(day, calendar.monthrange(year, month)[1])
-    return current.replace(year=year, month=month, day=prior_day, hour=0, minute=0, second=0, microsecond=0).timestamp()
+    return current.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
 
 
 def read_vps_counters(config: VpsConfig) -> dict[str, Any]:
@@ -192,7 +182,7 @@ def sum_vps_samples(samples: Iterable[dict[str, Any]], since: float) -> dict[str
 
 
 class VpsMonitor:
-    """Own the VPS polling schedule, baseline, rolling records, and bill total."""
+    """Own the VPS polling schedule, baseline, rolling records, and daily usage total."""
 
     def __init__(
         self,
@@ -234,7 +224,7 @@ class VpsMonitor:
             return VpsCounterTracker()
 
     def _cycle(self, now: float) -> dict[str, Any]:
-        start = billing_cycle_start_epoch(self.config.billing_cycle_start_day, now)
+        start = daily_usage_start_epoch(now)
         eligible = [sample for sample in iter_vps_samples(self.state_dir) if sample.get("schema") in SUPPORTED_VPS_SAMPLE_SCHEMAS and float(sample.get("epoch", 0)) >= start]
         totals = sum_vps_samples(eligible, start)
         coverage_started_at = min((float(sample["epoch"]) for sample in eligible), default=None)

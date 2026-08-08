@@ -61,7 +61,7 @@ from xray_stats import XrayStatsConfig  # noqa: E402
 
 
 def make_config(state_dir: Path) -> Config:
-    vps = VpsConfig(False, "", "auto", 300, 1)
+    vps = VpsConfig(False, "", "auto", 300)
     xray = XrayStatsConfig(False, "", "127.0.0.1:10085", "/usr/local/bin/xray", 300)
     return Config(
         monitor=MonitorConfig(5, 300, 100, 600, 1_000),
@@ -340,6 +340,7 @@ class TrafficEstimationTests(unittest.TestCase):
             },
         ], ("chatgpt",))
         bucket = result["buckets"][0]
+        self.assertEqual(result["window_minutes"], 60)
         self.assertEqual(bucket["services"]["chatgpt"], 12 * 1_048_576)
         self.assertEqual(bucket["mihomo_total"], 12 * 2_097_152)
 
@@ -722,8 +723,8 @@ class SnapshotAndEventTests(unittest.TestCase):
 
     def test_vps_billing_event_is_visible_to_the_native_notification_projection(self) -> None:
         transition = BillingBudgetTransition(
-            policy=BillingBudgetPolicy("primary-billing-budget", "primary", "Primary VPS", 100, 200),
-            event_type="alert", level="warning", billable_bytes=120, threshold_bytes=100,
+            policy=BillingBudgetPolicy("primary-daily-usage", "primary", "Primary VPS", 100, 200),
+            event_type="alert", level="warning", usage_bytes=120, threshold_bytes=100,
             cycle={"started_at": "2026-08-01T00:00:00+08:00"},
         )
         with tempfile.TemporaryDirectory() as temporary:
@@ -732,7 +733,7 @@ class SnapshotAndEventTests(unittest.TestCase):
             path.write_text(json.dumps(event) + "\n", encoding="utf-8")
             visible = latest_delta_event(path)
             self.assertEqual((visible["scope"], visible["source_id"], visible["threshold_bytes"]),
-                             ("vps_billing_cycle", "primary", 100))
+                             ("vps_daily_usage", "primary", 100))
 
     def test_snapshot_contains_only_aggregate_mihomo_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

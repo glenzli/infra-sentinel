@@ -24,7 +24,6 @@ export function tr(english: string, chinese: string): string {
 
 export function languagePicker(): string {
   return `<label class="language-picker" title="${tr("Language", "语言")}">
-    <span aria-hidden="true">◎</span>
     <select id="language" aria-label="${tr("Language", "语言")}">
       <option value="en" ${locale === "en" ? "selected" : ""}>English</option>
       <option value="zh" ${locale === "zh" ? "selected" : ""}>中文</option>

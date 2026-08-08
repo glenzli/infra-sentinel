@@ -10,6 +10,7 @@ from typing import Any
 
 from sample_timing import DEFAULT_EXPECTED_INTERVAL_SECONDS
 from traffic_estimation import (
+    TREND_WINDOW_MINUTES,
     TrafficEstimationConfig,
     estimate_fleet_traffic,
     estimate_traffic,
@@ -20,7 +21,7 @@ from vps import VPS_SAMPLE_SCHEMA
 
 SESSION_SCHEMA = 6
 HISTORY_LIMIT = 2_000
-HISTORY_WINDOW_SECONDS = 15 * 60
+HISTORY_WINDOW_SECONDS = TREND_WINDOW_MINUTES * 60
 ROUTES = ("proxy", "direct", "blocked", "unknown", "unattributed")
 
 

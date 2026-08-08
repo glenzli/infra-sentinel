@@ -88,6 +88,11 @@ def build_infra_projection(
     vps = session.get("vps") if isinstance(session.get("vps"), dict) else {}
     local_total = _number(kernel.get("total_bytes"))
     vps_total = _number(vps.get("total_bytes"))
+    daily_usage_guards = remote.get("daily_usage_guards") if isinstance(remote.get("daily_usage_guards"), list) else []
+    active_daily_guards = sum(
+        1 for guard in daily_usage_guards
+        if isinstance(guard, dict) and guard.get("level") in {"warning", "critical"}
+    )
     billing_available = bool(remote.get("enabled"))
     primary_total = vps_total if billing_available else local_total
     primary_source = "network.vps-billing" if billing_available else "local-mihomo"
@@ -131,7 +136,7 @@ def build_infra_projection(
         "product": {"id": "infra-sentinel", "mode": "network"},
         "overall": {
             "status": _status_for(alert_level, remote, collector_runs),
-            "active_alerts": 0 if alert_level == "none" else 1,
+            "active_alerts": active_daily_guards or (0 if alert_level == "none" else 1),
         },
         "resources": [{
             "id": "network",
