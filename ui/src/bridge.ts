@@ -35,6 +35,9 @@ export interface AgentProjection {
   updated_at: string;
   protocol: { schema: string; transport: string };
   infra: InfraProjection;
+  session: Record<string, unknown>;
+  vps: Record<string, unknown>;
+  xray_stats: Record<string, unknown>;
 }
 
 export interface CommandReceipt {

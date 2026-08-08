@@ -102,8 +102,16 @@ def _decode_command(path: Path) -> tuple[str, str, dict[str, Any], str] | None:
     return command_id, command_type, body, requested_at
 
 
-def consume_commands(state_dir: Path) -> Iterable[AgentCommand]:
-    """Claim valid commands; uncompleted claims are safely retried on restart."""
+def consume_commands(
+    state_dir: Path,
+    *,
+    accepted_types: set[str] | None = None,
+) -> Iterable[AgentCommand]:
+    """Claim valid commands; uncompleted claims are safely retried on restart.
+
+    A narrow local service may opt into a read-only command type without
+    claiming mutations owned by the sampling loop.
+    """
     commands_dir = state_dir / COMMANDS_DIRECTORY
     commands_dir.mkdir(parents=True, exist_ok=True)
     paths = sorted((*commands_dir.glob("*.processing.json"), *commands_dir.glob("*.request.json")))
@@ -113,6 +121,8 @@ def consume_commands(state_dir: Path) -> Iterable[AgentCommand]:
             path.unlink(missing_ok=True)
             continue
         command_id, command_type, payload, requested_at = decoded
+        if accepted_types is not None and command_type not in accepted_types:
+            continue
         processing_path = _processing_path(commands_dir, command_id)
         if path.name not in {f"{command_id}.request.json", processing_path.name}:
             path.unlink(missing_ok=True)

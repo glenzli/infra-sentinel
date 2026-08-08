@@ -35,6 +35,7 @@ from infra_agent import (  # noqa: E402
     apply_agent_commands,
     build_billing_event,
     latest_delta_event,
+    process_configuration_read_commands,
     totals_for_window,
     write_projection_state,
 )
@@ -656,6 +657,34 @@ class SessionMeterTests(unittest.TestCase):
             self.assertTrue(effects.restart_requested)
             updated = json.loads((commands / f"{update_id}.result.json").read_text(encoding="utf-8"))
             self.assertEqual(updated["payload"]["settings"]["policies"][0]["warning_mib"], 512)
+
+    def test_configuration_read_service_does_not_claim_mutating_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary)
+            config_path = state_dir / "config.toml"
+            write_user_settings(config_path, settings_payload(default_user_settings()))
+            commands = state_dir / "commands"
+            commands.mkdir()
+            get_id = "4fa7fb24-f31b-4c7d-8a2b-6f198844a263"
+            reset_id = "5fa7fb24-f31b-4c7d-8a2b-6f198844a263"
+            for command_id, command_type in ((get_id, "configuration.get"), (reset_id, "session.reset")):
+                (commands / f"{command_id}.request.json").write_text(json.dumps({
+                    "schema": COMMAND_SCHEMA,
+                    "id": command_id,
+                    "type": command_type,
+                    "requested_at": "2026-08-08T12:00:00+08:00",
+                    "payload": {},
+                }), encoding="utf-8")
+
+            completed = process_configuration_read_commands(
+                config_path,
+                state_dir,
+                logging.getLogger("infra-agent-test"),
+            )
+
+            self.assertEqual(completed, 1)
+            self.assertTrue((commands / f"{get_id}.result.json").exists())
+            self.assertTrue((commands / f"{reset_id}.request.json").exists())
 
     def test_catch_up_bytes_stay_in_totals_but_not_rate_trend(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

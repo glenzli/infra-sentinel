@@ -9,11 +9,10 @@ This directory owns the cross-platform desktop shell only.
 - Python `infra_agent.py` remains the owner of collectors, SQLite, policies,
   notifications, state, and the Projection contract.
 
-During this first migration slice the existing macOS app continues to own the
-Agent process lifecycle, so `npm run tauri dev` attaches to the same local
-Agent state. The next slice packages the Python Agent as a per-platform
-sidecar and transfers lifecycle ownership to Tauri; the frontend contract will
-not change.
+Tauri owns the lifetime of a packaged Agent sidecar. On first launch it creates
+the local `config.toml` from the bundled example, starts the Agent, and restarts
+it after a successful configuration update. The frontend contract does not
+change: it still sees only the versioned Projection and typed command results.
 
 ```text
 npm install

@@ -28,10 +28,10 @@ Infra Sentinel 是一个本地优先的个人 AI Infra 资源归因面板。当�
 - Linux `/sys/class/net` 网卡累计计数；
 - 仅监听远端 `127.0.0.1:10085` 的 Xray StatsService。
 
-桌面 UI 正在迁移到 Tauri。当前 `ui/` 已提供跨平台的只读 Projection 壳；
-它复用同一份本地 Agent 协议，而不会读取任意文件或运行任意命令。完整的
-Agent sidecar 打包与现有网络详情/设置迁移仍在进行中，macOS 原生 App 目前
-仍是正式发行入口。
+桌面端使用 Tauri，并把 Python Agent 按目标平台打包为本地 sidecar。桌面端只
+能读取版本化 Projection 和提交受限命令，无法读取任意文件或运行任意命令；
+Agent 仍是采样、存储、策略和通知的唯一所有者。首次启动会创建默认配置，设置
+保存后会由桌面端自动重启 Agent。
 
 当前不支持：
 
@@ -291,11 +291,11 @@ App 或采样器中断后的累计差额仍进入本周期总量，但标记为�
 ```sh
 git clone git@gitlab.com:glenzli/net-traffic-sential.git
 cd net-traffic-sential
-./bin/build-menubar-app.sh
-open "Infra Sentinel.app"
+./bin/build-desktop-app.sh
+open "ui/src-tauri/target/release/bundle/macos/Infra Sentinel.app"
 ```
 
-构建脚本会生成适配当前 Mac 架构的 `Infra Sentinel.app`，复制 Python 模块并执行本机 ad-hoc 签名。
+构建脚本会安装锁定的前端依赖，按当前 Mac 架构打包 Agent sidecar，并生成 ad-hoc 签名的 App。它不需要 Apple Developer 账号。
 
 维护者生成 Release 附件：
 
@@ -309,5 +309,6 @@ open "Infra Sentinel.app"
 
 ```sh
 python3 -m unittest discover -s tests -v
-./bin/build-menubar-app.sh
+cd ui/src-tauri && cargo test --offline
+cd ../.. && cd ui && npm run build
 ```

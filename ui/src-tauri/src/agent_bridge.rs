@@ -7,27 +7,18 @@
 
 use serde::Serialize;
 use serde_json::{json, Map, Value};
-use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+use crate::app_paths::state_dir;
+
 const PROTOCOL_SCHEMA: &str = "20260808.4";
-const STATE_DIRECTORY_ENV: &str = "INFRA_SENTINEL_STATE_DIR";
 
 #[derive(Serialize)]
 pub struct CommandReceipt {
     id: String,
-}
-
-fn state_dir() -> Result<PathBuf, String> {
-    if let Some(configured) = env::var_os(STATE_DIRECTORY_ENV) {
-        return Ok(PathBuf::from(configured));
-    }
-    dirs::data_dir()
-        .map(|directory| directory.join("Infra Sentinel").join("state"))
-        .ok_or_else(|| "cannot determine an application data directory".to_owned())
 }
 
 fn command_allowed(command_type: &str) -> bool {
@@ -54,7 +45,8 @@ fn publish_command(
         return Err("this desktop shell does not allow that Agent command".to_owned());
     }
     let command_id = Uuid::new_v4().to_string();
-    fs::create_dir_all(commands).map_err(|error| format!("cannot create command directory: {error}"))?;
+    fs::create_dir_all(commands)
+        .map_err(|error| format!("cannot create command directory: {error}"))?;
     let document = json!({
         "schema": PROTOCOL_SCHEMA,
         "id": command_id,
@@ -64,13 +56,17 @@ fn publish_command(
     });
     let temporary = commands.join(format!(".{command_id}.tmp"));
     let request = commands.join(format!("{command_id}.request.json"));
-    let encoded = serde_json::to_vec(&document).map_err(|error| format!("cannot encode command: {error}"))?;
+    let encoded =
+        serde_json::to_vec(&document).map_err(|error| format!("cannot encode command: {error}"))?;
     fs::write(&temporary, encoded).map_err(|error| format!("cannot write command: {error}"))?;
     fs::rename(&temporary, &request).map_err(|error| format!("cannot publish command: {error}"))?;
     Ok(CommandReceipt { id: command_id })
 }
 
-fn write_command(command_type: &str, payload: Map<String, Value>) -> Result<CommandReceipt, String> {
+fn write_command(
+    command_type: &str,
+    payload: Map<String, Value>,
+) -> Result<CommandReceipt, String> {
     publish_command(&state_dir()?.join("commands"), command_type, payload)
 }
 
@@ -99,7 +95,9 @@ pub fn read_agent_command_result(command_id: String) -> Result<Option<Value>, St
     let command_id = Uuid::parse_str(&command_id)
         .map_err(|_| "Agent command id is invalid".to_owned())?
         .to_string();
-    let path = state_dir()?.join("commands").join(format!("{command_id}.result.json"));
+    let path = state_dir()?
+        .join("commands")
+        .join(format!("{command_id}.result.json"));
     let document = match fs::read_to_string(path) {
         Ok(document) => document,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -116,7 +114,10 @@ pub fn read_agent_command_result(command_id: String) -> Result<Option<Value>, St
 }
 
 #[tauri::command]
-pub fn submit_agent_command(command_type: String, payload: Value) -> Result<CommandReceipt, String> {
+pub fn submit_agent_command(
+    command_type: String,
+    payload: Value,
+) -> Result<CommandReceipt, String> {
     let object = payload
         .as_object()
         .cloned()
@@ -142,11 +143,14 @@ mod tests {
 
     #[test]
     fn bridge_preserves_the_agent_command_wire_contract() {
-        let directory = std::env::temp_dir().join(format!("infra-sentinel-bridge-{}", uuid::Uuid::new_v4()));
+        let directory =
+            std::env::temp_dir().join(format!("infra-sentinel-bridge-{}", uuid::Uuid::new_v4()));
         let mut payload = Map::new();
         payload.insert("bucket_seconds".to_owned(), json!(300));
-        let receipt = publish_command(&directory, "metrics.query", payload).expect("publish command");
-        let document = fs::read_to_string(directory.join(format!("{}.request.json", receipt.id))).expect("read command");
+        let receipt =
+            publish_command(&directory, "metrics.query", payload).expect("publish command");
+        let document = fs::read_to_string(directory.join(format!("{}.request.json", receipt.id)))
+            .expect("read command");
         let value: Value = serde_json::from_str(&document).expect("decode command");
         assert_eq!(value["schema"], PROTOCOL_SCHEMA);
         assert_eq!(value["type"], "metrics.query");
@@ -157,6 +161,8 @@ mod tests {
     #[test]
     fn bridge_rejects_an_incompatible_projection() {
         assert!(decode_projection(r#"{"schema":"19990101.1"}"#).is_err());
-        assert!(decode_projection(&format!(r#"{{"schema":"{PROTOCOL_SCHEMA}","infra":{{}}}}"#)).is_ok());
+        assert!(
+            decode_projection(&format!(r#"{{"schema":"{PROTOCOL_SCHEMA}","infra":{{}}}}"#)).is_ok()
+        );
     }
 }

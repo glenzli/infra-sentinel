@@ -2,12 +2,12 @@
 set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-APP_DIR="$ROOT_DIR/Infra Sentinel.app"
-EXECUTABLE="$APP_DIR/Contents/MacOS/TrafficSentinel"
+APP_DIR="$ROOT_DIR/ui/src-tauri/target/release/bundle/macos/Infra Sentinel.app"
+EXECUTABLE="$APP_DIR/Contents/MacOS/infra-sentinel-desktop"
 INFO_PLIST="$APP_DIR/Contents/Info.plist"
 DIST_DIR="$ROOT_DIR/dist"
 
-"$ROOT_DIR/bin/build-menubar-app.sh"
+"$ROOT_DIR/bin/build-desktop-app.sh"
 /usr/bin/codesign --verify --deep --strict "$APP_DIR"
 
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$INFO_PLIST")

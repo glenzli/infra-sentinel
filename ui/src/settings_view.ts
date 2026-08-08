@@ -1,4 +1,6 @@
 import { requestAgentCommand } from "./agent_client";
+import { bindLanguagePicker, languagePicker, localizeInlinePairs, tr } from "./i18n";
+import { icon } from "./icons";
 
 type JsonObject = Record<string, unknown>;
 
@@ -12,6 +14,7 @@ export interface SettingsPayload {
 export interface SettingsActions {
   cancel(): void;
   saved(settings: SettingsPayload): void;
+  languageChanged(): void;
 }
 
 function escapeHtml(value: unknown): string {
@@ -143,7 +146,7 @@ export function renderSettings(root: HTMLDivElement, initial: SettingsPayload, a
     const hosts = remoteSources(settings);
     root.innerHTML = `
       <main class="shell">
-        <header class="topbar"><div class="brand"><span class="brand-mark" aria-hidden="true"><i></i></span><span>Infra Sentinel</span></div><button class="button button--subtle" id="back">Back to overview / 返回概览</button></header>
+        <header class="topbar"><div class="brand"><span class="brand-mark" aria-hidden="true"><i></i></span><span>Infra Sentinel</span></div><div class="topbar-actions">${languagePicker()}<button class="button button--subtle" id="back">${icon("arrow-left")}<span>Back to overview / 返回概览</span></button></div></header>
         <section class="settings-header"><p class="eyebrow">CONFIGURATION</p><h1>Settings / 设置</h1><p>Local Mihomo is discovered automatically. Configure only alert policy and remote hosts.</p></section>
         <form id="settings-form" class="settings-form">
           <section class="settings-section"><div class="section-heading"><div><p class="eyebrow">ALERT POLICY</p><h2>Traffic alerts / 流量告警</h2></div></div>
@@ -154,7 +157,7 @@ export function renderSettings(root: HTMLDivElement, initial: SettingsPayload, a
               <label>Critical threshold / 严重阈值<input name="critical-mib" type="number" min="1" value="${number(alert.critical_mib, 1024)}" required /><span>MiB</span></label>
             </div>
           </section>
-          <section class="settings-section"><div class="section-heading"><div><p class="eyebrow">REMOTE HOSTS</p><h2>Host configuration / 主机配置</h2></div><button class="button button--subtle" type="button" id="add-host">Add VPS / 添加 VPS</button></div>
+          <section class="settings-section"><div class="section-heading"><div><p class="eyebrow">REMOTE HOSTS</p><h2>Host configuration / 主机配置</h2></div><button class="button button--subtle" type="button" id="add-host">${icon("plus")}<span>Add VPS / 添加 VPS</span></button></div>
             <p class="settings-note">Use a Host alias from <code>~/.ssh/config</code>. Xray StatsService remains limited to remote <code>127.0.0.1:10085</code>.</p>
             <div class="host-list">${hosts.map((source) => sourceRow(source, budgetPolicy(settings, String(source.id)))).join("") || "<p class=\"empty\">No remote host configured / 尚未配置远端主机</p>"}</div>
           </section>
@@ -164,7 +167,9 @@ export function renderSettings(root: HTMLDivElement, initial: SettingsPayload, a
       </main>`;
     const form = root.querySelector<HTMLFormElement>("#settings-form");
     if (!form) return;
+    localizeInlinePairs(root);
     refreshHostControlState(form);
+    bindLanguagePicker(root, actions.languageChanged);
     form.addEventListener("change", () => refreshHostControlState(form));
     root.querySelector<HTMLButtonElement>("#back")?.addEventListener("click", actions.cancel);
     root.querySelector<HTMLButtonElement>("#cancel")?.addEventListener("click", actions.cancel);

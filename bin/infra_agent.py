@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 import time
 from typing import Any
 import uuid
@@ -53,6 +54,7 @@ from session import SessionMeter
 
 PARENT_PROCESS_ENV = "INFRA_SENTINEL_PARENT_PID"
 APP_NOTIFICATIONS_ENV = "INFRA_SENTINEL_APP_NOTIFICATIONS"
+CONFIGURATION_READ_INTERVAL_SECONDS = 0.1
 SAMPLE_SCHEMA = 5
 AGENT_RUNTIME_SCHEMA = PROJECTION_SCHEMA
 
@@ -100,9 +102,23 @@ def parent_process_exited() -> bool:
     if not raw_parent:
         return False
     try:
-        return os.getppid() != int(raw_parent)
+        parent_pid = int(raw_parent)
     except ValueError:
         return False
+    if parent_pid <= 1:
+        return False
+    try:
+        # A PyInstaller one-file sidecar forks a bootstrap process before the
+        # Python runtime starts. `getppid()` then points at that bootstrap,
+        # not at the desktop process that originally launched the sidecar.
+        # Test the recorded desktop PID directly so both the source runtime
+        # and the frozen sidecar stop when their UI exits.
+        os.kill(parent_pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    return False
 
 
 def rotate_before_append(path: Path, state: StateConfig) -> None:
@@ -433,6 +449,38 @@ def configure_logger(config: Config) -> logging.Logger:
     return logger
 
 
+def process_configuration_read_commands(config_path: Path, state_dir: Path, logger: logging.Logger) -> int:
+    """Complete configuration reads without waiting for a sampling interval.
+
+    Opening Settings is a local read and should not wait for Mihomo's five
+    second observation window or a slow SSH poll. Mutating commands remain in
+    ``apply_agent_commands`` so they retain the normal single-writer lifecycle.
+    """
+    completed = 0
+    for command in consume_commands(state_dir, accepted_types={"configuration.get"}):
+        try:
+            complete_command(command, status="ok", payload={
+                "settings": settings_payload(read_user_settings(config_path)),
+            })
+        except (OSError, ValueError) as exc:
+            complete_command(command, status="error", message=str(exc))
+            logger.warning("configuration read failed id=%s", command.id)
+        completed += 1
+    return completed
+
+
+def run_configuration_read_service(
+    config_path: Path,
+    state_dir: Path,
+    logger: logging.Logger,
+    stop_event: threading.Event,
+) -> None:
+    """Serve the read-only settings command while the sampler is busy."""
+    while not stop_event.is_set():
+        process_configuration_read_commands(config_path, state_dir, logger)
+        stop_event.wait(CONFIGURATION_READ_INTERVAL_SECONDS)
+
+
 def apply_agent_commands(
     config: Config,
     config_path: Path,
@@ -645,6 +693,14 @@ def main() -> int:
             config.monitor.sample_seconds,
             len(config.remote_servers),
         )
+        configuration_read_stop = threading.Event()
+        configuration_read_thread = threading.Thread(
+            target=run_configuration_read_service,
+            args=(config_path, config.state_dir, logger, configuration_read_stop),
+            name="infra-configuration-read-service",
+            daemon=True,
+        )
+        configuration_read_thread.start()
         try:
             while not parent_process_exited():
                 try:
@@ -670,6 +726,8 @@ def main() -> int:
                     write_health_state(config, "error", str(exc))
                     time.sleep(min(5, config.monitor.sample_seconds))
         finally:
+            configuration_read_stop.set()
+            configuration_read_thread.join(timeout=1)
             lock.close()
         return 0
     except KeyboardInterrupt:
