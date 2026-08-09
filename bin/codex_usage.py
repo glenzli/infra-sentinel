@@ -28,13 +28,21 @@ from infra_model import MetricPoint
 
 CODEX_POLL_SECONDS = 20
 ACTIVE_WINDOW_SECONDS = 10 * 60
-DAILY_BASELINE_SCHEMA = "20260809.3"
+DAILY_BASELINE_SCHEMA = "20260809.4"
+
+
+@dataclass(frozen=True)
+class CodexThreadCounter:
+    identifier: str
+    model: str
+    tokens: int
 
 
 @dataclass(frozen=True)
 class CodexStats:
     total_tokens: int
     models: tuple[dict[str, Any], ...]
+    user_counters: tuple[CodexThreadCounter, ...]
     threads: int
     user_threads: int
     subagents: int
@@ -77,15 +85,11 @@ def read_codex_state_stats(path: Path, epoch: float) -> CodexStats:
     uri = f"{path.resolve().as_uri()}?mode=ro"
     with closing(sqlite3.connect(uri, uri=True)) as connection:
         connection.execute("PRAGMA query_only = ON")
-        model_rows = connection.execute("""
-            SELECT
-                COALESCE(NULLIF(model, ''), 'unknown') AS model,
-                COUNT(*) AS threads,
-                COALESCE(SUM(tokens_used), 0) AS tokens_used
+        counter_rows = connection.execute("""
+            SELECT id, COALESCE(NULLIF(model, ''), 'unknown'), tokens_used
             FROM threads
             WHERE thread_source = 'user'
-            GROUP BY model
-            ORDER BY tokens_used DESC, model
+            ORDER BY id
         """).fetchall()
         totals = connection.execute("""
             SELECT
@@ -110,14 +114,19 @@ def read_codex_state_stats(path: Path, epoch: float) -> CodexStats:
                     ELSE 0 END), 0) AS maximum_depth
             FROM threads
         """, (cutoff, cutoff)).fetchone()
-    models = tuple({
-        "id": str(row[0]),
-        "threads": _integer(row[1]),
-        "total_tokens": _integer(row[2]),
-    } for row in model_rows)
+    counters = tuple(CodexThreadCounter(str(row[0]), str(row[1]), _integer(row[2])) for row in counter_rows)
+    model_totals: dict[str, dict[str, int]] = {}
+    for counter in counters:
+        model = model_totals.setdefault(counter.model, {"threads": 0, "total_tokens": 0})
+        model["threads"] += 1
+        model["total_tokens"] += counter.tokens
+    models = tuple({"id": model, **values} for model, values in sorted(
+        model_totals.items(), key=lambda item: (-item[1]["total_tokens"], item[0])
+    ))
     return CodexStats(
         total_tokens=_integer(totals[1]),
         models=models,
+        user_counters=counters,
         threads=_integer(totals[0]),
         user_threads=_integer(totals[2]),
         subagents=_integer(totals[3]),
@@ -152,11 +161,10 @@ class CodexUsageCollector:
         self._poll_seconds = poll_seconds
         self._next_poll_epoch = 0.0
         self._snapshot: dict[str, Any] = {"available": False, "status": "unavailable"}
-        self._previous_total: int | None = None
-        self._previous_model_totals: dict[str, int] = {}
+        self._previous_thread_tokens: dict[str, int] = {}
         self._checkpoint_path = checkpoint_path
         self._daily_baseline: int | None = None
-        self._daily_model_baselines: dict[str, int] = {}
+        self._daily_thread_baselines: dict[str, int] = {}
         self._daily_key: str | None = None
         self._daily_started_at: str | None = None
 
@@ -167,7 +175,9 @@ class CodexUsageCollector:
         temporary = self._checkpoint_path.with_suffix(".tmp")
         temporary.write_text(json.dumps({
             "schema": DAILY_BASELINE_SCHEMA, "day": self._daily_key,
-            "baseline_tokens": self._daily_baseline, "baseline_models": self._daily_model_baselines,
+            "baseline_tokens": self._daily_baseline,
+            "baseline_threads": self._daily_thread_baselines,
+            "last_threads": self._previous_thread_tokens,
             "started_at": self._daily_started_at,
         }, separators=(",", ":")), encoding="utf-8")
         temporary.replace(self._checkpoint_path)
@@ -192,31 +202,32 @@ class CodexUsageCollector:
             )
             if checkpoint_is_current:
                 self._daily_baseline = stored_baseline
-                stored_models = checkpoint.get("baseline_models")
-                self._daily_model_baselines = {
-                    str(model): _integer(tokens)
-                    for model, tokens in stored_models.items()
-                } if isinstance(stored_models, dict) else {}
+                stored_threads = checkpoint.get("baseline_threads")
+                self._daily_thread_baselines = {
+                    str(identifier): _integer(tokens)
+                    for identifier, tokens in stored_threads.items()
+                } if isinstance(stored_threads, dict) else {}
+                last_threads = checkpoint.get("last_threads")
+                self._previous_thread_tokens = {
+                    str(identifier): _integer(tokens)
+                    for identifier, tokens in last_threads.items()
+                } if isinstance(last_threads, dict) else {
+                    counter.identifier: counter.tokens for counter in stats.user_counters
+                }
                 self._daily_started_at = str(checkpoint.get("started_at") or timestamp)
             else:
                 self._daily_baseline = stats.total_tokens
-                self._daily_model_baselines = {str(model["id"]): _integer(model["total_tokens"]) for model in stats.models}
+                self._daily_thread_baselines = {counter.identifier: counter.tokens for counter in stats.user_counters}
+                self._previous_thread_tokens = dict(self._daily_thread_baselines)
                 self._daily_started_at = timestamp
             self._daily_key = day
             self._write_daily_checkpoint()
         model_today: dict[str, int] = {}
-        checkpoint_changed = False
-        for model in stats.models:
-            model_id = str(model["id"])
-            total = _integer(model["total_tokens"])
-            if model_id not in self._daily_model_baselines:
-                self._daily_model_baselines[model_id] = total
-                checkpoint_changed = True
-            model_today[model_id] = max(0, total - self._daily_model_baselines[model_id])
-        if checkpoint_changed:
-            self._write_daily_checkpoint()
-        baseline = self._daily_baseline if self._daily_baseline is not None else stats.total_tokens
-        return max(0, stats.total_tokens - baseline), self._daily_started_at or timestamp, model_today
+        for counter in stats.user_counters:
+            baseline = self._daily_thread_baselines.get(counter.identifier, 0)
+            delta = max(0, counter.tokens - baseline)
+            model_today[counter.model] = model_today.get(counter.model, 0) + delta
+        return sum(model_today.values()), self._daily_started_at or timestamp, model_today
 
     def _snapshot_for(self, stats: CodexStats, timestamp: str, epoch: float) -> dict[str, Any]:
         today_tokens, started_at, model_today = self._daily_window(stats, epoch, timestamp)
@@ -294,18 +305,20 @@ class CodexUsageCollector:
             self._snapshot = {**self._snapshot, "available": True, "status": "error", "label": "Codex"}
             return Collection(status="error", snapshot=self._snapshot)
         points_list: list[MetricPoint] = []
-        if self._previous_total is not None:
-            delta = stats.total_tokens - self._previous_total
-            if delta > 0:
-                points_list.append(self._point(timestamp, epoch, "ai.tokens.total", delta, {"scope": "local-state"}))
-            for model in stats.models:
-                model_id = str(model["id"])
-                total = _integer(model["total_tokens"])
-                previous = self._previous_model_totals.get(model_id)
-                delta = total - previous if previous is not None else 0
-                if delta > 0:
-                    points_list.append(self._point(timestamp, epoch, "ai.tokens.total", delta, {"model": model_id}))
-        self._previous_total = stats.total_tokens
-        self._previous_model_totals = {str(model["id"]): _integer(model["total_tokens"]) for model in stats.models}
+        model_deltas: dict[str, int] = {}
+        for counter in stats.user_counters:
+            previous = self._previous_thread_tokens.get(counter.identifier, 0)
+            delta = max(0, counter.tokens - previous)
+            if delta:
+                model_deltas[counter.model] = model_deltas.get(counter.model, 0) + delta
+        total_delta = sum(model_deltas.values())
+        if total_delta:
+            points_list.append(self._point(timestamp, epoch, "ai.tokens.total", total_delta, {"scope": "local-state"}))
+            points_list.extend(
+                self._point(timestamp, epoch, "ai.tokens.total", value, {"model": model})
+                for model, value in sorted(model_deltas.items())
+            )
+        self._previous_thread_tokens = {counter.identifier: counter.tokens for counter in stats.user_counters}
+        self._write_daily_checkpoint()
         self._snapshot = snapshot
         return Collection(points=tuple(points_list), status="ok", snapshot=snapshot)

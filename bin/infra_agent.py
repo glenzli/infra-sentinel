@@ -696,7 +696,9 @@ def main() -> int:
         collector_registry = network_collector_registry(
             (server.id, server.estimation.billing_mode) for server in config.remote_servers
         )
-        collector_registry.register(OpenCodeUsageCollector())
+        collector_registry.register(OpenCodeUsageCollector(
+            checkpoint_path=config.state_dir / "opencode-usage-counters.json"
+        ))
         collector_registry.register(CodexUsageCollector(checkpoint_path=config.state_dir / "codex-usage-day.json"))
         imported = metric_store.import_legacy_network()
         if imported:

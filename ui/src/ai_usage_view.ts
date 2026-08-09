@@ -1,12 +1,19 @@
+import "./ai_usage_view.css";
 import { AgentProjection, ResourceProjection, SourceProjection } from "./bridge";
 import { asArray, asRecord, formatTokens, number } from "./format";
 import { currentLocale, tr } from "./i18n";
-import { AnalysisScope, renderAnalysisScopes } from "./analysis_scope";
 import { DailyBarBucket, DailyBarSeries, renderDailyBarChart } from "./daily_bar_chart";
+import { AiAnalysisSnapshot, AiTimeRange, AiViewMode } from "./ai_analysis";
 
-type ModelBucket = { epoch: number; model: string; value: number };
+const MODEL_COLORS = ["#3178dc", "#9168c6", "#329260", "#c7792d", "#278d94", "#7b8794"];
+const SOURCE_COLORS = ["#3178dc", "#9168c6", "#329260", "#c7792d"];
 
-const MODEL_COLORS = ["#1a73e8", "#a142f4", "#1e8e3e", "#e37400", "#00838f"];
+type UsageInterval = {
+  epoch: number;
+  source: string;
+  total: number;
+  models: Map<string, number>;
+};
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" })[char] ?? char);
@@ -23,152 +30,205 @@ function formatMetric(value: unknown, unit: unknown = "tokens"): string {
   return formatTokens(value);
 }
 
-function tokenCard(label: string, value: unknown, detail: string, unit: unknown = "tokens"): string {
-  return `<article class="network-card network-card--blue"><p>${escapeHtml(label)}</p><strong>${formatMetric(value, unit)}</strong><small>${escapeHtml(detail)}</small></article>`;
-}
-
-function usageWindow(source: Record<string, unknown>, scope: "today" | "cumulative"): Record<string, unknown> {
-  return asRecord(asRecord(source.usage)[scope]);
-}
-
-function usageCard(source: Record<string, unknown>, scope: "today" | "cumulative"): string {
-  const window = usageWindow(source, scope);
-  const available = Boolean(window.available);
-  const label = scope === "today" ? tr("Observed today", "今日已观测") : tr("Cumulative", "累计消耗");
-  const started = String(window.started_at ?? "");
-  const detail = `${localized(window.detail)}${started ? ` · ${started}` : ""}`;
-  return available
-    ? tokenCard(label, window.tokens, detail)
-    : `<article class="network-card network-card--blue"><p>${escapeHtml(label)}</p><strong>—</strong><small>${escapeHtml(detail)}</small></article>`;
-}
-
 function canonicalModelId(value: unknown): string {
   const model = String(value ?? "").trim().toLowerCase();
   return model.startsWith("openai/") ? model.slice("openai/".length) : model;
 }
 
-function niceTokenAxisMaximum(value: number): number {
-  if (value <= 0) return 1_000;
-  const magnitude = 10 ** Math.floor(Math.log10(value));
-  const normalized = (value * 1.12) / magnitude;
-  const step = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find((candidate) => normalized <= candidate) ?? 10;
-  return step * magnitude;
+function rangeLabel(range: AiTimeRange): string {
+  const labels: Record<AiTimeRange, string> = {
+    today: tr("Today", "今日"),
+    "7d": tr("Last 7 days", "近 7 天"),
+    "30d": tr("Last 30 days", "近 30 天"),
+    recorded: tr("Recorded history", "记录累计"),
+  };
+  return labels[range];
 }
 
-function modelBuckets(points: Record<string, unknown>[]): ModelBucket[] {
-  return points.flatMap((point) => {
+function windowOf(source: Record<string, unknown>, window: "today" | "cumulative"): Record<string, unknown> {
+  return asRecord(asRecord(source.usage)[window]);
+}
+
+/**
+ * Project stored total/model points into mass-conserving intervals. Historical
+ * model counters from older collectors may contain reclassification inflation;
+ * those model shares are proportionally bounded by the source total here.
+ */
+function usageIntervals(points: Record<string, unknown>[]): UsageInterval[] {
+  const intervals = new Map<string, UsageInterval & { rawModels: Map<string, number> }>();
+  for (const point of points) {
+    const epoch = number(point.observed_epoch);
+    const source = String(point.source_id || "unknown");
+    if (!epoch) continue;
+    const key = `${epoch}:${source}`;
+    const interval = intervals.get(key) ?? { epoch, source, total: 0, models: new Map(), rawModels: new Map() };
     const dimensions = asRecord(point.dimensions);
     const model = canonicalModelId(dimensions.model);
-    const epoch = number(point.observed_epoch);
-    if (!model || !epoch) return [];
-    return [{ epoch, model, value: number(point.value) }];
-  });
+    if (model) interval.rawModels.set(model, (interval.rawModels.get(model) ?? 0) + number(point.value));
+    else interval.total += number(point.value);
+    intervals.set(key, interval);
+  }
+  return [...intervals.values()].map((interval) => {
+    const rawTotal = [...interval.rawModels.values()].reduce((sum, value) => sum + value, 0);
+    const authoritativeTotal = interval.total || rawTotal;
+    const scale = rawTotal > authoritativeTotal && rawTotal > 0 ? authoritativeTotal / rawTotal : 1;
+    const models = new Map([...interval.rawModels].map(([model, value]) => [model, Math.floor(value * scale)]));
+    const attributed = [...models.values()].reduce((sum, value) => sum + value, 0);
+    const residual = Math.max(0, authoritativeTotal - attributed);
+    if (residual) models.set("__unattributed__", residual);
+    return { epoch: interval.epoch, source: interval.source, total: authoritativeTotal, models };
+  }).sort((left, right) => left.epoch - right.epoch || left.source.localeCompare(right.source));
 }
 
-function sourceModelTotals(sources: Record<string, unknown>[], scope: AnalysisScope): Map<string, number> {
+function renderControls(snapshot: AiAnalysisSnapshot): string {
+  const modes: Array<[AiViewMode, string, string]> = [
+    ["overview", tr("Usage overview", "用量总览"), tr("Totals and source composition", "总量与来源构成")],
+    ["models", tr("Model analysis", "模型分析"), tr("Model share and rate", "模型占比与速率")],
+    ["activity", tr("Agent activity", "Agent 活动"), tr("Provider-specific diagnostics", "来源特有诊断")],
+  ];
+  const ranges: Array<[AiTimeRange, string]> = [
+    ["today", tr("Today", "今日")], ["7d", tr("7 days", "7 天")],
+    ["30d", tr("30 days", "30 天")], ["recorded", tr("Recorded", "记录累计")],
+  ];
+  return `<section class="ai-analysis-toolbar"><div class="ai-mode-tabs" role="tablist" aria-label="${tr("AI usage observation", "AI 用量观测维度")}">${modes.map(([mode, label, detail]) => `<button type="button" role="tab" aria-selected="${mode === snapshot.mode}" class="ai-mode-tab${mode === snapshot.mode ? " is-active" : ""}" data-ai-mode="${mode}"><strong>${label}</strong><small>${detail}</small></button>`).join("")}</div>${snapshot.mode === "activity" ? `<span class="ai-current-context">${tr("Current provider snapshot", "当前来源快照")}</span>` : `<div class="ai-range-picker"><span>${tr("Time range", "时间范围")}</span><div role="group">${ranges.map(([range, label]) => `<button type="button" class="ai-range${range === snapshot.range ? " is-active" : ""}" data-ai-range="${range}">${label}</button>`).join("")}</div></div>`}</section>`;
+}
+
+function shortStartedAt(value: unknown): string {
+  const date = new Date(String(value ?? ""));
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function renderCurrentSummary(providerSources: Record<string, unknown>[], sources: SourceProjection[]): string {
+  const today = providerSources.reduce((sum, source) => sum + number(windowOf(source, "today").tokens), 0);
+  const cumulative = providerSources.reduce((sum, source) => sum + number(windowOf(source, "cumulative").tokens), 0);
+  const online = sources.filter((source) => source.enabled && source.status === "ok").length;
+  const coverage = providerSources.map((source) => {
+    const window = windowOf(source, "today");
+    const started = shortStartedAt(window.started_at);
+    const method = String(window.method ?? "");
+    const detail = started ? tr(`since ${started}`, `${started} 起`) : method === "provider-day" ? tr("provider day", "供应商自然日") : localized(window.detail);
+    return `<span><i class="source-state source-state--${escapeHtml(String(source.status ?? "ok"))}"></i><strong>${escapeHtml(source.label ?? source.source_id)}</strong><small>${escapeHtml(detail)}</small></span>`;
+  }).join("");
+  return `<section class="ai-usage-summary"><article><p>${tr("Today — available usage", "今日可用统计")}</p><strong>${formatTokens(today)}</strong><small>${tr("Raw Token activity across available sources", "可用来源的原始 Token 活动")}</small></article><article><p>${tr("Local recorded cumulative", "本地记录累计")}</p><strong>${formatTokens(cumulative)}</strong><small>${tr("Not an account invoice", "不是账户账单")}</small></article><article><p>${tr("Collector coverage", "采集覆盖")}</p><strong>${online} / ${sources.length}</strong><small>${tr("sources online", "个来源在线")}</small></article><div class="ai-window-coverage"><b>${tr("Window coverage", "统计窗口")}</b>${coverage}</div></section>`;
+}
+
+function aggregateBySource(intervals: UsageInterval[]): Map<string, number> {
   const totals = new Map<string, number>();
-  const window = scope === "cumulative" ? "cumulative" : "today";
-  for (const source of sources) {
-    for (const model of asArray(source.models)) {
-      const id = canonicalModelId(model.id);
-      const value = number(asRecord(model[window]).tokens);
-      if (id) totals.set(id, (totals.get(id) ?? 0) + value);
-    }
+  for (const interval of intervals) totals.set(interval.source, (totals.get(interval.source) ?? 0) + interval.total);
+  return totals;
+}
+
+function aggregateByModel(intervals: UsageInterval[]): Map<string, number> {
+  const totals = new Map<string, number>();
+  for (const interval of intervals) {
+    for (const [model, value] of interval.models) totals.set(model, (totals.get(model) ?? 0) + value);
   }
   return totals;
 }
 
-function modelTotalsChart(models: string[], totals: Map<string, number>, scope: AnalysisScope): string {
-  const maximum = Math.max(...models.map((model) => totals.get(model) ?? 0), 1);
-  const title = scope === "cumulative" ? tr("Recorded model token totals", "模型 Token 记录累计") : tr("Today's model token totals", "当日模型 Token 汇总");
-  const total = models.reduce((sum, model) => sum + (totals.get(model) ?? 0), 0);
-  let cursor = 0;
-  const segments = models.map((model, index) => {
-    const next = cursor + ((totals.get(model) ?? 0) / Math.max(total, 1)) * 100;
-    const segment = `${MODEL_COLORS[index]} ${cursor}% ${next}%`;
-    cursor = next;
-    return segment;
-  }).join(", ");
-  const donut = models.length ? `<aside class="ai-model-share"><i style="background:conic-gradient(${segments})"></i><strong>${formatTokens(total)}</strong><small>${tr("top-model total", "前五模型合计")}</small></aside>` : "";
-  return `<article class="detail-panel ai-model-total-chart"><div class="detail-panel__heading"><h3>${title}</h3><span>${tr("available local sources", "已可用本地来源")}</span></div><div class="ai-model-total-chart__body"><div class="ai-model-bars">${models.map((model, index) => {
-    const totalForModel = totals.get(model) ?? 0;
-    const percentage = Math.max(1, Math.min(100, (totalForModel / maximum) * 100));
-    return `<div class="ai-model-bar"><div><span><i class="chart-dot" style="background:${MODEL_COLORS[index]}"></i>${escapeHtml(model)}</span><strong>${formatTokens(totalForModel)}</strong></div><p><i style="background:${MODEL_COLORS[index]};width:${percentage}%"></i></p></div>`;
-  }).join("")}</div>${donut}</div><p class="panel-footnote">${tr("Totals combine only unambiguous model identifiers across available local sources.", "仅对可明确对应的模型标识跨可用本地来源合并。")}</p></article>`;
+function horizontalBars(title: string, detail: string, totals: Map<string, number>, colors: string[]): string {
+  const ranked = [...totals.entries()].sort((left, right) => right[1] - left[1]).slice(0, 8);
+  const maximum = Math.max(...ranked.map(([, value]) => value), 1);
+  return `<article class="detail-panel ai-ranked-panel"><div class="detail-panel__heading"><h3>${escapeHtml(title)}</h3><span>${escapeHtml(detail)}</span></div><div class="ai-ranked-bars">${ranked.map(([label, value], index) => `<div class="ai-ranked-bar"><div><span><i class="chart-dot" style="background:${colors[index % colors.length]}"></i>${escapeHtml(label === "__unattributed__" ? tr("Unattributed", "未归因") : label)}</span><strong>${formatTokens(value)}</strong></div><p><i style="background:${colors[index % colors.length]};width:${Math.max(1, value / maximum * 100)}%"></i></p></div>`).join("") || `<div class="chart-empty">${tr("Waiting for recorded Token increments.", "等待已记录的 Token 增量。")}</div>`}</div></article>`;
 }
 
-export function renderAiModelTrend(points: Record<string, unknown>[], loading = false): string {
-  if (loading) return `<section class="trend-panel ai-model-trend"><div class="detail-panel__heading"><h3>${tr("Model token consumption rate", "模型 Token 消耗速率")}</h3><span>${tr("Token / min", "Token / 分钟")}</span></div><div class="chart-empty">${tr("Loading today's model activity…", "正在读取今日模型活动…")}</div></section>`;
-  const buckets = modelBuckets(points);
-  if (!buckets.length) return `<section class="trend-panel ai-model-trend"><div class="detail-panel__heading"><h3>${tr("Model token consumption rate", "模型 Token 消耗速率")}</h3><span>${tr("Token / min", "Token / 分钟")}</span></div><div class="chart-empty">${tr("Waiting for enough AI usage samples.", "等待足够的 AI 用量采样。")}</div></section>`;
-  const totals = new Map<string, number>();
-  for (const bucket of buckets) totals.set(bucket.model, (totals.get(bucket.model) ?? 0) + bucket.value);
-  const models = [...totals.entries()].sort((left, right) => right[1] - left[1]).slice(0, 5).map(([model]) => model);
-  const epochs = [...new Set(buckets.map((bucket) => bucket.epoch))].sort((left, right) => left - right);
-  if (epochs.length < 2) return `<section class="trend-panel ai-model-trend"><div class="detail-panel__heading"><h3>${tr("Model token consumption rate", "模型 Token 消耗速率")}</h3><span>${tr("Token / min", "Token / 分钟")}</span></div><div class="chart-empty">${tr("Waiting for the next five-minute model interval.", "等待下一个 5 分钟模型采样区间。")}</div></section>`;
-  const values = new Map<string, Map<number, number>>();
-  for (const model of models) values.set(model, new Map());
-  for (const bucket of buckets) {
-    const series = values.get(bucket.model);
-    if (series) series.set(bucket.epoch, (series.get(bucket.epoch) ?? 0) + bucket.value / 5);
-  }
-  const axisMaximum = niceTokenAxisMaximum(Math.max(...models.flatMap((model) => epochs.map((epoch) => values.get(model)?.get(epoch) ?? 0))));
-  const pointString = (model: string) => epochs.map((epoch, index) => {
-    const value = values.get(model)?.get(epoch) ?? 0;
-    const x = epochs.length === 1 ? 50 : (index / (epochs.length - 1)) * 100;
-    return `${x},${92 - (value / axisMaximum) * 82}`;
-  }).join(" ");
-  const legend = models.map((model, index) => `<span><i class="chart-dot" style="background:${MODEL_COLORS[index]}"></i>${escapeHtml(model)}</span>`).join("");
-  return `<section class="trend-panel ai-model-trend"><div class="detail-panel__heading"><h3>${tr("Model token consumption rate", "模型 Token 消耗速率")}</h3><span>${tr("Token / min", "Token / 分钟")}</span></div><div class="traffic-chart-frame"><span class="chart-axis-label chart-axis-label--peak">${formatTokens(axisMaximum)}</span><span class="chart-axis-label chart-axis-label--mid">${formatTokens(axisMaximum / 2)}</span><span class="chart-axis-label chart-axis-label--zero">0</span><svg class="traffic-chart" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="${tr("Model token consumption rate", "模型 Token 消耗速率")}"><path class="chart-grid chart-grid--reference" d="M0 10H100" /><path class="chart-grid" d="M0 51H100M0 92H100" />${models.map((model, index) => `<polyline class="chart-line" style="stroke:${MODEL_COLORS[index]}" points="${pointString(model)}" />`).join("")}</svg></div><div class="traffic-chart__timeline"><span>${tr("Today", "今天")}</span><span>${tr("Now", "现在")}</span></div><div class="chart-legend ai-model-trend__legend">${legend}</div><p class="panel-footnote">${tr("Values are five-minute stored increments normalized to Token per minute; they are not lifetime counters.", "数值由 5 分钟区间的已记录增量换算为每分钟 Token，不使用生命周期累计值。")}</p></section>`;
-}
-
-function renderDailyModelHistory(points: Record<string, unknown>[], loading: boolean): string {
-  if (loading) return `<article class="detail-panel ai-model-total-chart"><div class="detail-panel__heading"><h3>${tr("Daily token history", "每日 Token 历史")}</h3><span>${tr("last 30 days", "近 30 天")}</span></div><div class="chart-empty">${tr("Loading recorded daily totals…", "正在读取已记录的每日总量…")}</div></article>`;
-  const buckets = modelBuckets(points);
-  if (!buckets.length) return `<article class="detail-panel ai-model-total-chart"><div class="detail-panel__heading"><h3>${tr("Daily token history", "每日 Token 历史")}</h3><span>${tr("last 30 days", "近 30 天")}</span></div><div class="chart-empty">${tr("Daily history begins when Infra Sentinel records model increments.", "每日历史会从 Infra Sentinel 开始记录模型增量后出现。")}</div></article>`;
-  const totals = new Map<string, number>();
-  for (const bucket of buckets) totals.set(bucket.model, (totals.get(bucket.model) ?? 0) + bucket.value);
-  const modelIds = [...totals.entries()].sort((left, right) => right[1] - left[1]).slice(0, 4).map(([model]) => model);
-  const hasOther = totals.size > modelIds.length;
-  const series: DailyBarSeries[] = modelIds.map((model, index) => ({ id: model, label: model, color: MODEL_COLORS[index] }));
-  if (hasOther) series.push({ id: "__other_models__", label: tr("Other models", "其他模型"), color: "#7b8794" });
+function dailyHistory(intervals: UsageInterval[], dimension: "source" | "model", range: AiTimeRange): string {
+  const totals = dimension === "source" ? aggregateBySource(intervals) : aggregateByModel(intervals);
+  const visible = [...totals.entries()].sort((left, right) => right[1] - left[1]).slice(0, 5).map(([id]) => id);
+  const colors = dimension === "source" ? SOURCE_COLORS : MODEL_COLORS;
+  const series: DailyBarSeries[] = visible.map((id, index) => ({
+    id, label: id === "__unattributed__" ? tr("Unattributed", "未归因") : id, color: colors[index % colors.length],
+  }));
+  const hasOther = totals.size > visible.length;
+  if (hasOther) series.push({ id: "__other__", label: tr("Other", "其他"), color: "#7b8794" });
   const days = new Map<number, Map<string, number>>();
-  for (const bucket of buckets) {
-    const values = days.get(bucket.epoch) ?? new Map<string, number>();
-    const id = modelIds.includes(bucket.model) ? bucket.model : "__other_models__";
-    values.set(id, (values.get(id) ?? 0) + bucket.value);
-    days.set(bucket.epoch, values);
+  for (const interval of intervals) {
+    const day = new Date(interval.epoch * 1_000);
+    const epoch = new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime() / 1_000;
+    const values = days.get(epoch) ?? new Map<string, number>();
+    const rows = dimension === "source" ? new Map([[interval.source, interval.total]]) : interval.models;
+    for (const [id, value] of rows) {
+      const target = visible.includes(id) ? id : "__other__";
+      values.set(target, (values.get(target) ?? 0) + value);
+    }
+    days.set(epoch, values);
   }
-  const dailyBuckets: DailyBarBucket[] = [...days.entries()].sort(([left], [right]) => left - right).map(([epoch, values]) => ({ epoch, values }));
-  return renderDailyBarChart(series, dailyBuckets, {
-    title: tr("Daily token history", "每日 Token 历史"), detail: tr("by model · last 30 days", "按模型 · 近 30 天"),
-    ariaLabel: tr("Daily token history by model", "按模型的每日 Token 历史"), formatValue: formatTokens,
-    footnote: tr("Each day groups the four largest recorded models; all remaining models are shown together.", "每一天按累计最大的四个已记录模型分组，其余模型合并展示。"),
+  const buckets: DailyBarBucket[] = [...days.entries()].sort(([left], [right]) => left - right).slice(-30).map(([epoch, values]) => ({ epoch, values }));
+  return renderDailyBarChart(series, buckets, {
+    title: dimension === "source" ? tr("Daily usage by Agent", "按 Agent 的每日用量") : tr("Daily usage by model", "按模型的每日用量"),
+    detail: `${rangeLabel(range)}${days.size > 30 ? ` · ${tr("chart shows latest 30 days", "图表展示最近 30 天")}` : ""}`,
+    ariaLabel: tr("Daily recorded Token usage", "每日已记录 Token 用量"), formatValue: formatTokens, mode: "stacked",
+    footnote: tr("Each bar is one recorded daily total. Colors are additive components of that total.", "每根柱是一个已记录的每日总量，颜色表示总量中的组成部分。"),
   });
 }
 
-function renderAiAnalysis(sources: Record<string, unknown>[], scope: AnalysisScope, points: Record<string, unknown>[], loading: boolean): string {
-  const totals = sourceModelTotals(sources, scope);
-  const models = [...totals.entries()].sort((left, right) => right[1] - left[1]).slice(0, 5).map(([model]) => model);
-  const body = scope === "daily" ? renderDailyModelHistory(points, loading) : `${modelTotalsChart(models, totals, scope)}${scope === "today" ? renderAiModelTrend(points, loading) : ""}`;
-  return `<section class="analysis-panel">${renderAnalysisScopes("ai_usage", scope)}${body}</section>`;
+function niceTokenAxisMaximum(value: number): number {
+  if (value <= 0) return 1_000;
+  const magnitude = 10 ** Math.floor(Math.log10(value));
+  const normalized = value * 1.12 / magnitude;
+  return ([1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find((step) => normalized <= step) ?? 10) * magnitude;
 }
 
-function sourceDetails(source: Record<string, unknown>): string {
-  const title = String(source.label ?? source.source_id ?? "AI");
+function rateTrend(intervals: UsageInterval[], dimension: "source" | "model"): string {
+  const seriesTotals = dimension === "source" ? aggregateBySource(intervals) : aggregateByModel(intervals);
+  const seriesIds = [...seriesTotals.entries()].sort((left, right) => right[1] - left[1]).slice(0, 5).map(([id]) => id);
+  const epochs = [...new Set(intervals.map((interval) => interval.epoch))].sort((left, right) => left - right);
+  if (epochs.length < 2) return `<article class="trend-panel"><div class="detail-panel__heading"><h3>${tr("Token consumption rate", "Token 消耗速率")}</h3><span>${tr("Token / min", "Token / 分钟")}</span></div><div class="chart-empty">${tr("Waiting for another recorded interval.", "等待下一个记录区间。")}</div></article>`;
+  const values = new Map(seriesIds.map((id) => [id, new Map<number, number>()]));
+  for (const interval of intervals) {
+    const rows = dimension === "source" ? new Map([[interval.source, interval.total]]) : interval.models;
+    for (const [id, value] of rows) {
+      const target = values.get(id);
+      if (target) target.set(interval.epoch, (target.get(interval.epoch) ?? 0) + value / 5);
+    }
+  }
+  const maximum = niceTokenAxisMaximum(Math.max(...seriesIds.flatMap((id) => epochs.map((epoch) => values.get(id)?.get(epoch) ?? 0)), 1));
+  const start = epochs[0];
+  const span = Math.max(1, epochs[epochs.length - 1] - start);
+  const colors = dimension === "source" ? SOURCE_COLORS : MODEL_COLORS;
+  const points = (id: string) => epochs.map((epoch) => `${(epoch - start) / span * 100},${92 - ((values.get(id)?.get(epoch) ?? 0) / maximum) * 82}`).join(" ");
+  return `<article class="trend-panel"><div class="detail-panel__heading"><h3>${dimension === "source" ? tr("Agent Token rate", "Agent Token 速率") : tr("Model Token rate", "模型 Token 速率")}</h3><span>${tr("Token / min", "Token / 分钟")}</span></div><div class="traffic-chart-frame"><span class="chart-axis-label chart-axis-label--peak">${formatTokens(maximum)}</span><span class="chart-axis-label chart-axis-label--mid">${formatTokens(maximum / 2)}</span><span class="chart-axis-label chart-axis-label--zero">0</span><svg class="traffic-chart" viewBox="0 0 100 100" preserveAspectRatio="none"><path class="chart-grid chart-grid--reference" d="M0 10H100"/><path class="chart-grid" d="M0 51H100M0 92H100"/>${seriesIds.map((id, index) => `<polyline class="chart-line" style="stroke:${colors[index % colors.length]}" points="${points(id)}"/>`).join("")}</svg></div><div class="traffic-chart__timeline"><span>${tr("Start", "起点")}</span><span>${tr("Now", "现在")}</span></div><div class="chart-legend">${seriesIds.map((id, index) => `<span><i class="chart-dot" style="background:${colors[index % colors.length]}"></i>${escapeHtml(id === "__unattributed__" ? tr("Unattributed", "未归因") : id)}</span>`).join("")}</div></article>`;
+}
+
+function renderOverview(intervals: UsageInterval[], range: AiTimeRange): string {
+  const sources = aggregateBySource(intervals);
+  const selectedTotal = [...sources.values()].reduce((sum, value) => sum + value, 0);
+  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Recorded usage", "已记录用量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><span>${rangeLabel(range)} · ${sources.size} ${tr("Agents", "个 Agent")}</span></div>${horizontalBars(tr("Usage by Agent", "按 Agent 的用量"), rangeLabel(range), sources, SOURCE_COLORS)}${range === "today" ? rateTrend(intervals, "source") : dailyHistory(intervals, "source", range)}</section>`;
+}
+
+function renderModels(intervals: UsageInterval[], range: AiTimeRange): string {
+  const models = aggregateByModel(intervals);
+  const selectedTotal = [...models.values()].reduce((sum, value) => sum + value, 0);
+  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Model-attributed usage", "模型归因用量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><span>${rangeLabel(range)} · ${tr("mass-conserving", "总量守恒")}</span></div>${horizontalBars(tr("Model composition", "模型构成"), rangeLabel(range), models, MODEL_COLORS)}${range === "today" ? rateTrend(intervals, "model") : dailyHistory(intervals, "model", range)}</section>`;
+}
+
+function providerDetails(source: Record<string, unknown>): string {
+  const today = windowOf(source, "today");
+  const cumulative = windowOf(source, "cumulative");
   const groups = asArray(source.details);
-  return `<section class="ai-source-section"><div class="detail-panel__heading"><h3>${escapeHtml(title)} · ${tr("usage", "用量")}</h3><span>${escapeHtml(String(source.collection_method ?? ""))}</span></div><div class="network-card-grid ai-token-card-grid">${usageCard(source, "today")}${usageCard(source, "cumulative")}</div>${groups.map((group) => {
-    const metrics = asArray(group.metrics);
-    return `<div class="detail-panel__heading"><h3>${escapeHtml(localized(group.title))}</h3><span>${escapeHtml(localized(group.badge))}</span></div><div class="network-card-grid ai-token-card-grid">${metrics.map((metric) => tokenCard(localized(metric.label), metric.value, localized(metric.detail), metric.unit)).join("")}</div>${group.note ? `<p class="network-explanation">${escapeHtml(localized(group.note))}</p>` : ""}`;
-  }).join("")}</section>`;
+  const started = shortStartedAt(today.started_at);
+  return `<details class="ai-provider-panel"><summary><span><strong>${escapeHtml(source.label ?? source.source_id)}</strong><small>${escapeHtml(String(source.collection_method ?? ""))}</small></span><span><small>${tr("Today", "今日")}</small><strong>${today.available ? formatTokens(today.tokens) : "—"}</strong></span><span><small>${tr("Cumulative", "累计")}</small><strong>${cumulative.available ? formatTokens(cumulative.tokens) : "—"}</strong></span><em>${started ? tr(`since ${started}`, `${started} 起`) : localized(today.detail)}</em></summary><div class="ai-provider-body">${groups.map((group) => `<section><div class="detail-panel__heading"><h3>${escapeHtml(localized(group.title))}</h3><span>${escapeHtml(localized(group.badge))}</span></div><dl>${asArray(group.metrics).map((metric) => `<div><dt>${escapeHtml(localized(metric.label))}<small>${escapeHtml(localized(metric.detail))}</small></dt><dd>${formatMetric(metric.value, metric.unit)}</dd></div>`).join("")}</dl>${group.note ? `<p>${escapeHtml(localized(group.note))}</p>` : ""}</section>`).join("")}</div></details>`;
 }
 
-export function renderAiUsageResourcePage(projection: AgentProjection, resource: ResourceProjection, sources: SourceProjection[], scope: AnalysisScope, points: Record<string, unknown>[], loading = false): string {
-  const aiUsage = asRecord(projection.infra.ai_usage);
-  const providerSources = asArray(aiUsage.sources);
-  const aggregate = asRecord(aiUsage.aggregate);
-  const aggregateToday = asRecord(aggregate.today);
-  const aggregateCumulative = asRecord(aggregate.cumulative);
+function renderActivity(providerSources: Record<string, unknown>[]): string {
+  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Provider snapshots", "来源快照")}</p><strong>${providerSources.length}</strong></div><span>${tr("Current diagnostics · not additive", "当前诊断 · 不可与 Token 总量相加")}</span></div><div class="ai-provider-list">${providerSources.map(providerDetails).join("") || `<div class="chart-empty">${tr("No AI usage provider available.", "暂无可用的 AI 用量来源。")}</div>`}</div></section>`;
+}
+
+function analysisBody(snapshot: AiAnalysisSnapshot, providerSources: Record<string, unknown>[]): string {
+  if (snapshot.mode === "activity") return renderActivity(providerSources);
+  if (snapshot.loading && !snapshot.points.length) return `<article class="detail-panel ai-analysis-state"><span class="pulse"></span><p>${tr("Loading recorded Token usage…", "正在读取已记录的 Token 用量…")}</p></article>`;
+  if (snapshot.error) return `<article class="detail-panel ai-analysis-state ai-analysis-state--error"><strong>${tr("Recorded metrics unavailable", "暂时无法读取历史指标")}</strong><p>${escapeHtml(snapshot.error)}</p></article>`;
+  const intervals = usageIntervals(snapshot.points);
+  return snapshot.mode === "overview" ? renderOverview(intervals, snapshot.range) : renderModels(intervals, snapshot.range);
+}
+
+function sourceRow(source: SourceProjection): string {
+  return `<li class="source-row"><span class="source-state source-state--${escapeHtml(source.status)}"></span><span class="source-main"><strong>${escapeHtml(source.label)}</strong><small>${escapeHtml(source.kind)}</small></span><span class="source-status">${escapeHtml(source.status)}</span></li>`;
+}
+
+export function renderAiUsageResourcePage(projection: AgentProjection, _resource: ResourceProjection, sources: SourceProjection[], snapshot: AiAnalysisSnapshot): string {
+  const providerSources = asArray(asRecord(projection.infra.ai_usage).sources);
   const sourceNames = providerSources.map((source) => String(source.label ?? source.source_id ?? "")).filter(Boolean).join(" · ");
-  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("RESOURCE DETAIL", "资源详情")}</p><h2>${tr("AI usage", "AI 用量")}</h2></div><span class="section-heading__meta">${escapeHtml(sourceNames)}</span></div><section class="network-detail"><section class="ai-source-section"><div class="detail-panel__heading"><h3>${tr("Local usage rollup", "本机用量汇总")}</h3><span>${tr("not billing", "非账单")}</span></div><div class="network-card-grid ai-token-card-grid">${tokenCard(tr("Observed today", "今日已观测"), aggregateToday.tokens, tr("available local sources", "已可用本地来源"))}${tokenCard(tr("Local cumulative", "本地累计记录"), aggregateCumulative.tokens, tr("available history sources", "可用历史来源"))}</div><p class="network-explanation">${tr("Each provider declares whether a window is native or locally observed. The rollup only adds available windows and is useful for comparison, not provider billing.", "每个提供方都会声明时间口径是原生统计还是本机观测；汇总只相加可用窗口，适合比较，不是供应商账单。")}</p></section><div id="ai-analysis">${renderAiAnalysis(providerSources, scope, points, loading)}</div>${providerSources.map(sourceDetails).join("")}<article class="sources-card sources-card--footer"><div class="sources-card__heading"><h3>${tr("Collector sources", "采集数据源")}</h3><span>${sources.length}</span></div><ul>${sources.map((sourceItem) => `<li class="source-row"><span class="source-state source-state--${escapeHtml(sourceItem.status)}" aria-hidden="true"></span><span class="source-main"><strong>${escapeHtml(sourceItem.label)}</strong><small>${escapeHtml(sourceItem.kind)}</small></span><span class="source-status">${escapeHtml(sourceItem.status)}</span></li>`).join("")}</ul></article></section></section>`;
+  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("RESOURCE DETAIL", "资源详情")}</p><h2>${tr("AI usage", "AI 用量")}</h2></div><span class="section-heading__meta">${escapeHtml(sourceNames)}</span></div><section class="network-detail">${renderCurrentSummary(providerSources, sources)}${renderControls(snapshot)}${analysisBody(snapshot, providerSources)}<article class="sources-card sources-card--footer"><div class="sources-card__heading"><h3>${tr("Collector sources", "采集数据源")}</h3><span>${sources.length}</span></div><ul>${sources.map(sourceRow).join("")}</ul></article></section></section>`;
 }

@@ -115,6 +115,26 @@ class OpenCodeStatsTests(unittest.TestCase):
         self.assertEqual(result.status, "unavailable")
         self.assertEqual(result.snapshot, {"available": False, "status": "unavailable"})
 
+    def test_restart_reuses_same_day_counter_checkpoint_without_replay(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / "opencode-usage-counters.json"
+
+            def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+                return subprocess.CompletedProcess(command, 0, STATS_OUTPUT, "")
+
+            first_collector = OpenCodeUsageCollector(
+                executable_finder=lambda: "/test/opencode", desktop_database_finder=lambda: None,
+                runner=runner, checkpoint_path=checkpoint,
+            )
+            first = first_collector.collect(CollectorContext({"epoch": 1_786_083_200.0}, {}))
+            restarted = OpenCodeUsageCollector(
+                executable_finder=lambda: "/test/opencode", desktop_database_finder=lambda: None,
+                runner=runner, checkpoint_path=checkpoint,
+            ).collect(CollectorContext({"epoch": 1_786_083_220.0}, {}))
+
+        self.assertTrue(first.points)
+        self.assertEqual(restarted.points, ())
+
     def test_failed_later_poll_keeps_last_complete_snapshot_visible(self) -> None:
         outputs = iter([STATS_OUTPUT, "not a supported stats table"])
 
@@ -174,6 +194,10 @@ class OpenCodeStatsTests(unittest.TestCase):
         self.assertEqual(snapshot["usage"]["cumulative"]["tokens"], 11_800)
         self.assertEqual([model["id"] for model in snapshot["models"]], ["openai/gpt-5.6", "deepseek/deepseek-chat"])
         self.assertTrue(all(model["cumulative"]["available"] for model in snapshot["models"]))
+        activity = next(group for group in snapshot["details"] if group["id"] == "activity")
+        reported_cost = next(metric for metric in activity["metrics"] if metric["id"] == "reported-cost")
+        self.assertAlmostEqual(reported_cost["value"], 0.15)
+        self.assertEqual(reported_cost["unit"], "usd")
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
+import json
 from pathlib import Path
 import re
 import shutil
@@ -28,6 +29,7 @@ from infra_model import MetricPoint
 
 OPENCODE_POLL_SECONDS = 60
 OPENCODE_TIMEOUT_SECONDS = 20
+OPENCODE_CHECKPOINT_SCHEMA = "20260809.1"
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _MODEL_HEADER = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.:@-]+$")
 _NUMBER = re.compile(r"^(\d+(?:\.\d+)?)([KMB])?$")
@@ -310,6 +312,7 @@ class OpenCodeUsageCollector:
         runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
         clock: Callable[[], float] = time.time,
         poll_seconds: int = OPENCODE_POLL_SECONDS,
+        checkpoint_path: Path | None = None,
     ) -> None:
         self._executable_finder = executable_finder
         self._desktop_database_finder = desktop_database_finder
@@ -319,6 +322,42 @@ class OpenCodeUsageCollector:
         self._next_poll_epoch = 0.0
         self._snapshot: dict[str, Any] = {"available": False, "status": "unavailable"}
         self._previous: dict[str, int | float] = {}
+        self._checkpoint_path = checkpoint_path
+        self._checkpoint_day: str | None = None
+
+    def _load_checkpoint(self, epoch: float) -> None:
+        day = datetime.fromtimestamp(epoch).astimezone().date().isoformat()
+        if self._checkpoint_day == day:
+            return
+        payload: dict[str, Any] = {}
+        if self._checkpoint_path is not None:
+            try:
+                payload = json.loads(self._checkpoint_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                payload = {}
+        counters = payload.get("counters")
+        self._previous = {
+            str(key): value
+            for key, value in counters.items()
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        } if (
+            payload.get("schema") == OPENCODE_CHECKPOINT_SCHEMA
+            and payload.get("day") == day
+            and isinstance(counters, dict)
+        ) else {}
+        self._checkpoint_day = day
+
+    def _write_checkpoint(self) -> None:
+        if self._checkpoint_path is None or self._checkpoint_day is None:
+            return
+        self._checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self._checkpoint_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps({
+            "schema": OPENCODE_CHECKPOINT_SCHEMA,
+            "day": self._checkpoint_day,
+            "counters": self._previous,
+        }, separators=(",", ":")), encoding="utf-8")
+        temporary.replace(self._checkpoint_path)
 
     @staticmethod
     def _models_with_totals(stats: OpenCodeStats) -> list[dict[str, Any]]:
@@ -373,6 +412,7 @@ class OpenCodeUsageCollector:
                 detail_group("activity", localized("Activity", "活动"), [
                     token_metric("sessions", localized("Sessions", "会话"), stats.sessions, localized("readable local session count", "可读本地会话数"), unit="count"),
                     token_metric("messages", localized("Messages", "消息"), stats.messages, localized("assistant message metadata", "助手消息元数据"), unit="count"),
+                    token_metric("reported-cost", localized("Reported cost", "已报告成本"), stats.cost_usd, localized("provider-reported for this window", "供应商返回的当前窗口成本"), unit="usd"),
                 ]),
             ],
             confidence="high",
@@ -443,6 +483,7 @@ class OpenCodeUsageCollector:
             return Collection(status="unavailable", snapshot=self._snapshot)
         try:
             timestamp = _iso_now(epoch)
+            self._load_checkpoint(epoch)
             if desktop_database:
                 stats = read_opencode_desktop_stats(desktop_database, epoch)
                 lifetime_stats = read_opencode_desktop_stats(desktop_database, epoch, since_epoch=0)
@@ -465,6 +506,7 @@ class OpenCodeUsageCollector:
                 collection_method = "cli-session-summary"
             snapshot = self._snapshot_for(stats, timestamp, collection_method, lifetime_tokens, lifetime_models)
             points = self._interval_points(stats, timestamp, epoch)
+            self._write_checkpoint()
         except (OSError, subprocess.TimeoutExpired, ValueError, RuntimeError):
             # Keep the last complete aggregate visible, but make its stale
             # state unmistakable.  A parser or CLI failure must never turn a

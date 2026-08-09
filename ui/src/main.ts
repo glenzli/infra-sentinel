@@ -5,10 +5,9 @@ import { tr } from "./i18n";
 import { renderNetworkResourcePage } from "./network_view";
 import { NetworkAnalysisController, NetworkTimeRange, NetworkViewMode } from "./network_analysis";
 import { renderAiUsageResourcePage } from "./ai_usage_view";
-import { requestAgentCommand } from "./agent_client";
+import { AiAnalysisController, AiTimeRange, AiViewMode } from "./ai_analysis";
 import { renderOverview } from "./overview_view";
 import { loadSettings, renderSettings } from "./settings_view";
-import { AnalysisScope } from "./analysis_scope";
 
 type AppView = "overview" | "network" | "ai_usage" | "settings";
 
@@ -22,11 +21,7 @@ const root = appRoot();
 let activeView: AppView = "overview";
 let latestProjection: AgentProjection | undefined;
 const networkAnalysis = new NetworkAnalysisController();
-let aiAnalysisScope: AnalysisScope = "today";
-let aiAnalysisLoading = false;
-let aiAnalysisRequestScope: AnalysisScope | undefined;
-const aiAnalysisPoints = new Map<AnalysisScope, Record<string, unknown>[]>();
-const aiAnalysisFetchedAt = new Map<AnalysisScope, number>();
+const aiAnalysis = new AiAnalysisController();
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" })[char] ?? char);
@@ -69,7 +64,7 @@ function renderProjection(projection: AgentProjection): void {
   const content = activeView === "network" && network
     ? `<section class="dashboard-actions"><div><p class="eyebrow">${tr("CURRENT SESSION", "当前统计周期")}</p><strong>${formatDuration(projection.session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button><button class="button button--danger" id="reset"><span>${tr("Reset totals", "重置统计")}</span></button></div></section>${renderNetworkResourcePage(projection, network, sources, networkAnalysis.snapshot())}`
     : activeView === "ai_usage" && aiUsage
-      ? `${controls}${renderAiUsageResourcePage(projection, aiUsage, aiSources, aiAnalysisScope, aiAnalysisPoints.get(aiAnalysisScope) ?? [], aiAnalysisLoading)}`
+      ? `${controls}${renderAiUsageResourcePage(projection, aiUsage, aiSources, aiAnalysis.snapshot())}`
     : renderOverview(projection);
   root.innerHTML = `<main class="shell">${topbar(projection.infra.overall.status)}${content}${footer(projection)}</main>`;
   root.querySelector<HTMLButtonElement>("#settings")?.addEventListener("click", () => void openSettings());
@@ -79,10 +74,17 @@ function renderProjection(projection: AgentProjection): void {
   root.querySelectorAll<HTMLButtonElement>("[data-resource-id]").forEach((button) => button.addEventListener("click", () => {
     if (button.dataset.resourceId === "network" || button.dataset.resourceId === "ai_usage") { activeView = button.dataset.resourceId; renderProjection(projection); }
   }));
-  root.querySelectorAll<HTMLButtonElement>("[data-analysis-resource='ai_usage']").forEach((button) => button.addEventListener("click", () => {
-    const scope = button.dataset.analysisScope;
-    if (scope === "today" || scope === "cumulative" || scope === "daily") {
-      aiAnalysisScope = scope;
+  root.querySelectorAll<HTMLButtonElement>("[data-ai-mode]").forEach((button) => button.addEventListener("click", () => {
+    const mode = button.dataset.aiMode as AiViewMode;
+    if (mode === "overview" || mode === "models" || mode === "activity") {
+      aiAnalysis.selectMode(mode);
+      if (latestProjection) renderProjection(latestProjection);
+    }
+  }));
+  root.querySelectorAll<HTMLButtonElement>("[data-ai-range]").forEach((button) => button.addEventListener("click", () => {
+    const range = button.dataset.aiRange as AiTimeRange;
+    if (range === "today" || range === "7d" || range === "30d" || range === "recorded") {
+      aiAnalysis.selectRange(range);
       if (latestProjection) renderProjection(latestProjection);
     }
   }));
@@ -104,44 +106,9 @@ function renderProjection(projection: AgentProjection): void {
   if (activeView === "network") void networkAnalysis.hydrate(() => {
     if (activeView === "network" && latestProjection) renderProjection(latestProjection);
   });
-  if (activeView === "ai_usage") void hydrateAiAnalysis();
-}
-
-function localDayStartEpoch(): number {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1_000;
-}
-
-async function hydrateAiAnalysis(): Promise<void> {
-  const maximumAge = aiAnalysisScope === "today" ? 60_000 : 5 * 60_000;
-  if (aiAnalysisScope === "cumulative" || aiAnalysisLoading || (aiAnalysisPoints.has(aiAnalysisScope) && Date.now() - (aiAnalysisFetchedAt.get(aiAnalysisScope) ?? 0) < maximumAge)) return;
-  const scope = aiAnalysisScope;
-  aiAnalysisLoading = true;
-  aiAnalysisRequestScope = scope;
-  try {
-    const daily = scope === "daily";
-    const now = Date.now() / 1_000;
-    const result = await requestAgentCommand("metrics.query", {
-      since_epoch: daily ? now - 30 * 86_400 : localDayStartEpoch(),
-      until_epoch: now,
-      resource_id: "ai_usage",
-      metric: "ai.tokens.total",
-      bucket_seconds: daily ? 86_400 : 300,
-    });
-    if (result.status !== "ok") throw new Error(result.message ?? "Metrics query failed");
-    const points = Array.isArray(result.payload?.points)
-      ? result.payload.points.filter((point): point is Record<string, unknown> => Boolean(point) && typeof point === "object")
-      : [];
-    if (aiAnalysisRequestScope === scope) { aiAnalysisPoints.set(scope, points); aiAnalysisFetchedAt.set(scope, Date.now()); }
-  } catch {
-    if (aiAnalysisRequestScope === scope) { aiAnalysisPoints.set(scope, []); aiAnalysisFetchedAt.set(scope, Date.now()); }
-  } finally {
-    if (aiAnalysisRequestScope === scope) {
-      aiAnalysisLoading = false;
-      aiAnalysisRequestScope = undefined;
-      if (activeView === "ai_usage" && latestProjection) renderProjection(latestProjection);
-    }
-  }
+  if (activeView === "ai_usage") void aiAnalysis.hydrate(() => {
+    if (activeView === "ai_usage" && latestProjection) renderProjection(latestProjection);
+  });
 }
 
 function renderWaiting(message: string, detail?: string): void {

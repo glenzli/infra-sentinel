@@ -21,6 +21,7 @@ def create_state_database(path: Path, rows: list[tuple[object, ...]]) -> None:
     with closing(sqlite3.connect(path)) as connection:
         connection.execute("""
             CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
                 model TEXT,
                 tokens_used INTEGER,
                 thread_source TEXT,
@@ -28,7 +29,9 @@ def create_state_database(path: Path, rows: list[tuple[object, ...]]) -> None:
                 updated_at_ms INTEGER
             )
         """)
-        connection.executemany("INSERT INTO threads VALUES (?, ?, ?, ?, ?)", rows)
+        connection.executemany("INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?)", [
+            (f"thread-{index}", *row) for index, row in enumerate(rows)
+        ])
         connection.commit()
 
 
@@ -103,7 +106,7 @@ class CodexUsageTests(unittest.TestCase):
             checkpoint = Path(temporary) / "codex-usage-day.json"
             create_state_database(database, [("gpt-5.6-sol", 100, "user", "vscode", 1_000_000)])
             checkpoint.write_text(json.dumps({
-                "schema": "20260809.2", "day": "1970-01-01", "baseline_tokens": 1_500,
+                "schema": "20260809.3", "day": "1970-01-01", "baseline_tokens": 1_500,
                 "baseline_models": {"gpt-5.6-sol": 1_500}, "started_at": "old",
             }), encoding="utf-8")
             collector = CodexUsageCollector(database_finder=lambda: database, checkpoint_path=checkpoint)
@@ -117,8 +120,50 @@ class CodexUsageTests(unittest.TestCase):
 
         self.assertEqual(first.snapshot["usage"]["today"]["tokens"], 0)  # type: ignore[index]
         self.assertEqual(later.snapshot["usage"]["today"]["tokens"], 30)  # type: ignore[index]
-        self.assertEqual(persisted["schema"], "20260809.3")
+        self.assertEqual(persisted["schema"], "20260809.4")
         self.assertEqual(persisted["baseline_tokens"], 100)
+
+    def test_model_reclassification_cannot_create_phantom_token_usage(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "state_5.sqlite"
+            checkpoint = Path(temporary) / "codex-usage-day.json"
+            create_state_database(database, [
+                ("gpt-5.6-terra", 100, "user", "vscode", 1_000_000),
+                ("gpt-5.6-sol", 50, "user", "vscode", 1_000_000),
+            ])
+            collector = CodexUsageCollector(database_finder=lambda: database, poll_seconds=10, checkpoint_path=checkpoint)
+            collector.collect(CollectorContext({"epoch": 1_000.0}, {}))
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute("UPDATE threads SET model = 'gpt-5.6-sol' WHERE id = 'thread-0'")
+                connection.execute("UPDATE threads SET tokens_used = 60 WHERE id = 'thread-1'")
+                connection.commit()
+            later = collector.collect(CollectorContext({"epoch": 1_010.0}, {}))
+
+        total_point = next(point for point in later.points if point.dimensions.get("scope") == "local-state")
+        model_points = [point for point in later.points if "model" in point.dimensions]
+        self.assertEqual(total_point.value, 10)
+        self.assertEqual(sum(point.value for point in model_points), total_point.value)
+        self.assertEqual([(point.dimensions["model"], point.value) for point in model_points], [("gpt-5.6-sol", 10)])
+        self.assertEqual(later.snapshot["usage"]["today"]["tokens"], 10)  # type: ignore[index]
+        self.assertEqual(sum(model["today"]["tokens"] for model in later.snapshot["models"]), 10)  # type: ignore[index]
+
+    def test_new_root_thread_after_baseline_counts_its_initial_tokens_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "state_5.sqlite"
+            checkpoint = Path(temporary) / "codex-usage-day.json"
+            create_state_database(database, [("gpt-5.6-sol", 100, "user", "vscode", 1_000_000)])
+            collector = CodexUsageCollector(database_finder=lambda: database, poll_seconds=10, checkpoint_path=checkpoint)
+            collector.collect(CollectorContext({"epoch": 1_000.0}, {}))
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute("INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?)", (
+                    "new-thread", "gpt-5.6-terra", 25, "user", "vscode", 1_010_000,
+                ))
+                connection.commit()
+            later = collector.collect(CollectorContext({"epoch": 1_010.0}, {}))
+
+        total_point = next(point for point in later.points if point.dimensions.get("scope") == "local-state")
+        self.assertEqual(total_point.value, 25)
+        self.assertEqual(later.snapshot["usage"]["today"]["tokens"], 25)  # type: ignore[index]
 
     def test_missing_database_is_unavailable(self) -> None:
         collector = CodexUsageCollector(database_finder=lambda: None)
