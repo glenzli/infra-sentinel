@@ -11,18 +11,9 @@ Infra Sentinel 是一个本地优先的个人 AI Infra 可观测面板。它目�
 
 它不会抓包，不读取提示词、响应正文、URL 路径或项目文件，也不会杀进程、删除文件、断网或修改代理配置。
 
-![Infra Sentinel overview](assets/overview-en.png)
-
-![Infra Sentinel AI usage](assets/ai-usage-en.png)
-
-<details>
-<summary>中文界面截图</summary>
-
 ![Infra Sentinel 中文概览](assets/overview-zh.png)
 
 ![Infra Sentinel AI 用量](assets/ai-usage-zh.png)
-
-</details>
 
 > 截图使用匿名演示数据生成，不包含真实主机名、SSH 别名、IP、账户或本机路径。
 

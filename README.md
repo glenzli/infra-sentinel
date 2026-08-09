@@ -15,15 +15,6 @@ Infra Sentinel does not capture packets, read prompts or response bodies, inspec
 
 ![Infra Sentinel AI usage](assets/ai-usage-en.png)
 
-<details>
-<summary>Chinese interface screenshots</summary>
-
-![Infra Sentinel Chinese overview](assets/overview-zh.png)
-
-![Infra Sentinel Chinese AI usage](assets/ai-usage-zh.png)
-
-</details>
-
 > Screenshots use anonymous demo data. They contain no real hostnames, SSH aliases, IP addresses, accounts, or local paths.
 
 ## Questions it answers
