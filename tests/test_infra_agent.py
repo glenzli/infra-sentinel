@@ -37,7 +37,7 @@ from infra_agent import (  # noqa: E402
     build_billing_event,
     latest_delta_event,
     send_native_notification,
-    process_configuration_read_commands,
+    process_read_only_commands,
     totals_for_window,
     write_projection_state,
 )
@@ -556,7 +556,6 @@ class SessionMeterTests(unittest.TestCase):
                 config,
                 state_dir / "config.toml",
                 100.0,
-                MetricStore(state_dir),
                 RemoteMonitor(),  # type: ignore[arg-type]
                 meter,
                 logging.getLogger("infra-agent-test"),
@@ -599,18 +598,14 @@ class SessionMeterTests(unittest.TestCase):
                 "payload": {"since_epoch": 60, "until_epoch": 119, "metric": "network.bytes"},
             }), encoding="utf-8")
 
-            effects = apply_agent_commands(
-                config,
+            completed = process_read_only_commands(
                 state_dir / "config.toml",
-                120.0,
+                state_dir,
                 store,
-                RemoteMonitor(),  # type: ignore[arg-type]
-                SessionMeter(state_dir),
                 logging.getLogger("infra-agent-test"),
             )
 
-            self.assertIsNone(effects.remote_state)
-            self.assertFalse(effects.restart_requested)
+            self.assertEqual(completed, 1)
             result = json.loads((commands / f"{command_id}.result.json").read_text(encoding="utf-8"))
             self.assertEqual(result["status"], "ok")
             self.assertEqual(result["payload"]["points"][0]["value"], 42.0)
@@ -635,11 +630,10 @@ class SessionMeterTests(unittest.TestCase):
                 "requested_at": "2026-08-08T12:00:00+08:00",
                 "payload": {},
             }), encoding="utf-8")
-            effects = apply_agent_commands(
-                config, config_path, 120.0, MetricStore(state_dir), RemoteMonitor(),  # type: ignore[arg-type]
-                SessionMeter(state_dir), logging.getLogger("infra-agent-test"),
+            completed = process_read_only_commands(
+                config_path, state_dir, MetricStore(state_dir), logging.getLogger("infra-agent-test"),
             )
-            self.assertFalse(effects.restart_requested)
+            self.assertEqual(completed, 1)
             exported = json.loads((commands / f"{get_id}.result.json").read_text(encoding="utf-8"))
             self.assertEqual(exported["status"], "ok")
             settings = exported["payload"]["settings"]
@@ -654,14 +648,14 @@ class SessionMeterTests(unittest.TestCase):
                 "payload": settings,
             }), encoding="utf-8")
             effects = apply_agent_commands(
-                config, config_path, 125.0, MetricStore(state_dir), RemoteMonitor(),  # type: ignore[arg-type]
+                config, config_path, 125.0, RemoteMonitor(),  # type: ignore[arg-type]
                 SessionMeter(state_dir), logging.getLogger("infra-agent-test"),
             )
             self.assertTrue(effects.restart_requested)
             updated = json.loads((commands / f"{update_id}.result.json").read_text(encoding="utf-8"))
             self.assertEqual(updated["payload"]["settings"]["policies"][0]["warning_mib"], 512)
 
-    def test_configuration_read_service_does_not_claim_mutating_commands(self) -> None:
+    def test_read_only_service_does_not_claim_mutating_commands(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             state_dir = Path(temporary)
             config_path = state_dir / "config.toml"
@@ -679,9 +673,10 @@ class SessionMeterTests(unittest.TestCase):
                     "payload": {},
                 }), encoding="utf-8")
 
-            completed = process_configuration_read_commands(
+            completed = process_read_only_commands(
                 config_path,
                 state_dir,
+                MetricStore(state_dir),
                 logging.getLogger("infra-agent-test"),
             )
 

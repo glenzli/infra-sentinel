@@ -56,7 +56,7 @@ from session import SessionMeter
 
 PARENT_PROCESS_ENV = "INFRA_SENTINEL_PARENT_PID"
 APP_NOTIFICATIONS_ENV = "INFRA_SENTINEL_APP_NOTIFICATIONS"
-CONFIGURATION_READ_INTERVAL_SECONDS = 0.1
+READ_ONLY_COMMAND_INTERVAL_SECONDS = 0.1
 SAMPLE_SCHEMA = 5
 AGENT_RUNTIME_SCHEMA = PROJECTION_SCHEMA
 
@@ -454,43 +454,55 @@ def configure_logger(config: Config) -> logging.Logger:
     return logger
 
 
-def process_configuration_read_commands(config_path: Path, state_dir: Path, logger: logging.Logger) -> int:
-    """Complete configuration reads without waiting for a sampling interval.
+def process_read_only_commands(
+    config_path: Path,
+    state_dir: Path,
+    metric_store: MetricStore,
+    logger: logging.Logger,
+) -> int:
+    """Serve local reads independently from the five-second sampler.
 
-    Opening Settings is a local read and should not wait for Mihomo's five
-    second observation window or a slow SSH poll. Mutating commands remain in
-    ``apply_agent_commands`` so they retain the normal single-writer lifecycle.
+    Settings and analysis queries do not mutate runtime state.  Keeping their
+    lifecycle here prevents UI navigation from waiting for Mihomo collection
+    or a remote poll, while mutations remain serialized by the sampling loop.
     """
     completed = 0
-    for command in consume_commands(state_dir, accepted_types={"configuration.get"}):
-        try:
-            complete_command(command, status="ok", payload={
-                "settings": settings_payload(read_user_settings(config_path)),
-            })
-        except (OSError, ValueError) as exc:
-            complete_command(command, status="error", message=str(exc))
-            logger.warning("configuration read failed id=%s", command.id)
+    for command in consume_commands(state_dir, accepted_types={"configuration.get", "metrics.query"}):
+        if command.type == "configuration.get":
+            try:
+                complete_command(command, status="ok", payload={
+                    "settings": settings_payload(read_user_settings(config_path)),
+                })
+            except (OSError, ValueError) as exc:
+                complete_command(command, status="error", message=str(exc))
+                logger.warning("configuration read failed id=%s", command.id)
+        else:
+            try:
+                query = MetricQuery.from_payload(command.payload)
+                complete_command(command, status="ok", payload=execute_metric_query(metric_store, query))
+            except (ValueError, TypeError) as exc:
+                complete_command(command, status="rejected", message=str(exc))
         completed += 1
     return completed
 
 
-def run_configuration_read_service(
+def run_read_only_command_service(
     config_path: Path,
     state_dir: Path,
+    metric_store: MetricStore,
     logger: logging.Logger,
     stop_event: threading.Event,
 ) -> None:
-    """Serve the read-only settings command while the sampler is busy."""
+    """Serve read-only desktop commands while the sampler is busy."""
     while not stop_event.is_set():
-        process_configuration_read_commands(config_path, state_dir, logger)
-        stop_event.wait(CONFIGURATION_READ_INTERVAL_SECONDS)
+        process_read_only_commands(config_path, state_dir, metric_store, logger)
+        stop_event.wait(READ_ONLY_COMMAND_INTERVAL_SECONDS)
 
 
 def apply_agent_commands(
     config: Config,
     config_path: Path,
     sample_epoch: float,
-    metric_store: MetricStore,
     remote_monitor: RemoteFleetMonitor,
     session_meter: SessionMeter,
     logger: logging.Logger,
@@ -498,13 +510,7 @@ def apply_agent_commands(
     """Apply idempotent local commands before recording the current interval."""
     reset_remote_state: dict[str, Any] | None = None
     restart_requested = False
-    for command in consume_commands(config.state_dir):
-        if command.type == "configuration.get":
-            try:
-                complete_command(command, status="ok", payload={"settings": settings_payload(read_user_settings(config_path))})
-            except (OSError, ValueError) as exc:
-                complete_command(command, status="error", message=str(exc))
-            continue
+    for command in consume_commands(config.state_dir, accepted_types={"configuration.update", "session.reset"}):
         if command.type == "configuration.update":
             try:
                 settings = write_user_settings(config_path, command.payload)
@@ -514,13 +520,6 @@ def apply_agent_commands(
                 })
                 restart_requested = True
             except (OSError, ValueError) as exc:
-                complete_command(command, status="rejected", message=str(exc))
-            continue
-        if command.type == "metrics.query":
-            try:
-                query = MetricQuery.from_payload(command.payload, now=sample_epoch)
-                complete_command(command, status="ok", payload=execute_metric_query(metric_store, query))
-            except (ValueError, TypeError) as exc:
                 complete_command(command, status="rejected", message=str(exc))
             continue
         if command.type != "session.reset":
@@ -594,7 +593,6 @@ def handle_sample(
         config,
         config_path,
         float(sample["epoch"]),
-        metric_store,
         remote_monitor,
         session_meter,
         logger,
@@ -708,14 +706,14 @@ def main() -> int:
             config.monitor.sample_seconds,
             len(config.remote_servers),
         )
-        configuration_read_stop = threading.Event()
-        configuration_read_thread = threading.Thread(
-            target=run_configuration_read_service,
-            args=(config_path, config.state_dir, logger, configuration_read_stop),
-            name="infra-configuration-read-service",
+        read_only_command_stop = threading.Event()
+        read_only_command_thread = threading.Thread(
+            target=run_read_only_command_service,
+            args=(config_path, config.state_dir, metric_store, logger, read_only_command_stop),
+            name="infra-read-only-command-service",
             daemon=True,
         )
-        configuration_read_thread.start()
+        read_only_command_thread.start()
         try:
             while not parent_process_exited():
                 try:
@@ -741,8 +739,8 @@ def main() -> int:
                     write_health_state(config, "error", str(exc))
                     time.sleep(min(5, config.monitor.sample_seconds))
         finally:
-            configuration_read_stop.set()
-            configuration_read_thread.join(timeout=1)
+            read_only_command_stop.set()
+            read_only_command_thread.join(timeout=1)
             lock.close()
         return 0
     except KeyboardInterrupt:

@@ -40,7 +40,7 @@ function rangeLabel(range: AiTimeRange): string {
     today: tr("Today", "今日"),
     "7d": tr("Last 7 days", "近 7 天"),
     "30d": tr("Last 30 days", "近 30 天"),
-    recorded: tr("Recorded history", "记录累计"),
+    recorded: tr("All history", "全部历史"),
   };
   return labels[range];
 }
@@ -88,7 +88,7 @@ function renderControls(snapshot: AiAnalysisSnapshot): string {
   ];
   const ranges: Array<[AiTimeRange, string]> = [
     ["today", tr("Today", "今日")], ["7d", tr("7 days", "7 天")],
-    ["30d", tr("30 days", "30 天")], ["recorded", tr("Recorded", "记录累计")],
+    ["30d", tr("30 days", "30 天")], ["recorded", tr("All", "全部")],
   ];
   return `<section class="ai-analysis-toolbar"><div class="ai-mode-tabs" role="tablist" aria-label="${tr("AI usage observation", "AI 用量观测维度")}">${modes.map(([mode, label, detail]) => `<button type="button" role="tab" aria-selected="${mode === snapshot.mode}" class="ai-mode-tab${mode === snapshot.mode ? " is-active" : ""}" data-ai-mode="${mode}"><strong>${label}</strong><small>${detail}</small></button>`).join("")}</div>${snapshot.mode === "activity" ? `<span class="ai-current-context">${tr("Current provider snapshot", "当前来源快照")}</span>` : `<div class="ai-range-picker"><span>${tr("Time range", "时间范围")}</span><div role="group">${ranges.map(([range, label]) => `<button type="button" class="ai-range${range === snapshot.range ? " is-active" : ""}" data-ai-range="${range}">${label}</button>`).join("")}</div></div>`}</section>`;
 }
@@ -110,7 +110,7 @@ function renderCurrentSummary(providerSources: Record<string, unknown>[], source
     const detail = started ? tr(`since ${started}`, `${started} 起`) : method === "provider-day" ? tr("provider day", "供应商自然日") : localized(window.detail);
     return `<span><i class="source-state source-state--${escapeHtml(String(source.status ?? "ok"))}"></i><strong>${escapeHtml(source.label ?? source.source_id)}</strong><small>${escapeHtml(detail)}</small></span>`;
   }).join("");
-  return `<section class="ai-usage-summary"><article><p>${tr("Today — available usage", "今日可用统计")}</p><strong>${formatTokens(today)}</strong><small>${tr("Raw Token activity across available sources", "可用来源的原始 Token 活动")}</small></article><article><p>${tr("Local recorded cumulative", "本地记录累计")}</p><strong>${formatTokens(cumulative)}</strong><small>${tr("Not an account invoice", "不是账户账单")}</small></article><article><p>${tr("Collector coverage", "采集覆盖")}</p><strong>${online} / ${sources.length}</strong><small>${tr("sources online", "个来源在线")}</small></article><div class="ai-window-coverage"><b>${tr("Window coverage", "统计窗口")}</b>${coverage}</div></section>`;
+  return `<section class="ai-usage-summary"><article><p>${tr("Observed today", "今日已观测")}</p><strong>${formatTokens(today)}</strong><small>${tr("Available source windows combined", "合并当前可用来源窗口")}</small></article><article><p>${tr("Local history total", "本机历史总量")}</p><strong>${formatTokens(cumulative)}</strong><small>${tr("All readable local records · not billing", "全部可读本地记录 · 非账单")}</small></article><article><p>${tr("Collector coverage", "采集覆盖")}</p><strong>${online} / ${sources.length}</strong><small>${tr("sources online", "个来源在线")}</small></article><div class="ai-window-coverage"><b>${tr("Window coverage", "统计窗口")}</b>${coverage}</div></section>`;
 }
 
 function aggregateBySource(intervals: UsageInterval[]): Map<string, number> {
@@ -194,13 +194,13 @@ function rateTrend(intervals: UsageInterval[], dimension: "source" | "model"): s
 function renderOverview(intervals: UsageInterval[], range: AiTimeRange): string {
   const sources = aggregateBySource(intervals);
   const selectedTotal = [...sources.values()].reduce((sum, value) => sum + value, 0);
-  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Recorded usage", "已记录用量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><span>${rangeLabel(range)} · ${sources.size} ${tr("Agents", "个 Agent")}</span></div>${horizontalBars(tr("Usage by Agent", "按 Agent 的用量"), rangeLabel(range), sources, SOURCE_COLORS)}${range === "today" ? rateTrend(intervals, "source") : dailyHistory(intervals, "source", range)}</section>`;
+  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Selected range total", "所选时段总量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><span>${rangeLabel(range)} · ${sources.size} ${tr("Agents", "个 Agent")}</span></div>${horizontalBars(tr("Usage by Agent", "按 Agent 的用量"), rangeLabel(range), sources, SOURCE_COLORS)}${range === "today" ? rateTrend(intervals, "source") : dailyHistory(intervals, "source", range)}</section>`;
 }
 
 function renderModels(intervals: UsageInterval[], range: AiTimeRange): string {
   const models = aggregateByModel(intervals);
   const selectedTotal = [...models.values()].reduce((sum, value) => sum + value, 0);
-  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Model-attributed usage", "模型归因用量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><span>${rangeLabel(range)} · ${tr("mass-conserving", "总量守恒")}</span></div>${horizontalBars(tr("Model composition", "模型构成"), rangeLabel(range), models, MODEL_COLORS)}${range === "today" ? rateTrend(intervals, "model") : dailyHistory(intervals, "model", range)}</section>`;
+  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Model total in range", "所选时段模型量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><span>${rangeLabel(range)} · ${tr("mass-conserving", "总量守恒")}</span></div>${horizontalBars(tr("Model composition", "模型构成"), rangeLabel(range), models, MODEL_COLORS)}${range === "today" ? rateTrend(intervals, "model") : dailyHistory(intervals, "model", range)}</section>`;
 }
 
 function providerDetails(source: Record<string, unknown>): string {
