@@ -13,6 +13,7 @@ from metric_store import MetricStore
 
 QUERY_SCHEMA = "20260808.4"
 MAX_RANGE_SECONDS = 90 * 24 * 60 * 60
+MAX_DAILY_RANGE_SECONDS = 730 * 24 * 60 * 60
 MAX_POINTS = 10_000
 BUCKET_SECONDS = {60, 300, 3_600, 86_400}
 IDENTIFIER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
@@ -38,11 +39,12 @@ class MetricQuery:
         until = cls._epoch(payload.get("until_epoch", current), "until_epoch")
         if until < since:
             raise ValueError("until_epoch must not precede since_epoch")
-        if until - since > MAX_RANGE_SECONDS:
-            raise ValueError("query range exceeds 90 days")
         bucket = payload.get("bucket_seconds", 60)
         if isinstance(bucket, bool) or not isinstance(bucket, int) or bucket not in BUCKET_SECONDS:
             raise ValueError("bucket_seconds must be one of 60, 300, 3600, 86400")
+        maximum_range = MAX_DAILY_RANGE_SECONDS if bucket == 86_400 else MAX_RANGE_SECONDS
+        if until - since > maximum_range:
+            raise ValueError(f"query range exceeds {int(maximum_range // 86_400)} days")
         return cls(
             since_epoch=since,
             until_epoch=until,

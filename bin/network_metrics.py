@@ -67,6 +67,20 @@ def local_sample_metrics(sample: dict[str, Any]) -> list[MetricPoint]:
                                  dimensions={"route": str(route_id), "direction": direction},
                                  attribution_method="residual" if route_id == "unattributed" else "mapped",
                                  confidence="medium" if route_id == "unattributed" else "high"))
+    # Service ids are stable, bounded labels emitted by the local attribution
+    # collector. They are stored without connection IDs, full URLs, or hosts.
+    for service in sample.get("services", []):
+        if not isinstance(service, dict):
+            continue
+        service_id = str(service.get("id") or "unknown")
+        label = str(service.get("label") or service_id)
+        for direction in ("up", "down"):
+            points.append(_point(
+                timestamp, epoch, "network.service_bytes", service.get(f"{direction}_bytes"), "local-mihomo",
+                dimensions={"service": service_id, "label": label, "direction": direction},
+                attribution_method="mapped" if service_id != "unattributed" else "residual",
+                confidence="high" if service_id != "unattributed" else "medium",
+            ))
     return points
 
 

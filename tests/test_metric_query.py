@@ -52,6 +52,12 @@ class MetricQueryTests(unittest.TestCase):
     def test_query_rejects_unsafe_shape_before_accessing_store(self) -> None:
         with self.assertRaisesRegex(ValueError, "90 days"):
             MetricQuery.from_payload({"since_epoch": 0, "until_epoch": 91 * 86_400})
+        self.assertEqual(
+            MetricQuery.from_payload({"since_epoch": 0, "until_epoch": 365 * 86_400, "bucket_seconds": 86_400}).bucket_seconds,
+            86_400,
+        )
+        with self.assertRaisesRegex(ValueError, "730 days"):
+            MetricQuery.from_payload({"since_epoch": 0, "until_epoch": 731 * 86_400, "bucket_seconds": 86_400})
         with self.assertRaisesRegex(ValueError, "unsupported query fields"):
             MetricQuery.from_payload({"sql": "DROP TABLE metric_points"})
 

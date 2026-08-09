@@ -37,4 +37,5 @@ DEFAULT_SOURCE_REGISTRY = SourceRegistry((
     SourceKind("network.linux-vps", "network", "network.", "resource.network"),
     SourceKind("network.xray", "network", "network.", "resource.network"),
     SourceKind("ai.opencode", "ai_usage", "ai.", "resource.ai_usage"),
+    SourceKind("ai.codex", "ai_usage", "ai.", "resource.ai_usage"),
 ))

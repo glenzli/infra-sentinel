@@ -10,6 +10,7 @@ so that fallback parser intentionally fails closed when required rows change.
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +21,7 @@ import subprocess
 import time
 from typing import Any
 
+from ai_usage_contract import ai_usage_snapshot, detail_group, localized, model_usage, token_metric, usage_window
 from infra_collectors import Collection, CollectorCapability, CollectorContext
 from infra_model import MetricPoint
 
@@ -207,8 +209,8 @@ def _cost_from_database(value: Any) -> float:
         return 0.0
 
 
-def read_opencode_desktop_stats(path: Path, epoch: float) -> OpenCodeStats:
-    """Aggregate today’s assistant-message token metadata from OpenCode Desktop.
+def read_opencode_desktop_stats(path: Path, epoch: float, since_epoch: float | None = None) -> OpenCodeStats:
+    """Aggregate assistant-message token metadata from OpenCode Desktop.
 
     JSON accessors extract only provider, model, role, token counters, and
     cost inside SQLite. Neither message data nor any text-bearing column is
@@ -216,9 +218,9 @@ def read_opencode_desktop_stats(path: Path, epoch: float) -> OpenCodeStats:
     """
     if not path.is_file():
         raise OSError("OpenCodeDesktopDatabaseMissing")
-    cutoff = _day_start_epoch(epoch)
+    cutoff = _day_start_epoch(epoch) if since_epoch is None else max(0, int(since_epoch * 1000))
     uri = f"{path.resolve().as_uri()}?mode=ro"
-    with sqlite3.connect(uri, uri=True) as connection:
+    with closing(sqlite3.connect(uri, uri=True)) as connection:
         connection.execute("PRAGMA query_only = ON")
         model_rows = connection.execute("""
             SELECT
@@ -297,7 +299,7 @@ class OpenCodeUsageCollector:
         source_id="opencode",
         source_kind="ai.opencode",
         resource_id="ai_usage",
-        metrics=("ai.tokens.input", "ai.tokens.output", "ai.tokens.reasoning", "ai.tokens.cache_read", "ai.tokens.cache_write", "ai.cost.usd"),
+        metrics=("ai.tokens.total", "ai.tokens.input", "ai.tokens.output", "ai.tokens.reasoning", "ai.tokens.cache_read", "ai.tokens.cache_write", "ai.cost.usd"),
     )
 
     def __init__(
@@ -318,40 +320,69 @@ class OpenCodeUsageCollector:
         self._snapshot: dict[str, Any] = {"available": False, "status": "unavailable"}
         self._previous: dict[str, int | float] = {}
 
-    def _snapshot_for(self, stats: OpenCodeStats, timestamp: str, collection_method: str) -> dict[str, Any]:
-        models = [dict(model, total_tokens=(
+    @staticmethod
+    def _models_with_totals(stats: OpenCodeStats) -> list[dict[str, Any]]:
+        return [dict(model, total_tokens=(
             int(model["input_tokens"]) + int(model["output_tokens"]) + int(model.get("reasoning_tokens", 0))
             + int(model["cache_read_tokens"]) + int(model["cache_write_tokens"])
         )) for model in stats.models]
-        return {
-            "available": True,
-            "status": "ok",
-            "label": "OpenCode",
-            "observed_at": timestamp,
-            "window": "today",
-            "collection_method": collection_method,
-            "sessions": stats.sessions,
-            "messages": stats.messages,
-            "tokens": {
-                "input": stats.input_tokens,
-                "output": stats.output_tokens,
-                "reasoning": stats.reasoning_tokens,
-                "cache_read": stats.cache_read_tokens,
-                "cache_write": stats.cache_write_tokens,
-                "total": stats.total_tokens,
-                "output_includes_reasoning": stats.output_includes_reasoning,
-            },
-            "cost_usd": stats.cost_usd,
-            "models": models,
-            "attribution_method": "exact",
-            "confidence": "high",
-            "privacy": "aggregate-session-stats-only",
-        }
 
-    def _interval_points(self, snapshot: dict[str, Any], timestamp: str, epoch: float) -> tuple[MetricPoint, ...]:
-        tokens = snapshot["tokens"]
-        current: dict[str, int | float] = {"all:ai.messages": int(snapshot["messages"])}
+    def _snapshot_for(
+        self,
+        stats: OpenCodeStats,
+        timestamp: str,
+        collection_method: str,
+        lifetime_tokens: int | None,
+        lifetime_models: list[dict[str, Any]] | None,
+    ) -> dict[str, Any]:
+        lifetime_by_model = {str(model["id"]): int(model["total_tokens"]) for model in lifetime_models or []}
+        models = [model_usage(
+            str(model["id"]),
+            today_tokens=int(model["total_tokens"]),
+            cumulative_tokens=lifetime_by_model.get(str(model["id"])),
+            today_method="provider-day",
+            today_detail=localized("provider model total", "提供方模型累计"),
+            cumulative_method="provider-history",
+            cumulative_detail=localized("readable local history", "可读本地历史"),
+        ) for model in self._models_with_totals(stats)]
+        output_label = localized("Output + reasoning", "输出 + 推理") if stats.output_includes_reasoning else localized("Output", "输出")
+        return ai_usage_snapshot(
+            source_id="opencode",
+            label="OpenCode",
+            status="ok",
+            observed_at=timestamp,
+            collection_method=collection_method,
+            today=usage_window(
+                stats.total_tokens,
+                method="provider-day",
+                detail=localized("provider-reported session metadata", "供应商返回的会话元数据"),
+            ),
+            cumulative=usage_window(
+                lifetime_tokens,
+                method="provider-history" if lifetime_tokens is not None else "unavailable",
+                detail=localized("all readable local history", "全部可读本地历史") if lifetime_tokens is not None else localized("not available from this collector", "当前采集器无法提供"),
+            ),
+            models=models,
+            details=[
+                detail_group("token-breakdown", localized("Token breakdown", "Token 分类明细"), [
+                    token_metric("input", localized("Input", "输入"), stats.input_tokens, localized("provider-reported", "供应商返回")),
+                    token_metric("output", output_label, stats.output_tokens, localized("reasoning included", "含推理 Token") if stats.output_includes_reasoning else localized("provider-reported", "供应商返回")),
+                    token_metric("reasoning", localized("Reasoning", "推理"), stats.reasoning_tokens, localized("provider-reported", "供应商返回")),
+                    token_metric("cache", localized("Cache", "缓存"), stats.cache_read_tokens + stats.cache_write_tokens, localized(f"Read {stats.cache_read_tokens} · Write {stats.cache_write_tokens}", f"读取 {stats.cache_read_tokens} · 写入 {stats.cache_write_tokens}")),
+                ], badge=localized("today", "今日")),
+                detail_group("activity", localized("Activity", "活动"), [
+                    token_metric("sessions", localized("Sessions", "会话"), stats.sessions, localized("readable local session count", "可读本地会话数"), unit="count"),
+                    token_metric("messages", localized("Messages", "消息"), stats.messages, localized("assistant message metadata", "助手消息元数据"), unit="count"),
+                ]),
+            ],
+            confidence="high",
+            privacy="aggregate-session-stats-only",
+        )
+
+    def _interval_points(self, stats: OpenCodeStats, timestamp: str, epoch: float) -> tuple[MetricPoint, ...]:
+        current: dict[str, int | float] = {"all:ai.messages": stats.messages}
         fields = {
+            "total_tokens": ("ai.tokens.total", "tokens"),
             "input_tokens": ("ai.tokens.input", "tokens"),
             "output_tokens": ("ai.tokens.output", "tokens"),
             "reasoning_tokens": ("ai.tokens.reasoning", "tokens"),
@@ -360,19 +391,23 @@ class OpenCodeUsageCollector:
             "cost_usd": ("ai.cost.usd", "usd"),
         }
         metric_units = {metric: unit for metric, unit in fields.values()} | {"ai.messages": "messages"}
-        if snapshot["models"]:
-            for model in snapshot["models"]:
+        if stats.models:
+            for model in stats.models:
                 for field, (metric, _unit) in fields.items():
-                    current[f"{model['id']}:{metric}"] = model.get(field, 0)
+                    current[f"{model['id']}:{metric}"] = (
+                        int(model["input_tokens"]) + int(model["output_tokens"]) + int(model.get("reasoning_tokens", 0))
+                        + int(model["cache_read_tokens"]) + int(model["cache_write_tokens"])
+                    ) if field == "total_tokens" else model.get(field, 0)
         else:
             current = {
-                "all:ai.tokens.input": int(tokens["input"]),
-                "all:ai.tokens.output": int(tokens["output"]),
-                "all:ai.tokens.reasoning": int(tokens["reasoning"]),
-                "all:ai.tokens.cache_read": int(tokens["cache_read"]),
-                "all:ai.tokens.cache_write": int(tokens["cache_write"]),
-                "all:ai.cost.usd": float(snapshot["cost_usd"]),
-                "all:ai.messages": int(snapshot["messages"]),
+                "all:ai.tokens.input": stats.input_tokens,
+                "all:ai.tokens.total": stats.total_tokens,
+                "all:ai.tokens.output": stats.output_tokens,
+                "all:ai.tokens.reasoning": stats.reasoning_tokens,
+                "all:ai.tokens.cache_read": stats.cache_read_tokens,
+                "all:ai.tokens.cache_write": stats.cache_write_tokens,
+                "all:ai.cost.usd": stats.cost_usd,
+                "all:ai.messages": stats.messages,
             }
         points: list[MetricPoint] = []
         for key, total in current.items():
@@ -385,7 +420,7 @@ class OpenCodeUsageCollector:
             model_id: str | None = None
             # Split only on the known metric suffix; provider/model identifiers
             # can themselves contain ':' in custom OpenCode configurations.
-            for candidate in ("ai.tokens.input", "ai.tokens.output", "ai.tokens.reasoning", "ai.tokens.cache_read", "ai.tokens.cache_write", "ai.cost.usd", "ai.messages"):
+            for candidate in ("ai.tokens.total", "ai.tokens.input", "ai.tokens.output", "ai.tokens.reasoning", "ai.tokens.cache_read", "ai.tokens.cache_write", "ai.cost.usd", "ai.messages"):
                 suffix = f":{candidate}"
                 if key.endswith(suffix):
                     model_id = key[:-len(suffix)]
@@ -410,6 +445,9 @@ class OpenCodeUsageCollector:
             timestamp = _iso_now(epoch)
             if desktop_database:
                 stats = read_opencode_desktop_stats(desktop_database, epoch)
+                lifetime_stats = read_opencode_desktop_stats(desktop_database, epoch, since_epoch=0)
+                lifetime_tokens = lifetime_stats.total_tokens
+                lifetime_models = self._models_with_totals(lifetime_stats)
                 collection_method = "desktop-session-metadata"
             else:
                 completed = self._runner(
@@ -422,9 +460,11 @@ class OpenCodeUsageCollector:
                 if completed.returncode != 0:
                     raise RuntimeError("OpenCodeStatsCommandFailed")
                 stats = parse_opencode_stats(completed.stdout)
+                lifetime_tokens = None
+                lifetime_models = None
                 collection_method = "cli-session-summary"
-            snapshot = self._snapshot_for(stats, timestamp, collection_method)
-            points = self._interval_points(snapshot, timestamp, epoch)
+            snapshot = self._snapshot_for(stats, timestamp, collection_method, lifetime_tokens, lifetime_models)
+            points = self._interval_points(stats, timestamp, epoch)
         except (OSError, subprocess.TimeoutExpired, ValueError, RuntimeError):
             # Keep the last complete aggregate visible, but make its stale
             # state unmistakable.  A parser or CLI failure must never turn a

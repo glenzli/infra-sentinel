@@ -47,6 +47,7 @@ from mihomo_traffic import (
     save_tracker,
 )
 from network_metrics import network_collector_registry
+from codex_usage import CodexUsageCollector
 from opencode_usage import OpenCodeUsageCollector
 from sample_timing import annotate_sample_timing, sample_is_realtime
 from remote import RemoteFleetMonitor
@@ -694,6 +695,7 @@ def main() -> int:
         metric_store = MetricStore(config.state_dir)
         collector_registry = network_collector_registry(server.id for server in config.remote_servers)
         collector_registry.register(OpenCodeUsageCollector())
+        collector_registry.register(CodexUsageCollector(checkpoint_path=config.state_dir / "codex-usage-day.json"))
         imported = metric_store.import_legacy_network()
         if imported:
             logger.info("imported legacy network metric points=%s", imported)

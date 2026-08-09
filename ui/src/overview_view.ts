@@ -54,17 +54,20 @@ function networkCard(projection: AgentProjection, resource: ResourceProjection):
 
 function aiUsageCard(projection: AgentProjection, resource: ResourceProjection): string {
   const aiUsage = asRecord(projection.infra.ai_usage);
-  const openCode = asRecord(aiUsage.opencode);
-  const tokens = asRecord(openCode.tokens);
-  const models = asArray(openCode.models);
-  const outputLabel = Boolean(tokens.output_includes_reasoning)
-    ? tr("Output + reasoning", "输出 + 推理")
-    : tr("Output", "输出");
-  const source = String(openCode.label || "OpenCode");
-  const summary = models.length
-    ? tr(`${models.length} model${models.length === 1 ? "" : "s"} · ${number(openCode.sessions)} sessions`, `${models.length} 个模型 · ${number(openCode.sessions)} 个会话`)
-    : tr(`${number(openCode.sessions)} sessions`, `${number(openCode.sessions)} 个会话`);
-  return `<button class="resource-card resource-card--ai-usage resource-card--${escapeHtml(resource.status)}" type="button" data-resource-id="ai_usage"><div class="resource-card__heading"><span class="resource-card__identity"><span class="resource-card__state source-state source-state--${escapeHtml(resource.status)}" aria-hidden="true"></span><p>${tr("AI usage", "AI 用量")}</p></span><span class="pill pill--${escapeHtml(resource.status)}">${escapeHtml(source)}</span></div><div class="ai-overview__total"><strong>${formatTokens(tokens.total)}</strong><small>${tr("tokens today", "今日 Token")}</small></div><div class="ai-overview__metrics"><span><small>${tr("Input", "输入")}</small><b>${formatTokens(tokens.input)}</b></span><span><small>${outputLabel}</small><b>${formatTokens(tokens.output)}</b></span><span><small>${tr("Reasoning", "推理")}</small><b>${formatTokens(tokens.reasoning)}</b></span><span><small>${tr("Cache", "缓存")}</small><b>${formatTokens(number(tokens.cache_read) + number(tokens.cache_write))}</b></span></div><div class="network-overview__footer ai-overview__footer"><span>${escapeHtml(summary)}</span><span>${tr("Session records", "会话记录")}</span><span>${tr("Details", "详情")} →</span></div></button>`;
+  const providers = asArray(aiUsage.sources);
+  const aggregate = asRecord(aiUsage.aggregate);
+  const today = asRecord(aggregate.today);
+  const cumulative = asRecord(aggregate.cumulative);
+  const cards = providers.map((provider) => {
+    const usage = asRecord(provider.usage);
+    const providerToday = asRecord(usage.today);
+    const providerCumulative = asRecord(usage.cumulative);
+    const value = providerToday.available ? providerToday.tokens : providerCumulative.tokens;
+    const scope = providerToday.available ? tr("today", "今日") : tr("cumulative", "累计");
+    return `<span><small>${escapeHtml(provider.label)} · ${scope}</small><strong>${formatTokens(value)}</strong><em>${escapeHtml(String(provider.collection_method ?? ""))}</em></span>`;
+  }).join("");
+  const sourceNames = providers.map((provider) => String(provider.label ?? provider.source_id ?? "")).filter(Boolean).join(" · ");
+  return `<button class="resource-card resource-card--ai-usage resource-card--${escapeHtml(resource.status)}" type="button" data-resource-id="ai_usage"><div class="resource-card__heading"><span class="resource-card__identity"><span class="resource-card__state source-state source-state--${escapeHtml(resource.status)}" aria-hidden="true"></span><p>${tr("AI usage", "AI 用量")}</p></span><span class="pill pill--${escapeHtml(resource.status)}">${escapeHtml(sourceNames)}</span></div><div class="ai-overview__rollup"><span><small>${tr("Observed today", "今日已观测")}</small><strong>${formatTokens(today.tokens)}</strong></span><span><small>${tr("Local cumulative", "本地累计记录")}</small><strong>${formatTokens(cumulative.tokens)}</strong></span></div><div class="ai-overview__sources">${cards}</div><div class="network-overview__footer ai-overview__footer"><span>${tr("Local rollup · not billing", "本机汇总 · 非账单")}</span><span>${sourceSummary(resource)}</span><span>${tr("Details", "详情")} →</span></div></button>`;
 }
 
 function resourceCard(resource: ResourceProjection): string {

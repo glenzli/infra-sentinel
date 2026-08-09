@@ -5,12 +5,13 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from ai_usage_contract import AI_USAGE_SNAPSHOT_SCHEMA, window_tokens
 from infra_collectors import CollectorRun
 from infra_model import MetricPoint, SourceStatus
 from infra_registry import DEFAULT_SOURCE_REGISTRY
 
 
-PROJECTION_SCHEMA = "20260809.1"
+PROJECTION_SCHEMA = "20260809.3"
 
 
 def _number(value: Any) -> int:
@@ -74,41 +75,66 @@ def _remote_sources(remote: dict[str, Any], runs: Iterable[CollectorRun]) -> lis
     return sources
 
 
-def _collector_snapshot(runs: Iterable[CollectorRun], source_id: str) -> dict[str, Any] | None:
+def _ai_usage_resource(runs: Iterable[CollectorRun]) -> tuple[dict[str, Any] | None, list[SourceStatus], list[dict[str, Any]]]:
+    """Project all valid AI provider snapshots without provider-name branches."""
+    snapshots: list[dict[str, Any]] = []
     for run in runs:
-        if run.capability.source_id == source_id and isinstance(run.snapshot, dict):
-            return run.snapshot
-    return None
-
-
-def _ai_usage_resource(runs: Iterable[CollectorRun]) -> tuple[dict[str, Any] | None, SourceStatus | None]:
-    """Project OpenCode only when the local executable is actually available."""
-    snapshot = _collector_snapshot(runs, "opencode")
-    if not snapshot or not snapshot.get("available"):
-        return None, None
-    status = str(snapshot.get("status") or _collector_status("opencode", "waiting", runs))
-    tokens = snapshot.get("tokens") if isinstance(snapshot.get("tokens"), dict) else {}
+        snapshot = run.snapshot
+        if run.capability.resource_id != "ai_usage" or not isinstance(snapshot, dict):
+            continue
+        if snapshot.get("schema") != AI_USAGE_SNAPSHOT_SCHEMA or not snapshot.get("available"):
+            continue
+        snapshots.append({**snapshot, "source_id": run.capability.source_id})
+    if not snapshots:
+        return None, [], []
+    aggregate = _ai_usage_aggregate(snapshots)
+    source_ids = [str(snapshot["source_id"]) for snapshot in snapshots]
+    online = [snapshot for snapshot in snapshots if str(snapshot.get("status") or "waiting") == "ok"]
+    status = "ok" if online else str(snapshots[0].get("status") or "waiting")
+    today = aggregate["today"]
     resource = {
         "id": "ai_usage",
         "status": status,
         "enabled": True,
         "primary_metric": "ai.tokens.total",
-        "primary_value": _number(tokens.get("total")),
+        "primary_value": _number(today.get("tokens")),
         "primary_unit": "tokens",
-        "primary_source_id": "opencode",
-        "source_count": 1,
-        "online_source_count": 1 if status == "ok" else 0,
+        "primary_source_id": "ai_usage.aggregate",
+        "source_count": len(snapshots),
+        "online_source_count": len(online),
     }
-    source = SourceStatus(
-        id="opencode",
-        kind="ai.opencode",
+    sources = [SourceStatus(
+        id=str(snapshot["source_id"]),
+        kind=f"ai.{snapshot['source_id']}",
         resource_id="ai_usage",
         enabled=True,
-        status=status,
-        label=str(snapshot.get("label") or "OpenCode"),
+        status=str(snapshot.get("status") or _collector_status(str(snapshot["source_id"]), "waiting", runs)),
+        label=str(snapshot.get("label") or snapshot["source_id"]),
         updated_at=snapshot.get("observed_at") if isinstance(snapshot.get("observed_at"), str) else None,
-    )
-    return resource, source
+    ) for snapshot in snapshots]
+    return resource, sources, snapshots
+
+
+def _ai_usage_aggregate(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate only windows explicitly made available by each provider."""
+    windows: dict[str, dict[str, Any]] = {}
+    for window in ("today", "cumulative"):
+        values = {
+            str(snapshot["source_id"]): value
+            for snapshot in snapshots
+            if (value := window_tokens(snapshot, window)) is not None
+        }
+        windows[window] = {
+            "tokens": sum(values.values()),
+            "sources": list(values),
+            "source_count": len(values),
+        }
+    return {
+        "schema": AI_USAGE_SNAPSHOT_SCHEMA,
+        "today": windows["today"],
+        "cumulative": windows["cumulative"],
+        "label": "local-usage-rollup",
+    }
 
 
 def build_infra_projection(
@@ -143,9 +169,9 @@ def build_infra_projection(
         updated_at=timestamp or None,
     )]
     sources.extend(_remote_sources(remote, collector_runs))
-    ai_resource, ai_source = _ai_usage_resource(collector_runs)
-    if ai_source:
-        sources.append(ai_source)
+    ai_resource, ai_sources, ai_snapshots = _ai_usage_resource(collector_runs)
+    ai_aggregate = _ai_usage_aggregate(ai_snapshots)
+    sources.extend(ai_sources)
     source_dicts = [source.as_dict() for source in sources]
     active_sources = [source for source in sources if source.enabled]
     online_sources = [source for source in active_sources if source.status == "ok"]
@@ -190,7 +216,7 @@ def build_infra_projection(
             instrument="gauge",
             value=ai_resource["primary_value"],
             unit="tokens",
-            source_id="opencode",
+            source_id="ai_usage.aggregate",
             resource_id="ai_usage",
             dimensions={"window": "today"},
             attribution_method="exact",
@@ -208,5 +234,5 @@ def build_infra_projection(
         "metrics": metrics,
         "capabilities": DEFAULT_SOURCE_REGISTRY.capabilities(),
         "collectors": [run.as_dict() for run in collector_runs],
-        "ai_usage": {"opencode": _collector_snapshot(collector_runs, "opencode")} if ai_resource else {},
+        "ai_usage": {"schema": AI_USAGE_SNAPSHOT_SCHEMA, "sources": ai_snapshots, "aggregate": ai_aggregate} if ai_resource else {},
     }

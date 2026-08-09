@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from datetime import datetime, timezone
+from contextlib import closing
 import json
 import sqlite3
 import subprocess
@@ -97,7 +98,8 @@ class OpenCodeStatsTests(unittest.TestCase):
 
         self.assertEqual(calls, [["/test/opencode", "stats", "--days", "0", "--models"], ["/test/opencode", "stats", "--days", "0", "--models"]])
         self.assertEqual(first.status, "ok")
-        self.assertEqual(first.snapshot["tokens"]["total"], 11_800)  # type: ignore[index]
+        self.assertEqual(first.snapshot["usage"]["today"]["tokens"], 11_800)  # type: ignore[index]
+        self.assertEqual(sum(point.value for point in first.points if point.metric == "ai.tokens.total"), 11_800)
         self.assertEqual(sum(point.value for point in first.points if point.metric == "ai.tokens.input"), 8_000)
         self.assertEqual(cached.points, ())
         self.assertEqual(later.points, ())
@@ -129,13 +131,13 @@ class OpenCodeStatsTests(unittest.TestCase):
         failed = collector.collect(CollectorContext({"epoch": 160.0}, {}))
 
         self.assertEqual(failed.status, "error")
-        self.assertEqual(failed.snapshot["tokens"]["total"], 11_800)  # type: ignore[index]
+        self.assertEqual(failed.snapshot["usage"]["today"]["tokens"], 11_800)  # type: ignore[index]
 
     def test_desktop_database_reads_only_today_assistant_usage_metadata(self) -> None:
         epoch = datetime(2026, 8, 9, 9, tzinfo=timezone.utc).timestamp()
         with tempfile.TemporaryDirectory() as temporary:
             database = Path(temporary) / "opencode.db"
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection:
                 connection.execute("CREATE TABLE message (session_id TEXT, time_created INTEGER, data TEXT)")
                 connection.executemany("INSERT INTO message VALUES (?, ?, ?)", [
                     ("session-a", int(epoch * 1000), json.dumps({
@@ -150,6 +152,7 @@ class OpenCodeStatsTests(unittest.TestCase):
                     })),
                     ("session-a", int(epoch * 1000), json.dumps({"role": "user", "text": "never count user data"})),
                 ])
+                connection.commit()
             stats = read_opencode_desktop_stats(database, epoch)
 
         self.assertEqual(stats.sessions, 2)
@@ -162,6 +165,15 @@ class OpenCodeStatsTests(unittest.TestCase):
         self.assertEqual(stats.total_tokens, 255)
         self.assertFalse(stats.output_includes_reasoning)
         self.assertEqual([item["id"] for item in stats.models], ["openai/gpt-5.6", "deepseek/deepseek-chat"])
+
+    def test_snapshot_keeps_lifetime_models_when_the_desktop_database_is_available(self) -> None:
+        stats = parse_opencode_stats(STATS_OUTPUT)
+        collector = OpenCodeUsageCollector(desktop_database_finder=lambda: None)
+        snapshot = collector._snapshot_for(stats, "2026-08-09T12:00:00+08:00", "desktop-session-metadata", 11_800, collector._models_with_totals(stats))
+
+        self.assertEqual(snapshot["usage"]["cumulative"]["tokens"], 11_800)
+        self.assertEqual([model["id"] for model in snapshot["models"]], ["openai/gpt-5.6", "deepseek/deepseek-chat"])
+        self.assertTrue(all(model["cumulative"]["available"] for model in snapshot["models"]))
 
 
 if __name__ == "__main__":

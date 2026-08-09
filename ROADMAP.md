@@ -26,7 +26,7 @@ Infra Sentinel 面向个人拥有或控制的本地设备、代理链路、VPS �
 | 1 | 1.2 | 建立统一指标和 Collector 合同 | 最小闭环已完成 |
 | 2 | 1.3 | SQLite 时序存储与一次性迁移 | 进行中 |
 | 3 | 2.0 | Infra Sentinel 外壳与健康状态菜单栏 | 进行中 |
-| 4 | 2.1 | 首个 API 使用与配额模块 | 进行中：OpenCode 本地会话用量 |
+| 4 | 2.1 | 本地 AI 用量与工作负载模块 | 进行中：OpenCode 与 Codex 本地元数据 |
 | 5 | 2.2 | 本地存储与计算模块 | 候选 |
 | 6 | 3.x | 跨资源分析与调优建议 | 远期 |
 
@@ -252,9 +252,9 @@ Projection，并通过受限桥接提交既有 Agent 命令。Python Agent 仍�
 
 ### 4. API 使用与配额模块
 
-状态：进行中。第一个落点是无需密钥的 OpenCode 本地会话用量：仅调用公开
-`opencode stats --days 0 --models`，以模型维度保存 Token、缓存、消息数和其报告的费用。
-它不读取 OpenCode 数据库、会话导出、项目路径或认证文件；未安装 OpenCode 时模块隐藏。
+状态：进行中。已接入无需密钥的 OpenCode 本地会话用量：优先只读聚合 Desktop
+assistant 消息的 Token 元数据，库不存在时才调用 `opencode stats --days 0 --models`。已接入
+Codex 本地状态库的线程累计 Token、模型与匿名化工作拓扑。两者的统计窗口和精度不同；面板仅以“粗略本地汇总”合并可解释的当日计数，不将其标示为 API 账单。下一步已开始把按模型 Token 增量写入统一时序库，用于跨应用趋势对比。
 
 范围：
 
@@ -368,4 +368,4 @@ Projection，并通过受限桥接提交既有 Agent 命令。Python Agent 仍�
 4. Collector 健康状态作为运行时状态进入 Projection，不与业务流量或告警混算；
 5. 没有新增 API、GPU 或磁盘采集，也没有把新模型塞回 Native Controller。
 
-当前新增的 OpenCode Collector 已验证“独立资源模块不影响网络采样”的路径。下一步先为 AI counter 查询增加范围和降采样投影，再评估第二个客户端或可验证 Provider；ChatGPT/Codex 订阅额度仍须等待官方公开接口，不能由本地 Hook 伪造精确值。
+OpenCode 与 Codex Collector 已验证“独立资源模块不影响网络采样”的路径。下一步先为 AI counter 查询增加范围和降采样投影，再评估更多本地客户端或可验证 Provider；API/订阅额度仍须等待供应商公开接口，不能由本地 Hook 或本地累计值伪造精确账单。

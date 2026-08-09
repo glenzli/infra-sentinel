@@ -17,7 +17,7 @@ use crate::app_paths::state_dir;
 // Keep this in lockstep with bin/agent_protocol.py. The desktop bridge owns
 // command/projection validation, so a dated protocol revision must change on
 // both sides before a new Agent can be displayed.
-const PROTOCOL_SCHEMA: &str = "20260809.1";
+const PROTOCOL_SCHEMA: &str = "20260809.2";
 
 #[derive(Serialize)]
 pub struct CommandReceipt {

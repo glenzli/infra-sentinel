@@ -57,6 +57,18 @@ class MetricStoreTests(unittest.TestCase):
         self.assertEqual({point.source_id for point in local}, {"local-mihomo"})
         self.assertEqual({point.source_id for point in remote}, {"vps:primary", "xray:primary"})
 
+    def test_local_adapter_records_service_dimensions_without_connection_identity(self) -> None:
+        points = local_sample_metrics({
+            "timestamp": "2026-08-08T12:00:00+08:00", "epoch": 1.0,
+            "kernel": {"up_bytes": 1, "down_bytes": 2}, "routes": {},
+            "services": [{"id": "chatgpt", "label": "ChatGPT", "up_bytes": 5, "down_bytes": 7}],
+        })
+        services = [point for point in points if point.metric == "network.service_bytes"]
+
+        self.assertEqual(len(services), 2)
+        self.assertEqual({point.dimensions["service"] for point in services}, {"chatgpt"})
+        self.assertEqual({point.dimensions["label"] for point in services}, {"ChatGPT"})
+
 
 if __name__ == "__main__":
     unittest.main()
