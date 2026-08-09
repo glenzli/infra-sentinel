@@ -153,8 +153,8 @@ Building from source requires:
 - Python 3.11+ and PyInstaller.
 
 ```sh
-git clone git@github.com:glenzli/net-traffic-sential.git
-cd net-traffic-sential
+git clone git@github.com:glenzli/infra-sentinel.git
+cd infra-sentinel
 python3 -m pip install pyinstaller
 ./bin/build-desktop-app.sh
 open "ui/src-tauri/target/release/bundle/macos/Infra Sentinel.app"
