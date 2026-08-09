@@ -3,7 +3,7 @@ import { AgentProjection, ResourceProjection, SourceProjection } from "./bridge"
 import { asArray, asRecord, formatBytes, number } from "./format";
 import { tr } from "./i18n";
 import { DailyBarBucket, DailyBarSeries, renderDailyBarChart } from "./daily_bar_chart";
-import { NetworkAnalysisData, NetworkAnalysisSnapshot, NetworkTimeRange, NetworkViewMode } from "./network_analysis";
+import { NetworkAnalysisData, NetworkAnalysisSnapshot, NetworkTimeRange, NetworkViewMode, networkPathTotals } from "./network_analysis";
 
 const TRAFFIC_COLORS = ["#3178dc", "#2f9461", "#2e9298", "#9468c9", "#c77b2c"];
 
@@ -212,23 +212,29 @@ function trendSvg(trend: Record<string, unknown>): string {
   return `<div class="traffic-chart-frame"><span class="chart-axis-label chart-axis-label--peak">${rate(axisMaximum)}</span><span class="chart-axis-label chart-axis-label--mid">${rate(axisMaximum / 2)}</span><span class="chart-axis-label chart-axis-label--zero">0</span><svg class="traffic-chart" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="${tr("Traffic rate trend", "流量速率趋势")}"><path class="chart-grid chart-grid--reference" d="M0 10H100"/><path class="chart-grid" d="M0 51H100M0 92H100"/><polyline class="chart-line chart-line--mihomo" points="${points(values)}"/><polyline class="chart-line chart-line--proxy" points="${points(proxy)}"/></svg></div><div class="traffic-chart__timeline"><span>${tr(`${windowMinutes} min ago`, `${windowMinutes} 分钟前`)}</span><span>${tr("Now", "现在")}</span></div>`;
 }
 
-function renderCurrentSummary(session: Record<string, unknown>, usageChecks: Map<string, Record<string, unknown>>): string {
-  const vps = asRecord(session.vps);
-  const kernel = asRecord(session.kernel);
-  const remoteServers = asArray(session.remote_servers);
-  const xray = remoteServers.reduce((sum, server) => sum + number(server.xray_logical_bytes), 0);
-  const dailyBilled = [...usageChecks.values()].reduce((sum, usage) => sum + number(usage.usage_bytes), 0);
+function renderCurrentSummary(
+  analysis: NetworkAnalysisData,
+  usageChecks: Map<string, Record<string, unknown>>,
+  range: NetworkTimeRange,
+  loading: boolean,
+  ready: boolean,
+): string {
+  const { local, proxy, xray, billed } = networkPathTotals(analysis);
   const critical = [...usageChecks.values()].filter((usage) => usage.level === "critical").length;
   const warning = [...usageChecks.values()].filter((usage) => usage.level === "warning").length;
-  const status = critical ? tr(`${critical} critical host${critical === 1 ? "" : "s"}`, `${critical} 台主机严重`) : warning ? tr(`${warning} host${warning === 1 ? "" : "s"} need attention`, `${warning} 台主机需关注`) : tr("All host checks normal", "主机用量检测正常");
-  const statusTone = critical ? "critical" : warning ? "warning" : "healthy";
-  const primaryValue = usageChecks.size ? dailyBilled : number(vps.total_bytes);
-  const primaryDetail = usageChecks.size
-    ? tr("Configured billing direction per host", "按每台主机配置的计费方向汇总")
-    : tr("Current session fallback · daily checks disabled", "当前统计周期回退值 · 未启用每日检测");
+  const dailyStatus = range === "today";
+  const status = loading
+    ? tr("Loading selected range", "正在读取所选范围")
+    : dailyStatus && critical
+      ? tr(`${critical} critical host${critical === 1 ? "" : "s"}`, `${critical} 台主机严重`)
+      : dailyStatus && warning
+        ? tr(`${warning} host${warning === 1 ? "" : "s"} need attention`, `${warning} 台主机需关注`)
+        : tr("Selected range loaded", "所选范围已对齐");
+  const statusTone = dailyStatus && critical ? "critical" : dailyStatus && warning ? "warning" : "healthy";
+  const value = (amount: number) => !ready ? "—" : formatBytes(amount);
   return `<section class="network-ledger-summary">
-    <article class="network-ledger-primary"><p>${tr("Today's VPS billing", "今日 VPS 账单量")}</p><strong>${formatBytes(primaryValue)}</strong><small>${primaryDetail}</small><span class="network-ledger-status network-ledger-status--${statusTone}">${status}</span></article>
-    <article class="network-path-card"><div class="detail-panel__heading"><h3>${tr("Current observation path", "当前观测链路")}</h3><span>${tr("same session · not additive", "同一统计周期 · 不可相加")}</span></div><div class="network-path"><span><small>Mihomo</small><strong>${formatBytes(kernel.total_bytes)}</strong></span><i>→</i><span><small>${tr("Proxy route", "代理路径")}</small><strong>${formatBytes(session.proxy_observed_total_bytes)}</strong></span><i>→</i><span><small>Xray</small><strong>${formatBytes(xray)}</strong></span><i>→</i><span><small>${tr("VPS billed", "VPS 账单")}</small><strong>${formatBytes(vps.total_bytes)}</strong></span></div></article>
+    <article class="network-ledger-primary"><p>${tr("VPS billing in range", "所选范围 VPS 账单量")}</p><strong>${value(billed)}</strong><small>${rangeLabel(range)} · ${tr("configured billing direction per host", "按每台主机配置的计费方向汇总")}</small><span class="network-ledger-status network-ledger-status--${statusTone}">${status}</span></article>
+    <article class="network-path-card"><div class="detail-panel__heading"><h3>${tr("Observation path in range", "所选范围观测链路")}</h3><span>${rangeLabel(range)} · ${tr("same window · not additive", "同一时间范围 · 不可相加")}</span></div><div class="network-path"><span><small>Mihomo</small><strong>${value(local)}</strong></span><i>→</i><span><small>${tr("Proxy route", "代理路径")}</small><strong>${value(proxy)}</strong></span><i>→</i><span><small>Xray</small><strong>${value(xray)}</strong></span><i>→</i><span><small>${tr("VPS billed", "VPS 账单")}</small><strong>${value(billed)}</strong></span></div></article>
   </section>`;
 }
 
@@ -248,7 +254,7 @@ export function renderNetworkDetail(projection: AgentProjection, snapshot: Netwo
         : snapshot.mode === "attribution"
           ? renderAttributionView(snapshot.data, users, snapshot.range)
           : renderEfficiencyView(snapshot.data, remoteServers, snapshot.range, trend);
-  return `<section class="network-detail">${renderCurrentSummary(session, usageChecks)}${renderControls(snapshot)}${content}</section>`;
+  return `<section class="network-detail">${renderCurrentSummary(snapshot.data, usageChecks, snapshot.range, snapshot.loading, snapshot.ready)}${renderControls(snapshot)}${content}</section>`;
 }
 
 function sourceLabel(source: SourceProjection): string {

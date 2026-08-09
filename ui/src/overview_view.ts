@@ -1,6 +1,7 @@
 import { AgentProjection, ResourceProjection } from "./bridge";
-import { asArray, asRecord, formatBytes, formatDuration, formatTokens, number } from "./format";
+import { asArray, asRecord, formatBytes, formatDuration, formatTokens } from "./format";
 import { tr } from "./i18n";
+import { NetworkAnalysisSnapshot, networkPathTotals } from "./network_analysis";
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" })[char] ?? char);
@@ -36,20 +37,23 @@ function dailyUsageThresholds(guard: Record<string, unknown>): string {
   );
 }
 
-function networkCard(projection: AgentProjection, resource: ResourceProjection): string {
+function networkCard(projection: AgentProjection, resource: ResourceProjection, analysis: NetworkAnalysisSnapshot): string {
   const session = asRecord(projection.session);
   const remote = asRecord(projection.vps);
-  const dailyUsage = asRecord(remote.cycle);
   const usageGuards = asArray(remote.daily_usage_guards);
-  const kernel = asRecord(session.kernel);
-  const attribution = asRecord(session.attribution);
   const remoteServers = asArray(session.remote_servers);
-  const coverage = number(attribution.coverage);
-  const coverageText = coverage > 0
-    ? new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 1 }).format(coverage)
+  const path = networkPathTotals(analysis.data);
+  const value = (amount: number) => analysis.ready ? formatBytes(amount) : "—";
+  const coverageText = analysis.ready && path.local > 0
+    ? new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 1 }).format(path.attributionCoverage)
     : tr("waiting", "等待采样");
   const guards = usageGuards.slice(0, 3).map((guard) => `<span class="usage-guard usage-guard--${escapeHtml(String(guard.level ?? "none"))}"><i></i><b>${escapeHtml(guard.label)}</b><em>${formatBytes(guard.usage_bytes)} · ${dailyUsageThresholds(guard)}</em></span>`).join("");
-  return `<button class="resource-card resource-card--network resource-card--${escapeHtml(resource.status)}" type="button" data-resource-id="network"><div class="resource-card__heading"><span class="resource-card__identity"><span class="resource-card__state source-state source-state--${escapeHtml(resource.status)}" aria-hidden="true"></span><p>${tr("Network", "网络")}</p></span></div><div class="network-overview__metrics"><span><small>${tr("Today — VPS billing", "今日 VPS 账单量")}</small><strong>${formatBytes(dailyUsage.total_bytes)}</strong></span><span><small>${tr("Local Mihomo", "本机 Mihomo")}</small><strong>${formatBytes(kernel.total_bytes)}</strong></span><span><small>${tr("Proxy route", "代理路径")}</small><strong>${formatBytes(session.proxy_observed_total_bytes)}</strong></span></div>${guards ? `<div class="usage-guards"><small>${tr("Daily billing checks", "每日账单检测")}</small><div>${guards}</div></div>` : ""}<div class="network-overview__footer"><span>${tr("Coverage", "归因覆盖率")} ${coverageText}</span><span>${remoteServers.length} ${tr("remote hosts", "台远端主机")} · ${sourceSummary(resource)}</span><span>${tr("Details", "详情")} →</span></div></button>`;
+  const scopeLabel = analysis.error
+    ? tr("Today's data issue", "今日数据异常")
+    : analysis.loading
+      ? tr("Updating today", "正在更新今日")
+      : tr("Today", "今日");
+  return `<button class="resource-card resource-card--network resource-card--${escapeHtml(resource.status)}" type="button" data-resource-id="network"><div class="resource-card__heading"><span class="resource-card__identity"><span class="resource-card__state source-state source-state--${escapeHtml(resource.status)}" aria-hidden="true"></span><p>${tr("Network", "网络")}</p></span><span class="pill pill--${analysis.error ? "degraded" : "healthy"}">${scopeLabel}</span></div><div class="network-overview__metrics"><span><small>${tr("VPS billing", "VPS 账单量")}</small><strong>${value(path.billed)}</strong></span><span><small>${tr("Local Mihomo", "本机 Mihomo")}</small><strong>${value(path.local)}</strong></span><span><small>${tr("Proxy route", "代理路径")}</small><strong>${value(path.proxy)}</strong></span></div>${guards ? `<div class="usage-guards"><small>${tr("Daily billing checks", "每日账单检测")}</small><div>${guards}</div></div>` : ""}<div class="network-overview__footer"><span>${tr("Coverage", "归因覆盖率")} ${coverageText}</span><span>${remoteServers.length} ${tr("remote hosts", "台远端主机")} · ${sourceSummary(resource)}</span><span>${tr("Details", "详情")} →</span></div></button>`;
 }
 
 function aiUsageCard(projection: AgentProjection, resource: ResourceProjection): string {
@@ -74,11 +78,11 @@ function resourceCard(resource: ResourceProjection): string {
   return `<article class="resource-card resource-card--${escapeHtml(resource.status)}"><div class="resource-card__heading"><span class="resource-card__identity"><span class="resource-card__state source-state source-state--${escapeHtml(resource.status)}" aria-hidden="true"></span><p>${escapeHtml(resourceLabel(resource))}</p></span><span class="pill pill--${escapeHtml(resource.status)}">${escapeHtml(statusLabel(resource.status))}</span></div><div class="resource-card__metric"><strong>${escapeHtml(resourceValue(resource))}</strong><small>${escapeHtml(sourceSummary(resource))}</small></div></article>`;
 }
 
-export function renderOverview(projection: AgentProjection): string {
+export function renderOverview(projection: AgentProjection, networkAnalysis: NetworkAnalysisSnapshot): string {
   const { infra, session } = projection;
   const resources = infra.resources.filter((resource) => resource.enabled);
   const activeAlerts = infra.overall.active_alerts;
   const onlineSources = resources.reduce((total, resource) => total + resource.online_source_count, 0);
   const configuredSources = resources.reduce((total, resource) => total + resource.source_count, 0);
-  return `<section class="overview-toolbar"><div class="overview-toolbar__session"><span>${tr("Session", "当前统计周期")}</span><strong>${formatDuration(session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button></div></section><section class="summary-grid summary-grid--compact" aria-label="${tr("Overview", "概览")}"><article class="summary-card summary-card--status"><p>${tr("Overall health", "整体健康")}</p><strong class="status-value status-value--${escapeHtml(infra.overall.status)}">${escapeHtml(statusLabel(infra.overall.status))}</strong><small>${activeAlerts ? tr(`${activeAlerts} active alert${activeAlerts === 1 ? "" : "s"}`, `当前 ${activeAlerts} 个活动告警`) : tr("No active alerts", "暂无活动告警")}</small></article><article class="summary-card"><p>${tr("Enabled resources", "已启用资源")}</p><strong>${resources.length}</strong><small>${resources.map(resourceLabel).join(" · ") || tr("None", "无")}</small></article><article class="summary-card"><p>${tr("Data sources", "数据源")}</p><strong>${onlineSources}<em> / ${configuredSources}</em></strong><small>${tr("online", "在线")}</small></article></section><section class="module-section module-section--overview"><div class="section-heading"><div><p class="eyebrow">${tr("RESOURCES", "资源模块")}</p><h2>${tr("Resources", "资源模块")}</h2></div><span class="section-heading__meta">${resources.length} ${tr("enabled", "项已启用")}</span></div><div class="resource-grid resource-grid--compact">${resources.map((resource) => resource.id === "network" ? networkCard(projection, resource) : resource.id === "ai_usage" ? aiUsageCard(projection, resource) : resourceCard(resource)).join("") || `<p class="empty">${tr("No resource module is enabled.", "尚未启用资源模块。")}</p>`}</div></section>`;
+  return `<section class="overview-toolbar"><div class="overview-toolbar__session"><span>${tr("Session", "当前统计周期")}</span><strong>${formatDuration(session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button></div></section><section class="summary-grid summary-grid--compact" aria-label="${tr("Overview", "概览")}"><article class="summary-card summary-card--status"><p>${tr("Overall health", "整体健康")}</p><strong class="status-value status-value--${escapeHtml(infra.overall.status)}">${escapeHtml(statusLabel(infra.overall.status))}</strong><small>${activeAlerts ? tr(`${activeAlerts} active alert${activeAlerts === 1 ? "" : "s"}`, `当前 ${activeAlerts} 个活动告警`) : tr("No active alerts", "暂无活动告警")}</small></article><article class="summary-card"><p>${tr("Enabled resources", "已启用资源")}</p><strong>${resources.length}</strong><small>${resources.map(resourceLabel).join(" · ") || tr("None", "无")}</small></article><article class="summary-card"><p>${tr("Data sources", "数据源")}</p><strong>${onlineSources}<em> / ${configuredSources}</em></strong><small>${tr("online", "在线")}</small></article></section><section class="module-section module-section--overview"><div class="section-heading"><div><p class="eyebrow">${tr("RESOURCES", "资源模块")}</p><h2>${tr("Resources", "资源模块")}</h2></div><span class="section-heading__meta">${resources.length} ${tr("enabled", "项已启用")}</span></div><div class="resource-grid resource-grid--compact">${resources.map((resource) => resource.id === "network" ? networkCard(projection, resource, networkAnalysis) : resource.id === "ai_usage" ? aiUsageCard(projection, resource) : resourceCard(resource)).join("") || `<p class="empty">${tr("No resource module is enabled.", "尚未启用资源模块。")}</p>`}</div></section>`;
 }

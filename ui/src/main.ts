@@ -21,6 +21,7 @@ const root = appRoot();
 let activeView: AppView = "overview";
 let latestProjection: AgentProjection | undefined;
 const networkAnalysis = new NetworkAnalysisController();
+const networkOverviewAnalysis = new NetworkAnalysisController("attribution", "today");
 const aiAnalysis = new AiAnalysisController();
 
 function escapeHtml(value: unknown): string {
@@ -65,7 +66,7 @@ function renderProjection(projection: AgentProjection): void {
     ? `<section class="dashboard-actions"><div><p class="eyebrow">${tr("CURRENT SESSION", "当前统计周期")}</p><strong>${formatDuration(projection.session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button><button class="button button--danger" id="reset"><span>${tr("Reset totals", "重置统计")}</span></button></div></section>${renderNetworkResourcePage(projection, network, sources, networkAnalysis.snapshot())}`
     : activeView === "ai_usage" && aiUsage
       ? `${controls}${renderAiUsageResourcePage(projection, aiUsage, aiSources, aiAnalysis.snapshot())}`
-    : renderOverview(projection);
+    : renderOverview(projection, networkOverviewAnalysis.snapshot());
   root.innerHTML = `<main class="shell">${topbar(projection.infra.overall.status)}${content}${footer(projection)}</main>`;
   root.querySelector<HTMLButtonElement>("#settings")?.addEventListener("click", () => void openSettings());
   root.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", () => void refresh());
@@ -105,6 +106,9 @@ function renderProjection(projection: AgentProjection): void {
   bindChrome();
   if (activeView === "network") void networkAnalysis.hydrate(() => {
     if (activeView === "network" && latestProjection) renderProjection(latestProjection);
+  });
+  if (activeView === "overview" && network) void networkOverviewAnalysis.hydrate(() => {
+    if (activeView === "overview" && latestProjection) renderProjection(latestProjection);
   });
   if (activeView === "ai_usage") void aiAnalysis.hydrate(() => {
     if (activeView === "ai_usage" && latestProjection) renderProjection(latestProjection);

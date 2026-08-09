@@ -7,6 +7,7 @@ export type NetworkTimeRange = AnalysisTimeRange;
 export type NetworkAnalysisData = {
   servicePoints: Record<string, unknown>[];
   localPoints: Record<string, unknown>[];
+  routePoints: Record<string, unknown>[];
   vpsPoints: Record<string, unknown>[];
   xrayPoints: Record<string, unknown>[];
 };
@@ -15,13 +16,47 @@ export type NetworkAnalysisSnapshot = {
   mode: NetworkViewMode;
   range: NetworkTimeRange;
   data: NetworkAnalysisData;
+  ready: boolean;
   loading: boolean;
   error?: string;
 };
 
+export type NetworkPathTotals = {
+  local: number;
+  proxy: number;
+  xray: number;
+  billed: number;
+  attributed: number;
+  attributionCoverage: number;
+};
+
 type CacheEntry = { fetchedAt: number; data: NetworkAnalysisData };
 
-const emptyData = (): NetworkAnalysisData => ({ servicePoints: [], localPoints: [], vpsPoints: [], xrayPoints: [] });
+const emptyData = (): NetworkAnalysisData => ({ servicePoints: [], localPoints: [], routePoints: [], vpsPoints: [], xrayPoints: [] });
+
+function pointTotal(points: Record<string, unknown>[]): number {
+  return points.reduce((sum, point) => sum + Math.max(0, Number(point.value) || 0), 0);
+}
+
+export function networkPathTotals(data: NetworkAnalysisData): NetworkPathTotals {
+  const local = pointTotal(data.localPoints);
+  const proxy = pointTotal(data.routePoints.filter((point) => {
+    const dimensions = point.dimensions;
+    return Boolean(dimensions) && typeof dimensions === "object" && String((dimensions as Record<string, unknown>).route ?? "") === "proxy";
+  }));
+  const attributed = pointTotal(data.servicePoints.filter((point) => {
+    const dimensions = point.dimensions;
+    return Boolean(dimensions) && typeof dimensions === "object" && String((dimensions as Record<string, unknown>).service ?? "") !== "unattributed";
+  }));
+  return {
+    local,
+    proxy,
+    xray: pointTotal(data.xrayPoints),
+    billed: pointTotal(data.vpsPoints),
+    attributed,
+    attributionCoverage: local > 0 ? Math.min(1, attributed / local) : 0,
+  };
+}
 
 function pointsFrom(result: Awaited<ReturnType<typeof requestAgentCommand>>): Record<string, unknown>[] {
   if (result.status !== "ok") throw new Error(result.message ?? "Metrics query failed");
@@ -36,12 +71,17 @@ function pointsFrom(result: Awaited<ReturnType<typeof requestAgentCommand>>): Re
  * rejection stay outside the application shell.
  */
 export class NetworkAnalysisController {
-  private mode: NetworkViewMode = "billing";
-  private range: NetworkTimeRange = "30d";
+  private mode: NetworkViewMode;
+  private range: NetworkTimeRange;
   private generation = 0;
   private readonly cache = new Map<string, CacheEntry>();
   private readonly loading = new Set<string>();
   private readonly errors = new Map<string, string>();
+
+  constructor(mode: NetworkViewMode = "billing", range: NetworkTimeRange = "30d") {
+    this.mode = mode;
+    this.range = range;
+  }
 
   selectMode(mode: NetworkViewMode): void {
     if (mode === this.mode) return;
@@ -61,6 +101,7 @@ export class NetworkAnalysisController {
       mode: this.mode,
       range: this.range,
       data: this.cache.get(key)?.data ?? emptyData(),
+      ready: this.cache.has(key),
       loading: this.loading.has(key),
       error: this.errors.get(key),
     };
@@ -107,20 +148,22 @@ export class NetworkAnalysisController {
       bucket_offset_seconds: window.bucketOffsetSeconds,
     });
 
-    if (mode === "attribution") {
-      const [services, local] = await Promise.all([
-        query("network.service_bytes", "local-mihomo"),
-        query("network.bytes", "local-mihomo"),
-      ]);
-      return { ...emptyData(), servicePoints: pointsFrom(services), localPoints: pointsFrom(local) };
-    }
-    if (mode === "billing") {
-      return { ...emptyData(), vpsPoints: pointsFrom(await query("network.billable_bytes")) };
-    }
-    const [vps, xray] = await Promise.all([
+    // The summary path and the selected detail mode must share one immutable
+    // time window. Fetch the four path stages for every mode; a mode may add
+    // its own detail query, but it never substitutes session counters.
+    const [local, routes, vps, xray, services] = await Promise.all([
+      query("network.bytes", "local-mihomo"),
+      query("network.route_bytes", "local-mihomo"),
       query("network.billable_bytes"),
       query("network.logical_bytes"),
+      mode === "attribution" ? query("network.service_bytes", "local-mihomo") : Promise.resolve(undefined),
     ]);
-    return { ...emptyData(), vpsPoints: pointsFrom(vps), xrayPoints: pointsFrom(xray) };
+    return {
+      servicePoints: services ? pointsFrom(services) : [],
+      localPoints: pointsFrom(local),
+      routePoints: pointsFrom(routes),
+      vpsPoints: pointsFrom(vps),
+      xrayPoints: pointsFrom(xray),
+    };
   }
 }
