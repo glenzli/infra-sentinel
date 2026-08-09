@@ -72,12 +72,27 @@ class CollectorRegistryTests(unittest.TestCase):
         }
 
         legacy = sorted(point_identity(point) for point in network_metrics(local, remote))
-        registry = network_collector_registry(("primary", "unused"))
+        registry = network_collector_registry((("primary", "both"), ("unused", "both")))
         adapted = sorted(point_identity(point) for point in collected_points(
             registry.collect(CollectorContext(local, remote))
         ))
 
         self.assertEqual(adapted, legacy)
+
+    def test_outbound_billing_collector_omits_incoming_interface_bytes(self) -> None:
+        remote = {"servers": [{
+            "id": "primary", "billing_mode": "outbound",
+            "vps": {"last_sample": {
+                "timestamp": "2026-08-09T12:05:00+08:00", "epoch": 2.0,
+                "in_bytes": 100, "out_bytes": 120,
+            }},
+        }]}
+        registry = network_collector_registry((("primary", "outbound"),))
+
+        points = list(collected_points(registry.collect(CollectorContext({}, remote))))
+
+        self.assertEqual([point.value for point in points if point.metric == "network.billable_bytes"], [120])
+        self.assertEqual([point.dimensions["direction"] for point in points if point.metric == "network.billable_bytes"], ["out"])
 
 
 if __name__ == "__main__":

@@ -2,7 +2,8 @@ import "./styles.css";
 import { AgentProjection, OverallStatus, readProjection, resetSession } from "./bridge";
 import { formatDuration } from "./format";
 import { tr } from "./i18n";
-import { NetworkAnalysisData, renderNetworkResourcePage } from "./network_view";
+import { renderNetworkResourcePage } from "./network_view";
+import { NetworkAnalysisController, NetworkTimeRange, NetworkViewMode } from "./network_analysis";
 import { renderAiUsageResourcePage } from "./ai_usage_view";
 import { requestAgentCommand } from "./agent_client";
 import { renderOverview } from "./overview_view";
@@ -20,12 +21,7 @@ function appRoot(): HTMLDivElement {
 const root = appRoot();
 let activeView: AppView = "overview";
 let latestProjection: AgentProjection | undefined;
-let networkAnalysisScope: AnalysisScope = "today";
-let networkAnalysisLoading = false;
-let networkAnalysisRequestScope: AnalysisScope | undefined;
-const emptyNetworkAnalysis = (): NetworkAnalysisData => ({ servicePoints: [], localPoints: [], vpsPoints: [] });
-const networkAnalysisPoints = new Map<AnalysisScope, NetworkAnalysisData>();
-const networkAnalysisFetchedAt = new Map<AnalysisScope, number>();
+const networkAnalysis = new NetworkAnalysisController();
 let aiAnalysisScope: AnalysisScope = "today";
 let aiAnalysisLoading = false;
 let aiAnalysisRequestScope: AnalysisScope | undefined;
@@ -71,7 +67,7 @@ function renderProjection(projection: AgentProjection): void {
   const aiSources = aiUsage ? projection.infra.sources.filter((source) => source.resource_id === aiUsage.id) : [];
   const controls = `<section class="dashboard-actions"><div><p class="eyebrow">${tr("CURRENT SESSION", "当前统计周期")}</p><strong>${formatDuration(projection.session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button></div></section>`;
   const content = activeView === "network" && network
-    ? `<section class="dashboard-actions"><div><p class="eyebrow">${tr("CURRENT SESSION", "当前统计周期")}</p><strong>${formatDuration(projection.session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button><button class="button button--danger" id="reset"><span>${tr("Reset totals", "重置统计")}</span></button></div></section>${renderNetworkResourcePage(projection, network, sources, networkAnalysisScope, networkAnalysisPoints.get(networkAnalysisScope) ?? emptyNetworkAnalysis(), networkAnalysisLoading)}`
+    ? `<section class="dashboard-actions"><div><p class="eyebrow">${tr("CURRENT SESSION", "当前统计周期")}</p><strong>${formatDuration(projection.session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button><button class="button button--danger" id="reset"><span>${tr("Reset totals", "重置统计")}</span></button></div></section>${renderNetworkResourcePage(projection, network, sources, networkAnalysis.snapshot())}`
     : activeView === "ai_usage" && aiUsage
       ? `${controls}${renderAiUsageResourcePage(projection, aiUsage, aiSources, aiAnalysisScope, aiAnalysisPoints.get(aiAnalysisScope) ?? [], aiAnalysisLoading)}`
     : renderOverview(projection);
@@ -90,15 +86,24 @@ function renderProjection(projection: AgentProjection): void {
       if (latestProjection) renderProjection(latestProjection);
     }
   }));
-  root.querySelectorAll<HTMLButtonElement>("[data-analysis-resource='network']").forEach((button) => button.addEventListener("click", () => {
-    const scope = button.dataset.analysisScope;
-    if (scope === "today" || scope === "cumulative" || scope === "daily") {
-      networkAnalysisScope = scope;
+  root.querySelectorAll<HTMLButtonElement>("[data-network-mode]").forEach((button) => button.addEventListener("click", () => {
+    const mode = button.dataset.networkMode as NetworkViewMode;
+    if (mode === "billing" || mode === "attribution" || mode === "efficiency") {
+      networkAnalysis.selectMode(mode);
+      if (latestProjection) renderProjection(latestProjection);
+    }
+  }));
+  root.querySelectorAll<HTMLButtonElement>("[data-network-range]").forEach((button) => button.addEventListener("click", () => {
+    const range = button.dataset.networkRange as NetworkTimeRange;
+    if (range === "today" || range === "7d" || range === "30d" || range === "recorded") {
+      networkAnalysis.selectRange(range);
       if (latestProjection) renderProjection(latestProjection);
     }
   }));
   bindChrome();
-  if (activeView === "network") void hydrateNetworkAnalysis();
+  if (activeView === "network") void networkAnalysis.hydrate(() => {
+    if (activeView === "network" && latestProjection) renderProjection(latestProjection);
+  });
   if (activeView === "ai_usage") void hydrateAiAnalysis();
 }
 
@@ -135,54 +140,6 @@ async function hydrateAiAnalysis(): Promise<void> {
       aiAnalysisLoading = false;
       aiAnalysisRequestScope = undefined;
       if (activeView === "ai_usage" && latestProjection) renderProjection(latestProjection);
-    }
-  }
-}
-
-async function hydrateNetworkAnalysis(): Promise<void> {
-  const maximumAge = networkAnalysisScope === "today" ? 60_000 : 5 * 60_000;
-  if (networkAnalysisLoading || (networkAnalysisPoints.has(networkAnalysisScope) && Date.now() - (networkAnalysisFetchedAt.get(networkAnalysisScope) ?? 0) < maximumAge)) return;
-  const scope = networkAnalysisScope;
-  networkAnalysisLoading = true;
-  networkAnalysisRequestScope = scope;
-  try {
-    const now = Date.now() / 1_000;
-    const daily = scope === "daily";
-    const asPoints = (result: Awaited<ReturnType<typeof requestAgentCommand>>): Record<string, unknown>[] => {
-      if (result.status !== "ok") throw new Error(result.message ?? "Metrics query failed");
-      return Array.isArray(result.payload?.points)
-        ? result.payload.points.filter((point): point is Record<string, unknown> => Boolean(point) && typeof point === "object")
-        : [];
-    };
-    let analysis = emptyNetworkAnalysis();
-    if (daily) {
-      const [localResult, vpsResult] = await Promise.all([
-        requestAgentCommand("metrics.query", {
-          since_epoch: now - 30 * 86_400, until_epoch: now, resource_id: "network", source_id: "local-mihomo",
-          metric: "network.bytes", bucket_seconds: 86_400,
-        }),
-        requestAgentCommand("metrics.query", {
-          since_epoch: now - 30 * 86_400, until_epoch: now, resource_id: "network",
-          metric: "network.billable_bytes", bucket_seconds: 86_400,
-        }),
-      ]);
-      analysis = { ...analysis, localPoints: asPoints(localResult), vpsPoints: asPoints(vpsResult) };
-    } else {
-      const result = await requestAgentCommand("metrics.query", {
-        since_epoch: scope === "cumulative" ? now - 730 * 86_400 : localDayStartEpoch(),
-        until_epoch: now, resource_id: "network", source_id: "local-mihomo", metric: "network.service_bytes",
-        bucket_seconds: scope === "cumulative" ? 86_400 : 300,
-      });
-      analysis = { ...analysis, servicePoints: asPoints(result) };
-    }
-    if (networkAnalysisRequestScope === scope) { networkAnalysisPoints.set(scope, analysis); networkAnalysisFetchedAt.set(scope, Date.now()); }
-  } catch {
-    if (networkAnalysisRequestScope === scope) { networkAnalysisPoints.set(scope, emptyNetworkAnalysis()); networkAnalysisFetchedAt.set(scope, Date.now()); }
-  } finally {
-    if (networkAnalysisRequestScope === scope) {
-      networkAnalysisLoading = false;
-      networkAnalysisRequestScope = undefined;
-      if (activeView === "network" && latestProjection) renderProjection(latestProjection);
     }
   }
 }

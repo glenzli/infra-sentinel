@@ -1,3 +1,4 @@
+import "./daily_bar_chart.css";
 import { tr } from "./i18n";
 
 export type DailyBarSeries = {
@@ -17,6 +18,7 @@ export type DailyBarChartOptions = {
   ariaLabel: string;
   footnote: string;
   formatValue: (value: number) => string;
+  mode?: "grouped" | "stacked";
 };
 
 function escapeHtml(value: unknown): string {
@@ -36,9 +38,8 @@ function tooltip(bucket: DailyBarBucket, series: DailyBarSeries[], formatValue: 
 }
 
 /**
- * Render a calendar-aligned grouped daily chart. Series are deliberately not
- * summed into a hidden aggregate: callers can use it for comparable models or
- * for separate measurement boundaries such as local Mihomo and individual VPSes.
+ * Render a calendar-aligned daily chart. Grouped series preserve independent
+ * boundaries; stacked series are reserved for comparable pieces of one total.
  */
 export function renderDailyBarChart(
   series: DailyBarSeries[],
@@ -46,13 +47,16 @@ export function renderDailyBarChart(
   options: DailyBarChartOptions,
 ): string {
   const usable = series.filter((item) => buckets.some((bucket) => (bucket.values.get(item.id) ?? 0) > 0));
-  const maximum = Math.max(...buckets.flatMap((bucket) => usable.map((item) => bucket.values.get(item.id) ?? 0)), 1);
+  const stacked = options.mode === "stacked";
+  const maximum = Math.max(...buckets.map((bucket) => stacked
+    ? usable.reduce((sum, item) => sum + (bucket.values.get(item.id) ?? 0), 0)
+    : Math.max(...usable.map((item) => bucket.values.get(item.id) ?? 0), 0)), 1);
   const legend = usable.length > 1
     ? `<div class="daily-bars__legend">${usable.map((item) => `<span><i class="chart-dot" style="background:${item.color}"></i>${escapeHtml(item.label)}</span>`).join("")}</div>`
     : "";
   return `<article class="detail-panel daily-history-chart"><div class="detail-panel__heading"><h3>${escapeHtml(options.title)}</h3><span>${escapeHtml(options.detail)}</span></div>${legend}<div class="daily-bars" role="img" aria-label="${escapeHtml(options.ariaLabel)}">${buckets.map((bucket) => {
     const title = tooltip(bucket, usable, options.formatValue);
-    return `<div class="daily-bar-day"><div class="daily-bar-day__bars" title="${escapeHtml(title)}">${usable.map((item) => {
+    return `<div class="daily-bar-day"><div class="daily-bar-day__bars${stacked ? " daily-bar-day__bars--stacked" : ""}" title="${escapeHtml(title)}">${usable.map((item) => {
       const value = bucket.values.get(item.id) ?? 0;
       const height = value > 0 ? Math.max(4, (value / maximum) * 100) : 0;
       return `<i style="--daily-bar-color:${item.color};height:${height}%"></i>`;

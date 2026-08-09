@@ -27,9 +27,9 @@ class BillingPolicyTests(unittest.TestCase):
             warning_bytes=100, critical_bytes=200,
         )
 
-    def test_uses_full_interface_traffic_independent_of_billing_direction(self) -> None:
+    def test_uses_each_host_billing_direction(self) -> None:
         self.assertEqual(daily_usage_bytes(remote_state(60, 70)["servers"][0]), 130)
-        self.assertEqual(daily_usage_bytes(remote_state(60, 70, billing_mode="outbound")["servers"][0]), 130)
+        self.assertEqual(daily_usage_bytes(remote_state(60, 70, billing_mode="outbound")["servers"][0]), 70)
 
     def test_each_vps_budget_has_its_own_transition_state(self) -> None:
         engine = BillingBudgetEngine()

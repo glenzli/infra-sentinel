@@ -31,11 +31,11 @@ class BillingBudgetTransition:
 
 
 def daily_usage_bytes(server: dict[str, Any]) -> int:
-    """Use full interface traffic for a local daily-risk guardrail, not provider billing."""
+    """Use this host's configured billing direction for the daily guardrail."""
     cycle = server.get("vps", {}).get("cycle", {})
     incoming = max(0, int(cycle.get("in_bytes", 0)))
     outgoing = max(0, int(cycle.get("out_bytes", 0)))
-    return incoming + outgoing
+    return outgoing if server.get("billing_mode") == "outbound" else incoming + outgoing
 
 
 class BillingBudgetEngine:

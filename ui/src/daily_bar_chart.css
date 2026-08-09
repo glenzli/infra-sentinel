@@ -1,0 +1,14 @@
+.daily-bar-day__bars--stacked {
+  align-items: center;
+  flex-direction: column-reverse;
+  gap: 1px;
+  justify-content: flex-start;
+  max-width: 28px;
+}
+
+.daily-bar-day__bars--stacked i {
+  flex: 0 0 auto;
+  max-width: none;
+  min-height: 0;
+  width: 100%;
+}

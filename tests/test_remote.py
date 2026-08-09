@@ -58,6 +58,30 @@ class RemoteFleetTests(unittest.TestCase):
             self.assertEqual([row["vps"]["status"] for row in state["servers"]], ["baseline", "baseline"])
             self.assertEqual(state["cycle"]["total_bytes"], 0)
 
+    def test_daily_fleet_cycle_respects_each_host_billing_direction(self) -> None:
+        reads = iter(((100, 200), (160, 270)))
+
+        def vps_reader(config: VpsConfig) -> dict[str, object]:
+            incoming, outgoing = next(reads)
+            return {"timestamp": "now", "epoch": 100.0 if incoming == 100 else 200.0, "interface": "eth0",
+                    "in_bytes": incoming, "out_bytes": outgoing, "in_packets": 1, "out_packets": 1}
+
+        config = RemoteServerConfig(
+            "outbound", "Outbound",
+            VpsConfig(True, "host", "auto", 300, "outbound", "Outbound", "outbound"),
+            XrayStatsConfig(False, "host", "127.0.0.1:10085", "/usr/local/bin/xray", 300, (), (), "outbound", "Outbound"),
+            TrafficEstimationConfig("outbound"),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            monitor = RemoteFleetMonitor((config,), Path(temporary), _State(), vps_reader=vps_reader, xray_reader=lambda _config: {})
+            monitor.maybe_poll(100.0, force=True)
+            state = monitor.maybe_poll(200.0, force=True)
+
+        self.assertEqual(state["cycle"]["in_bytes"], 60)
+        self.assertEqual(state["cycle"]["out_bytes"], 70)
+        self.assertEqual(state["cycle"]["interface_total_bytes"], 130)
+        self.assertEqual(state["cycle"]["total_bytes"], 70)
+
 
 if __name__ == "__main__":
     unittest.main()

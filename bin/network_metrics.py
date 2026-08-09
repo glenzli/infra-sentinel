@@ -13,7 +13,7 @@ from infra_collectors import CallableCollector, CollectorCapability, CollectorCo
 from infra_model import MetricPoint
 
 
-NETWORK_METRIC_SCHEMA = "20260808.2"
+NETWORK_METRIC_SCHEMA = "20260809.1"
 
 
 def _number(value: Any) -> int:
@@ -84,13 +84,13 @@ def local_sample_metrics(sample: dict[str, Any]) -> list[MetricPoint]:
     return points
 
 
-def vps_sample_metrics(server_id: str, sample: dict[str, Any]) -> list[MetricPoint]:
+def vps_sample_metrics(server_id: str, sample: dict[str, Any], billing_mode: str = "both") -> list[MetricPoint]:
     timestamp = str(sample.get("timestamp") or "")
     epoch = sample.get("epoch", 0)
-    return [
-        _point(timestamp, epoch, "network.billable_bytes", sample.get("in_bytes"), f"vps:{server_id}", dimensions={"direction": "in"}),
-        _point(timestamp, epoch, "network.billable_bytes", sample.get("out_bytes"), f"vps:{server_id}", dimensions={"direction": "out"}),
-    ]
+    points = [_point(timestamp, epoch, "network.billable_bytes", sample.get("out_bytes"), f"vps:{server_id}", dimensions={"direction": "out"})]
+    if billing_mode != "outbound":
+        points.insert(0, _point(timestamp, epoch, "network.billable_bytes", sample.get("in_bytes"), f"vps:{server_id}", dimensions={"direction": "in"}))
+    return points
 
 
 def xray_sample_metrics(server_id: str, sample: dict[str, Any]) -> list[MetricPoint]:
@@ -116,7 +116,7 @@ def remote_state_metrics(remote: dict[str, Any]) -> list[MetricPoint]:
         vps = server.get("vps") if isinstance(server.get("vps"), dict) else {}
         vps_sample = vps.get("last_sample") if isinstance(vps.get("last_sample"), dict) else None
         if vps_sample:
-            points.extend(vps_sample_metrics(server_id, vps_sample))
+            points.extend(vps_sample_metrics(server_id, vps_sample, str(server.get("billing_mode") or "both")))
         xray = server.get("xray_stats") if isinstance(server.get("xray_stats"), dict) else {}
         xray_sample = xray.get("last_sample") if isinstance(xray.get("last_sample"), dict) else None
         if xray_sample:
@@ -131,7 +131,7 @@ def _server(remote: dict[str, Any], server_id: str) -> dict[str, Any] | None:
     return None
 
 
-def _vps_collector(server_id: str) -> CallableCollector:
+def _vps_collector(server_id: str, billing_mode: str) -> CallableCollector:
     return CallableCollector(
         capability=CollectorCapability(
             id=f"network.vps:{server_id}",
@@ -140,7 +140,7 @@ def _vps_collector(server_id: str) -> CallableCollector:
             resource_id="network",
             metrics=("network.billable_bytes",),
         ),
-        collect=lambda context: _vps_metrics_for_server(context, server_id),
+        collect=lambda context: _vps_metrics_for_server(context, server_id, billing_mode),
     )
 
 
@@ -157,11 +157,11 @@ def _xray_collector(server_id: str) -> CallableCollector:
     )
 
 
-def _vps_metrics_for_server(context: CollectorContext, server_id: str) -> Iterable[MetricPoint]:
+def _vps_metrics_for_server(context: CollectorContext, server_id: str, billing_mode: str) -> Iterable[MetricPoint]:
     server = _server(context.remote_state, server_id)
     vps = server.get("vps") if isinstance(server, dict) else None
     sample = vps.get("last_sample") if isinstance(vps, dict) else None
-    return vps_sample_metrics(server_id, sample) if isinstance(sample, dict) else ()
+    return vps_sample_metrics(server_id, sample, billing_mode) if isinstance(sample, dict) else ()
 
 
 def _xray_metrics_for_server(context: CollectorContext, server_id: str) -> Iterable[MetricPoint]:
@@ -171,7 +171,7 @@ def _xray_metrics_for_server(context: CollectorContext, server_id: str) -> Itera
     return xray_sample_metrics(server_id, sample) if isinstance(sample, dict) else ()
 
 
-def network_collector_registry(server_ids: Iterable[str]) -> CollectorRegistry:
+def network_collector_registry(servers: Iterable[tuple[str, str]]) -> CollectorRegistry:
     """Register exact network adapters; one remote source cannot block another."""
     collectors = [CallableCollector(
         capability=CollectorCapability(
@@ -183,8 +183,9 @@ def network_collector_registry(server_ids: Iterable[str]) -> CollectorRegistry:
         ),
         collect=lambda context: local_sample_metrics(context.local_sample),
     )]
-    for server_id in dict.fromkeys(str(item) for item in server_ids if str(item)):
-        collectors.extend((_vps_collector(server_id), _xray_collector(server_id)))
+    configured = {str(server_id): str(billing_mode) for server_id, billing_mode in servers if str(server_id)}
+    for server_id, billing_mode in configured.items():
+        collectors.extend((_vps_collector(server_id, billing_mode), _xray_collector(server_id)))
     return CollectorRegistry(collectors)
 
 

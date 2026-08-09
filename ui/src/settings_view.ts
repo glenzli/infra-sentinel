@@ -76,7 +76,7 @@ function sourceRow(source: JsonObject, budget: JsonObject | undefined): string {
       <div class="host-toggles">
         <label><input name="enabled:${escapeHtml(id)}" type="checkbox" ${enabled ? "checked" : ""} /> Enable host / 启用主机</label>
         <label><input name="xray:${escapeHtml(id)}" type="checkbox" ${bool(source.xray_stats_enabled) ? "checked" : ""} ${enabled ? "" : "disabled"} /> Xray user stats / Xray 用户统计</label>
-        <label><input name="budget:${escapeHtml(id)}" type="checkbox" ${budgetEnabled ? "checked" : ""} ${enabled ? "" : "disabled"} /> Daily usage check / 每日用量检测</label>
+        <label><input name="budget:${escapeHtml(id)}" type="checkbox" ${budgetEnabled ? "checked" : ""} ${enabled ? "" : "disabled"} /> Daily billing check / 每日账单检测</label>
       </div>
       <div class="host-budget ${budgetEnabled && enabled ? "" : "host-budget--disabled"}">
         <label>Warning threshold / 警告阈值<input name="budget-warning:${escapeHtml(id)}" type="number" min="1" value="${warning}" ${budgetEnabled && enabled ? "" : "disabled"} /><span>GiB/day</span></label>

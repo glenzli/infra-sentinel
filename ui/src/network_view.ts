@@ -1,14 +1,11 @@
+import "./network_view.css";
 import { AgentProjection, ResourceProjection, SourceProjection } from "./bridge";
 import { asArray, asRecord, formatBytes, number } from "./format";
 import { tr } from "./i18n";
-import { AnalysisScope, renderAnalysisScopes } from "./analysis_scope";
 import { DailyBarBucket, DailyBarSeries, renderDailyBarChart } from "./daily_bar_chart";
+import { NetworkAnalysisData, NetworkAnalysisSnapshot, NetworkTimeRange, NetworkViewMode } from "./network_analysis";
 
-export type NetworkAnalysisData = {
-  servicePoints: Record<string, unknown>[];
-  localPoints: Record<string, unknown>[];
-  vpsPoints: Record<string, unknown>[];
-};
+const TRAFFIC_COLORS = ["#3178dc", "#2f9461", "#2e9298", "#9468c9", "#c77b2c"];
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" })[char] ?? char);
@@ -18,85 +15,180 @@ function rate(value: unknown): string {
   return `${formatBytes(value)}${tr("/min", "/分钟")}`;
 }
 
-function card(label: string, value: unknown, detail: string, tone: string): string {
-  return `<article class="network-card network-card--${tone}"><p>${escapeHtml(label)}</p><strong>${formatBytes(value)}</strong><small>${escapeHtml(detail)}</small></article>`;
+function total(points: Record<string, unknown>[]): number {
+  return points.reduce((sum, point) => sum + number(point.value), 0);
+}
+
+function totalsBySource(points: Record<string, unknown>[]): Map<string, number> {
+  const totals = new Map<string, number>();
+  for (const point of points) {
+    const source = String(point.source_id || "unknown");
+    totals.set(source, (totals.get(source) ?? 0) + number(point.value));
+  }
+  return totals;
+}
+
+function rangeLabel(range: NetworkTimeRange): string {
+  const labels: Record<NetworkTimeRange, string> = {
+    today: tr("Today", "今日"),
+    "7d": tr("Last 7 days", "近 7 天"),
+    "30d": tr("Last 30 days", "近 30 天"),
+    recorded: tr("Recorded history", "记录累计"),
+  };
+  return labels[range];
+}
+
+function renderControls(snapshot: NetworkAnalysisSnapshot): string {
+  const modes: Array<[NetworkViewMode, string, string]> = [
+    ["billing", tr("Billing usage", "账单用量"), tr("VPS billable traffic", "VPS 计费流量")],
+    ["attribution", tr("Attribution", "流量归因"), tr("Local services and clients", "本地服务与客户端")],
+    ["efficiency", tr("Link efficiency", "链路效率"), tr("Logical traffic versus billing", "逻辑流量与账单对照")],
+  ];
+  const ranges: Array<[NetworkTimeRange, string]> = [
+    ["today", tr("Today", "今日")],
+    ["7d", tr("7 days", "7 天")],
+    ["30d", tr("30 days", "30 天")],
+    ["recorded", tr("Recorded", "记录累计")],
+  ];
+  return `<section class="network-analysis-toolbar">
+    <div class="network-mode-tabs" role="tablist" aria-label="${tr("Network observation", "网络观测维度")}">${modes.map(([mode, label, detail]) => `<button type="button" role="tab" aria-selected="${mode === snapshot.mode}" class="network-mode-tab${mode === snapshot.mode ? " is-active" : ""}" data-network-mode="${mode}"><strong>${label}</strong><small>${detail}</small></button>`).join("")}</div>
+    <div class="network-range-picker"><span>${tr("Time range", "时间范围")}</span><div role="group" aria-label="${tr("Network time range", "网络时间范围")}">${ranges.map(([range, label]) => `<button type="button" class="network-range${range === snapshot.range ? " is-active" : ""}" data-network-range="${range}">${label}</button>`).join("")}</div></div>
+  </section>`;
+}
+
+function loadingPanel(message: string): string {
+  return `<article class="detail-panel network-analysis-state"><span class="pulse" aria-hidden="true"></span><p>${escapeHtml(message)}</p></article>`;
+}
+
+function errorPanel(message: string): string {
+  return `<article class="detail-panel network-analysis-state network-analysis-state--error"><strong>${tr("Recorded metrics unavailable", "暂时无法读取历史指标")}</strong><p>${escapeHtml(message)}</p></article>`;
 }
 
 function dailyUsageThresholds(usage: Record<string, unknown>): string {
   return tr(
-    `warning ${formatBytes(usage.warning_bytes)} · critical ${formatBytes(usage.critical_bytes)}`,
-    `预警 ${formatBytes(usage.warning_bytes)} · 严重 ${formatBytes(usage.critical_bytes)}`,
+    `notice ${formatBytes(usage.warning_bytes)} · critical ${formatBytes(usage.critical_bytes)}`,
+    `提醒 ${formatBytes(usage.warning_bytes)} · 严重 ${formatBytes(usage.critical_bytes)}`,
   );
 }
 
-const TRAFFIC_COLORS = ["#1a73e8", "#1e8e3e", "#00838f", "#a142f4", "#e37400"];
-
-function trafficTotalsChart(points: Record<string, unknown>[], scope: AnalysisScope, loading: boolean): string {
-  if (loading) return `<section class="analysis-panel">${renderAnalysisScopes("network", scope)}<article class="detail-panel traffic-total-chart"><div class="chart-empty">${tr("Loading recorded network usage…", "正在读取已记录的网络用量…")}</div></article></section>`;
-  const totals = new Map<string, number>();
-  for (const point of points) {
-    const dimensions = asRecord(point.dimensions);
-    const label = String(dimensions.label || dimensions.service || "Unknown");
-    if (label && label !== "Unattributed") totals.set(label, (totals.get(label) ?? 0) + number(point.value));
-  }
-  const ranked = [...totals.entries()].sort((left, right) => right[1] - left[1]).slice(0, 5);
-  const maximum = Math.max(...ranked.map(([, total]) => total), 1);
-  const title = scope === "cumulative" ? tr("Recorded domain traffic", "域名流量记录累计") : tr("Today's domain traffic", "当日域名流量汇总");
-  const detail = scope === "cumulative" ? tr("local Mihomo history", "本机 Mihomo 历史") : tr("local Mihomo today", "本机 Mihomo 今日");
-  return `<section class="analysis-panel">${renderAnalysisScopes("network", scope)}<article class="detail-panel traffic-total-chart"><div class="detail-panel__heading"><h3>${title}</h3><span>${detail}</span></div><div class="traffic-total-bars">${ranked.map(([label, total], index) => {
-    const percentage = Math.max(1, Math.min(100, (total / maximum) * 100));
-    return `<div class="traffic-total-bar"><div><span><i class="chart-dot" style="background:${TRAFFIC_COLORS[index]}"></i>${escapeHtml(label)}</span><strong>${formatBytes(total)}</strong></div><p><i style="background:${TRAFFIC_COLORS[index]};width:${percentage}%"></i></p></div>`;
-  }).join("") || `<div class="chart-empty">${tr("Waiting for attributed service samples.", "等待已归因的服务采样。")}</div>`}</div><p class="panel-footnote">${tr("Only locally attributed Mihomo service traffic is grouped here. Unattributed traffic remains outside domain bars.", "这里只汇总本机 Mihomo 已归因的服务流量；未归因流量不会被分配到域名柱中。")}</p></article></section>`;
-}
-
-function dailyTrafficHistory(analysis: NetworkAnalysisData, remoteServers: Record<string, unknown>[], loading: boolean): string {
-  if (loading) return `<section class="analysis-panel">${renderAnalysisScopes("network", "daily")}<article class="detail-panel traffic-total-chart"><div class="chart-empty">${tr("Loading recorded daily traffic…", "正在读取已记录的每日流量…")}</div></article></section>`;
+function billingHistory(analysis: NetworkAnalysisData, remoteServers: Record<string, unknown>[], range: NetworkTimeRange): string {
   const hostLabels = new Map(remoteServers.map((server) => [String(server.id ?? ""), String(server.label ?? server.id ?? "VPS")]));
-  const totals = new Map<string, number>();
-  const valuesByDay = new Map<number, Map<string, number>>();
-  const add = (point: Record<string, unknown>, sourceId: string) => {
+  const sourceTotals = totalsBySource(analysis.vpsPoints);
+  const valuesByBucket = new Map<number, Map<string, number>>();
+  for (const point of analysis.vpsPoints) {
     const epoch = number(point.observed_epoch);
-    if (!epoch) return;
-    const value = number(point.value);
-    totals.set(sourceId, (totals.get(sourceId) ?? 0) + value);
-    const day = valuesByDay.get(epoch) ?? new Map<string, number>();
-    day.set(sourceId, (day.get(sourceId) ?? 0) + value);
-    valuesByDay.set(epoch, day);
-  };
-  for (const point of analysis.localPoints) add(point, "local-mihomo");
-  for (const point of analysis.vpsPoints) add(point, String(point.source_id || "vps:unknown"));
-  if (!valuesByDay.size) return `<section class="analysis-panel">${renderAnalysisScopes("network", "daily")}<article class="detail-panel traffic-total-chart"><div class="chart-empty">${tr("Daily history begins when Infra Sentinel records local traffic.", "每日历史会从 Infra Sentinel 开始记录本机流量后出现。")}</div></article></section>`;
-  const rankedVps = [...totals.entries()]
-    .filter(([sourceId]) => sourceId !== "local-mihomo")
-    .sort((left, right) => right[1] - left[1])
-    .slice(0, 4)
-    .map(([sourceId]) => sourceId);
-  const hasOtherVps = [...totals.keys()].some((sourceId) => sourceId !== "local-mihomo" && !rankedVps.includes(sourceId));
-  const ids = ["local-mihomo", ...rankedVps];
-  const series: DailyBarSeries[] = ids.filter((id) => totals.has(id)).map((id, index) => ({
+    if (!epoch) continue;
+    const sourceId = String(point.source_id || "vps:unknown");
+    const values = valuesByBucket.get(epoch) ?? new Map<string, number>();
+    values.set(sourceId, (values.get(sourceId) ?? 0) + number(point.value));
+    valuesByBucket.set(epoch, values);
+  }
+  if (!valuesByBucket.size) return `<article class="detail-panel network-analysis-state"><p>${tr("Billing history begins after a complete remote sample interval is stored.", "保存首个完整远端采样区间后，这里会出现账单历史。")}</p></article>`;
+  const ranked = [...sourceTotals.entries()].sort((left, right) => right[1] - left[1]);
+  const visible = ranked.slice(0, 4).map(([id]) => id);
+  const hasOther = ranked.length > visible.length;
+  const series: DailyBarSeries[] = visible.map((id, index) => ({
     id,
-    label: id === "local-mihomo" ? "Mihomo" : hostLabels.get(id.replace(/^vps:/, "")) ?? id.replace(/^vps:/, ""),
+    label: hostLabels.get(id.replace(/^vps:/, "")) ?? id.replace(/^vps:/, ""),
     color: TRAFFIC_COLORS[index],
   }));
-  if (hasOtherVps) series.push({ id: "__other_vps__", label: tr("Other VPS", "其他 VPS"), color: "#7b8794" });
-  const dailyBuckets: DailyBarBucket[] = [...valuesByDay.entries()].sort(([left], [right]) => left - right).map(([epoch, values]) => {
-    if (!hasOtherVps) return { epoch, values };
+  if (hasOther) series.push({ id: "__other_vps__", label: tr("Other VPS", "其他 VPS"), color: "#7b8794" });
+  const buckets: DailyBarBucket[] = [...valuesByBucket.entries()].sort(([left], [right]) => left - right).map(([epoch, values]) => {
+    if (!hasOther) return { epoch, values };
     const normalized = new Map(values);
     for (const [sourceId, value] of values) {
-      if (sourceId !== "local-mihomo" && !rankedVps.includes(sourceId)) {
+      if (!visible.includes(sourceId)) {
         normalized.delete(sourceId);
         normalized.set("__other_vps__", (normalized.get("__other_vps__") ?? 0) + value);
       }
     }
     return { epoch, values: normalized };
   });
-  return `<section class="analysis-panel">${renderAnalysisScopes("network", "daily")}${renderDailyBarChart(series, dailyBuckets, {
-    title: tr("Daily traffic by source", "每日流量来源"),
-    detail: tr("Mihomo + VPS · last 30 days", "Mihomo + VPS · 近 30 天"),
-    ariaLabel: tr("Daily traffic by local Mihomo and remote VPS", "按本机 Mihomo 与远端 VPS 的每日流量"),
+  return renderDailyBarChart(series, buckets, {
+    title: tr("VPS billable usage", "VPS 账单用量"),
+    detail: `${rangeLabel(range)} · ${tr("all configured hosts", "全部已配置主机")}`,
+    ariaLabel: tr("Billable traffic composition across configured VPS hosts", "已配置 VPS 主机的账单流量构成"),
     formatValue: formatBytes,
-    footnote: tr("Mihomo and each VPS are separate measurement boundaries. Their bars are shown side by side and are never added into a misleading fleet total.", "Mihomo 与各 VPS 属于不同计量边界；柱按日并列展示，不会合并成误导性的总量。"),
-  })}</section>`;
+    mode: "stacked",
+    footnote: tr("Colors are additive host components of the bill. Daily notice and critical levels remain independent per host.", "颜色表示总账单中各主机的组成；每日提醒与严重阈值仍由每台主机独立判断。"),
+  });
+}
+
+function renderBillingView(
+  analysis: NetworkAnalysisData,
+  remoteServers: Record<string, unknown>[],
+  usageChecks: Map<string, Record<string, unknown>>,
+  range: NetworkTimeRange,
+): string {
+  const recordedByHost = totalsBySource(analysis.vpsPoints);
+  return `<section class="network-view-panel">
+    <div class="network-view-heading"><div><p>${tr("Selected range", "所选范围")}</p><strong>${formatBytes(total(analysis.vpsPoints))}</strong></div><span>${rangeLabel(range)} · ${tr("billable VPS traffic", "VPS 计费流量")}</span></div>
+    ${billingHistory(analysis, remoteServers, range)}
+    <article class="detail-panel"><div class="detail-panel__heading"><h3>${tr("Host billing checks", "主机用量检测")}</h3><span>${remoteServers.length}</span></div><ul class="traffic-list network-host-list">${remoteServers.map((server) => {
+      const id = String(server.id ?? "");
+      const usage = usageChecks.get(id);
+      const level = String(usage?.level ?? "none");
+      const recorded = recordedByHost.get(`vps:${id}`) ?? 0;
+      const direction = String(server.billing_mode ?? "both") === "outbound" ? tr("outbound billed", "仅出站计费") : tr("in + out billed", "入站 + 出站计费");
+      return `<li class="network-host-row${level === "warning" || level === "critical" ? ` network-host-row--${escapeHtml(level)}` : ""}"><span class="network-host-name"><strong>${escapeHtml(server.label ?? id)}</strong><small>${escapeHtml(direction)}</small></span><span class="traffic-list__values"><strong>${rangeLabel(range)} ${formatBytes(recorded)}</strong>${usage ? `<small class="daily-usage daily-usage--${escapeHtml(level)}">${tr("Today", "今日")} ${formatBytes(usage.usage_bytes)} · ${dailyUsageThresholds(usage)}</small>` : `<small>${tr("Daily check disabled", "未启用每日检测")}</small>`}</span></li>`;
+    }).join("") || `<li class="empty">${tr("No remote host configured.", "尚未配置远端主机。")}</li>`}</ul></article>
+  </section>`;
+}
+
+function serviceTotals(points: Record<string, unknown>[]): Map<string, { label: string; total: number; unattributed: boolean }> {
+  const totals = new Map<string, { label: string; total: number; unattributed: boolean }>();
+  for (const point of points) {
+    const dimensions = asRecord(point.dimensions);
+    const id = String(dimensions.service || "unknown");
+    const row = totals.get(id) ?? { label: String(dimensions.label || id), total: 0, unattributed: id === "unattributed" };
+    row.total += number(point.value);
+    totals.set(id, row);
+  }
+  return totals;
+}
+
+function renderAttributionView(analysis: NetworkAnalysisData, users: Record<string, unknown>[], range: NetworkTimeRange): string {
+  const services = serviceTotals(analysis.servicePoints);
+  const attributed = [...services.values()].filter((row) => !row.unattributed).sort((left, right) => right.total - left.total);
+  const localTotal = total(analysis.localPoints);
+  const attributedTotal = attributed.reduce((sum, row) => sum + row.total, 0);
+  const unattributed = Math.max(0, localTotal - attributedTotal);
+  const coverage = localTotal > 0 ? attributedTotal / localTotal : 0;
+  const visible = attributed.slice(0, 8);
+  const maximum = Math.max(...visible.map((row) => row.total), 1);
+  return `<section class="network-view-panel">
+    <div class="network-view-heading"><div><p>${tr("Attributed local traffic", "本机已归因流量")}</p><strong>${formatBytes(attributedTotal)}</strong></div><span>${rangeLabel(range)} · ${tr(`${(coverage * 100).toFixed(1)}% coverage`, `覆盖率 ${(coverage * 100).toFixed(1)}%`)}</span></div>
+    <div class="network-attribution-grid">
+      <article class="detail-panel traffic-total-chart"><div class="detail-panel__heading"><h3>${tr("Service attribution", "服务流量归因")}</h3><span>Mihomo</span></div><div class="traffic-total-bars">${visible.map((row, index) => `<div class="traffic-total-bar"><div><span><i class="chart-dot" style="background:${TRAFFIC_COLORS[index % TRAFFIC_COLORS.length]}"></i>${escapeHtml(row.label)}</span><strong>${formatBytes(row.total)}</strong></div><p><i style="background:${TRAFFIC_COLORS[index % TRAFFIC_COLORS.length]};width:${Math.max(1, (row.total / maximum) * 100)}%"></i></p></div>`).join("") || `<div class="chart-empty">${tr("Waiting for attributed service samples.", "等待已归因的服务采样。")}</div>`}</div><p class="panel-footnote">${tr(`Local total ${formatBytes(localTotal)} · unattributed ${formatBytes(unattributed)}`, `本机总量 ${formatBytes(localTotal)} · 未归因 ${formatBytes(unattributed)}`)}</p></article>
+      <article class="detail-panel"><div class="detail-panel__heading"><h3>${tr("Xray clients", "Xray 客户端")}</h3><span>${users.length}</span></div><ul class="traffic-list">${users.slice(0, 10).map((user) => `<li><span>${escapeHtml(user.label)}</span><strong>${formatBytes(user.total_bytes)}</strong></li>`).join("") || `<li class="empty">${tr("No Xray client counters available.", "暂无 Xray 客户端计数。")}</li>`}</ul><p class="panel-footnote">${tr("Client counters use the current Xray baseline; the time selector applies to local service attribution above.", "客户端计数采用当前 Xray 基线；时间范围仅作用于上方本地服务归因。")}</p></article>
+    </div>
+  </section>`;
+}
+
+function comparisonLabel(ratio: number, baseline: number): string {
+  if (!ratio) return tr("Waiting for matching samples", "等待匹配采样");
+  const uplift = (ratio / baseline - 1) * 100;
+  return uplift >= 0
+    ? tr(`${uplift.toFixed(1)}% above ${baseline.toFixed(0)}× baseline`, `高于 ${baseline.toFixed(0)}× 基线 ${uplift.toFixed(1)}%`)
+    : tr(`${Math.abs(uplift).toFixed(1)}% below ${baseline.toFixed(0)}× baseline`, `低于 ${baseline.toFixed(0)}× 基线 ${Math.abs(uplift).toFixed(1)}%`);
+}
+
+function renderEfficiencyView(analysis: NetworkAnalysisData, remoteServers: Record<string, unknown>[], range: NetworkTimeRange, trend: Record<string, unknown>): string {
+  const vpsTotals = totalsBySource(analysis.vpsPoints);
+  const xrayTotals = totalsBySource(analysis.xrayPoints);
+  const trendWindowMinutes = number(trend.window_minutes) || 60;
+  return `<section class="network-view-panel">
+    <div class="network-view-heading"><div><p>${tr("Comparable hosts", "可比较主机")}</p><strong>${remoteServers.filter((server) => (xrayTotals.get(`xray:${server.id}`) ?? 0) > 0).length} / ${remoteServers.length}</strong></div><span>${rangeLabel(range)} · ${tr("ratios remain per host", "倍率始终按主机独立计算")}</span></div>
+    <article class="detail-panel"><div class="detail-panel__heading"><h3>${tr("Billable versus logical traffic", "账单流量与逻辑流量")}</h3><span>${rangeLabel(range)}</span></div><div class="efficiency-table">${remoteServers.map((server) => {
+      const id = String(server.id ?? "");
+      const billed = vpsTotals.get(`vps:${id}`) ?? 0;
+      const logical = xrayTotals.get(`xray:${id}`) ?? 0;
+      const ratio = logical > 0 ? billed / logical : 0;
+      const baseline = String(server.billing_mode ?? "both") === "outbound" ? 1 : 2;
+      return `<div class="efficiency-row"><div><strong>${escapeHtml(server.label ?? id)}</strong><small>${String(server.billing_mode ?? "both") === "outbound" ? tr("one-leg billing", "单边计费") : tr("two-leg billing", "双边计费")}</small></div><dl><div><dt>${tr("Xray logical", "Xray 逻辑量")}</dt><dd>${formatBytes(logical)}</dd></div><div><dt>${tr("VPS billed", "VPS 账单量")}</dt><dd>${formatBytes(billed)}</dd></div><div><dt>${tr("Observed ratio", "实测倍率")}</dt><dd>${ratio ? `${ratio.toFixed(2)}×` : "—"}</dd></div></dl><span class="efficiency-row__status">${escapeHtml(comparisonLabel(ratio, baseline))}</span></div>`;
+    }).join("") || `<div class="chart-empty">${tr("No comparable remote hosts.", "暂无可比较的远端主机。")}</div>`}</div><p class="panel-footnote">${tr("A multiplier is a relationship between one host's Xray logical traffic and that same host's billable interface traffic. It is never summed or averaged across hosts.", "倍率只描述同一主机的 Xray 逻辑流量与该主机计费网卡流量之间的关系；不会跨主机求和或平均。")}</p></article>
+    <section class="trend-panel"><div class="detail-panel__heading"><h3>${tr(`Last ${trendWindowMinutes} minutes — local rate`, `近 ${trendWindowMinutes} 分钟本机速率`)}</h3><span>${tr("Per-minute rate", "每分钟速率")}</span></div>${trendSvg(trend)}<div class="chart-legend"><span><i class="chart-dot chart-dot--mihomo"></i>Mihomo</span><span><i class="chart-dot chart-dot--proxy"></i>${tr("Proxy route", "代理路径")}</span></div></section>
+  </section>`;
 }
 
 function niceAxisMaximum(value: number): number {
@@ -111,57 +203,52 @@ function niceAxisMaximum(value: number): number {
 
 function trendSvg(trend: Record<string, unknown>): string {
   const buckets = asArray(trend.buckets);
-  if (buckets.length < 2) return `<div class="chart-empty">${tr("Waiting for enough realtime samples.", "等待足够的实时采样。")} </div>`;
+  if (buckets.length < 2) return `<div class="chart-empty">${tr("Waiting for enough realtime samples.", "等待足够的实时采样。")}</div>`;
   const values = buckets.map((bucket) => number(bucket.mihomo_total));
   const proxy = buckets.map((bucket) => number(bucket.proxy_observed));
   const axisMaximum = niceAxisMaximum(Math.max(...values, ...proxy));
   const windowMinutes = number(trend.window_minutes) || 60;
   const points = (series: number[]) => series.map((value, index) => `${(index / (series.length - 1)) * 100},${92 - (value / axisMaximum) * 82}`).join(" ");
-  return `<div class="traffic-chart-frame"><span class="chart-axis-label chart-axis-label--peak">${rate(axisMaximum)}</span><span class="chart-axis-label chart-axis-label--mid">${rate(axisMaximum / 2)}</span><span class="chart-axis-label chart-axis-label--zero">0</span><svg class="traffic-chart" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="${tr("Traffic rate trend", "流量速率趋势")}">
-    <path class="chart-grid chart-grid--reference" d="M0 10H100" />
-    <path class="chart-grid" d="M0 51H100M0 92H100" />
-    <polyline class="chart-line chart-line--mihomo" points="${points(values)}" />
-    <polyline class="chart-line chart-line--proxy" points="${points(proxy)}" />
-  </svg></div><div class="traffic-chart__timeline"><span>${tr(`${windowMinutes} min ago`, `${windowMinutes} 分钟前`)}</span><span>${tr("Now", "现在")}</span></div>`;
+  return `<div class="traffic-chart-frame"><span class="chart-axis-label chart-axis-label--peak">${rate(axisMaximum)}</span><span class="chart-axis-label chart-axis-label--mid">${rate(axisMaximum / 2)}</span><span class="chart-axis-label chart-axis-label--zero">0</span><svg class="traffic-chart" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="${tr("Traffic rate trend", "流量速率趋势")}"><path class="chart-grid chart-grid--reference" d="M0 10H100"/><path class="chart-grid" d="M0 51H100M0 92H100"/><polyline class="chart-line chart-line--mihomo" points="${points(values)}"/><polyline class="chart-line chart-line--proxy" points="${points(proxy)}"/></svg></div><div class="traffic-chart__timeline"><span>${tr(`${windowMinutes} min ago`, `${windowMinutes} 分钟前`)}</span><span>${tr("Now", "现在")}</span></div>`;
 }
 
-export function renderNetworkDetail(projection: AgentProjection, scope: AnalysisScope = "today", analysis: NetworkAnalysisData = { servicePoints: [], localPoints: [], vpsPoints: [] }, analysisLoading = false): string {
-  const state = projection as unknown as Record<string, unknown>;
-  const session = asRecord(state.session);
+function renderCurrentSummary(session: Record<string, unknown>, usageChecks: Map<string, Record<string, unknown>>): string {
   const vps = asRecord(session.vps);
   const kernel = asRecord(session.kernel);
-  const attribution = asRecord(session.attribution);
-  const breakdown = asRecord(session.breakdown);
   const remoteServers = asArray(session.remote_servers);
-  const remote = asRecord(state.vps);
-  const usageChecks = new Map(asArray(remote.daily_usage_guards).map((usage) => [String(usage.source_id ?? ""), usage]));
+  const xray = remoteServers.reduce((sum, server) => sum + number(server.xray_logical_bytes), 0);
+  const dailyBilled = [...usageChecks.values()].reduce((sum, usage) => sum + number(usage.usage_bytes), 0);
+  const critical = [...usageChecks.values()].filter((usage) => usage.level === "critical").length;
+  const warning = [...usageChecks.values()].filter((usage) => usage.level === "warning").length;
+  const status = critical ? tr(`${critical} critical host${critical === 1 ? "" : "s"}`, `${critical} 台主机严重`) : warning ? tr(`${warning} host${warning === 1 ? "" : "s"} need attention`, `${warning} 台主机需关注`) : tr("All host checks normal", "主机用量检测正常");
+  const statusTone = critical ? "critical" : warning ? "warning" : "healthy";
+  const primaryValue = usageChecks.size ? dailyBilled : number(vps.total_bytes);
+  const primaryDetail = usageChecks.size
+    ? tr("Configured billing direction per host", "按每台主机配置的计费方向汇总")
+    : tr("Current session fallback · daily checks disabled", "当前统计周期回退值 · 未启用每日检测");
+  return `<section class="network-ledger-summary">
+    <article class="network-ledger-primary"><p>${tr("Today's VPS billing", "今日 VPS 账单量")}</p><strong>${formatBytes(primaryValue)}</strong><small>${primaryDetail}</small><span class="network-ledger-status network-ledger-status--${statusTone}">${status}</span></article>
+    <article class="network-path-card"><div class="detail-panel__heading"><h3>${tr("Current observation path", "当前观测链路")}</h3><span>${tr("same session · not additive", "同一统计周期 · 不可相加")}</span></div><div class="network-path"><span><small>Mihomo</small><strong>${formatBytes(kernel.total_bytes)}</strong></span><i>→</i><span><small>${tr("Proxy route", "代理路径")}</small><strong>${formatBytes(session.proxy_observed_total_bytes)}</strong></span><i>→</i><span><small>Xray</small><strong>${formatBytes(xray)}</strong></span><i>→</i><span><small>${tr("VPS billed", "VPS 账单")}</small><strong>${formatBytes(vps.total_bytes)}</strong></span></div></article>
+  </section>`;
+}
+
+export function renderNetworkDetail(projection: AgentProjection, snapshot: NetworkAnalysisSnapshot): string {
+  const state = projection as unknown as Record<string, unknown>;
+  const session = asRecord(state.session);
+  const remoteServers = asArray(session.remote_servers);
+  const usageChecks = new Map(asArray(asRecord(state.vps).daily_usage_guards).map((usage) => [String(usage.source_id ?? ""), usage]));
   const users = asArray(asRecord(state.xray_stats).users);
   const trend = asRecord(session.trend);
-  const trendWindowMinutes = number(trend.window_minutes) || 60;
-  const multiplier = number(breakdown.observed_multiplier);
-  const comparison = String(breakdown.comparison_status ?? "waiting");
-  const estimate = comparison === "multiple_servers"
-    ? tr("Per-host measurement is shown below; fleet multipliers are intentionally not merged.", "下方按主机展示实测值；不同主机的倍率不会被合并。")
-    : multiplier > 0
-      ? tr(`Observed billing multiplier ${multiplier.toFixed(2)}×`, `实测账单倍率 ${multiplier.toFixed(2)}×`)
-      : tr("Waiting for matching VPS and Xray intervals.", "等待 VPS 与 Xray 的可匹配采样区间。");
-  return `
-    <section class="network-detail">
-      <div class="network-card-grid">
-        ${card(tr("VPS billable", "VPS 账单量"), vps.total_bytes, `${tr("In", "入")} ${formatBytes(vps.in_bytes)} · ${tr("Out", "出")} ${formatBytes(vps.out_bytes)}`, "orange")}
-        ${card(tr("Mihomo local total", "Mihomo 本机总量"), kernel.total_bytes, `${tr("Up", "上行")} ${formatBytes(kernel.up_bytes)} · ${tr("Down", "下行")} ${formatBytes(kernel.down_bytes)}`, "purple")}
-        ${card(tr("Observed proxy route", "已识别代理路径"), session.proxy_observed_total_bytes, `${tr("Unattributed", "未归因")} ${formatBytes(attribution.unattributed_bytes)}`, "blue")}
-      </div>
-      <p class="network-explanation">${escapeHtml(estimate)}</p>
-      ${scope === "daily" ? dailyTrafficHistory(analysis, remoteServers, analysisLoading) : trafficTotalsChart(analysis.servicePoints, scope, analysisLoading)}
-      <div class="network-breakdown">
-        <article class="detail-panel"><div class="detail-panel__heading"><h3>${tr("Remote host traffic", "远端主机流量")}</h3><span>${remoteServers.length}</span></div>
-          <ul class="traffic-list">${remoteServers.map((server) => { const usage = usageChecks.get(String(server.id ?? "")); const level = String(usage?.level ?? "none"); return `<li class="${usage ? `traffic-list__host traffic-list__host--${escapeHtml(level)}` : ""}"><span>${escapeHtml(server.label)}</span><span class="traffic-list__values"><small>${tr("Bill", "账单")} ${formatBytes(server.total_bytes)} · Xray ${formatBytes(server.xray_logical_bytes)}</small>${usage ? `<strong class="daily-usage daily-usage--${escapeHtml(level)}">${formatBytes(usage.usage_bytes)} · ${dailyUsageThresholds(usage)}</strong>` : ""}</span></li>`; }).join("") || `<li class="empty">${tr("No remote host configured.", "尚未配置远端主机。")}</li>`}</ul>
-        </article>
-      </div>
-      ${users.length ? `<article class="xray-panel"><div class="detail-panel__heading"><h3>${tr("Xray users", "Xray 用户")}</h3><span>${formatBytes(asRecord(state.xray_stats).total_bytes)}</span></div><ul class="traffic-list traffic-list--columns">${users.slice(0, 8).map((user) => `<li><span>${escapeHtml(user.label)}</span><strong>${formatBytes(user.total_bytes)}</strong></li>`).join("")}</ul></article>` : ""}
-      <section class="trend-panel"><div class="detail-panel__heading"><h3>${tr(`Last ${trendWindowMinutes} minutes — rate`, `近 ${trendWindowMinutes} 分钟速率趋势`)}</h3><span>${tr("Per-minute rate", "每分钟速率")}</span></div>${trendSvg(trend)}<div class="chart-legend"><span><i class="chart-dot chart-dot--mihomo"></i>Mihomo</span><span><i class="chart-dot chart-dot--proxy"></i>${tr("Proxy route", "代理路径")}</span></div></section>
-    </section>`;
+  const content = snapshot.loading && !snapshot.data.servicePoints.length && !snapshot.data.vpsPoints.length && !snapshot.data.xrayPoints.length
+    ? loadingPanel(tr("Loading recorded network metrics…", "正在读取已记录的网络指标…"))
+    : snapshot.error
+      ? errorPanel(snapshot.error)
+      : snapshot.mode === "billing"
+        ? renderBillingView(snapshot.data, remoteServers, usageChecks, snapshot.range)
+        : snapshot.mode === "attribution"
+          ? renderAttributionView(snapshot.data, users, snapshot.range)
+          : renderEfficiencyView(snapshot.data, remoteServers, snapshot.range, trend);
+  return `<section class="network-detail">${renderCurrentSummary(session, usageChecks)}${renderControls(snapshot)}${content}</section>`;
 }
 
 function sourceLabel(source: SourceProjection): string {
@@ -170,6 +257,6 @@ function sourceLabel(source: SourceProjection): string {
   return `<li class="source-row"><span class="source-state source-state--${escapeHtml(status)}" aria-hidden="true"></span><span class="source-main"><strong>${escapeHtml(source.label)}</strong><small>${escapeHtml(source.kind)}</small></span><span class="source-status">${escapeHtml(text)}</span></li>`;
 }
 
-export function renderNetworkResourcePage(projection: AgentProjection, resource: ResourceProjection, sources: SourceProjection[], scope: AnalysisScope = "today", analysis: NetworkAnalysisData = { servicePoints: [], localPoints: [], vpsPoints: [] }, analysisLoading = false): string {
-  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("RESOURCE DETAIL", "资源详情")}</p><h2>${tr("Network", "网络")}</h2></div></div>${renderNetworkDetail(projection, scope, analysis, analysisLoading)}<article class="sources-card sources-card--footer"><div class="sources-card__heading"><h3>${tr("Collector sources", "采集数据源")}</h3><span>${sources.length}</span></div><ul>${sources.map(sourceLabel).join("") || `<li class="empty">${tr("No configured sources", "尚未配置数据源")}</li>`}</ul></article></section>`;
+export function renderNetworkResourcePage(projection: AgentProjection, _resource: ResourceProjection, sources: SourceProjection[], snapshot: NetworkAnalysisSnapshot): string {
+  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("RESOURCE DETAIL", "资源详情")}</p><h2>${tr("Network", "网络")}</h2></div></div>${renderNetworkDetail(projection, snapshot)}<article class="sources-card sources-card--footer"><div class="sources-card__heading"><h3>${tr("Collector sources", "采集数据源")}</h3><span>${sources.length}</span></div><ul>${sources.map(sourceLabel).join("") || `<li class="empty">${tr("No configured sources", "尚未配置数据源")}</li>`}</ul></article></section>`;
 }

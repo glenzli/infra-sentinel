@@ -71,15 +71,18 @@ class RemoteFleetMonitor:
 
     def _build_public_state(self) -> dict[str, Any]:
         rows: list[dict[str, Any]] = []
-        total_cycle = {"in_bytes": 0, "out_bytes": 0, "total_bytes": 0}
+        total_cycle = {"in_bytes": 0, "out_bytes": 0, "total_bytes": 0, "interface_total_bytes": 0}
         updated: list[str] = []
         for config, vps_monitor, xray_monitor in self.monitors:
             vps_state = vps_monitor.public_state
             xray_state = xray_monitor.public_state
             cycle = vps_state.get("cycle", {})
-            total_cycle["in_bytes"] += int(cycle.get("in_bytes", 0))
-            total_cycle["out_bytes"] += int(cycle.get("out_bytes", 0))
-            total_cycle["total_bytes"] += int(cycle.get("total_bytes", 0))
+            incoming = int(cycle.get("in_bytes", 0))
+            outgoing = int(cycle.get("out_bytes", 0))
+            total_cycle["in_bytes"] += incoming
+            total_cycle["out_bytes"] += outgoing
+            total_cycle["interface_total_bytes"] += int(cycle.get("total_bytes", incoming + outgoing))
+            total_cycle["total_bytes"] += config.estimation.billable_bytes(incoming, outgoing)
             if vps_state.get("updated_at"):
                 updated.append(str(vps_state["updated_at"]))
             rows.append({
