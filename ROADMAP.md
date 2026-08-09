@@ -1,371 +1,119 @@
 # Infra Sentinel Roadmap
 
-本路线图描述 Infra Sentinel 从单一网络流量工具迁移为个人 AI Infra 资源归因平台的过程。
+Infra Sentinel 已从单一流量工具迁移为个人 AI Infra 可观测面板。当前正式资源是 **Network** 与 **AI usage**；下一阶段优先提高数据可信度和分析价值，不为“综合”而添加弱指标。
 
-路线图按依赖关系组织，不承诺具体日期。每个阶段必须达到退出标准后，后续阶段才进入主线。现有网络统计是第一个正式资源模块，不推倒重写，也不允许新能力继续堆入单个采样器或界面控制器。
+## 产品原则
 
-## 产品方向
+- 本地优先、只读优先、隐私最小化；
+- 每项资源保留自己的单位，不制造无意义的综合分数；
+- 精确值、Provider 报告值、本机近似值和未知值必须可区分；
+- 新数据源通过 Collector 和统一指标合同接入，不修改既有模块语义；
+- 监控与解释是默认边界，不自动杀进程、删文件、改路由或调整 Infra；
+- 不采集提示词、响应正文、URL 路径、文件内容或抓包数据。
 
-Infra Sentinel 面向个人拥有或控制的本地设备、代理链路、VPS 与 API 账户，提供：
+## 当前状态
 
-- 资源使用采集：网络、API、存储、本地计算等；
-- 多维归因：项目、工作负载、服务商、模型、设备、主机和账户；
-- 配额与预算：周期额度、真实费用和基于费率的估算；
-- 异常检测：突增、超预算、采集失联和无法解释的残差；
-- 长期反馈：用证据支持模型、并发、缓存、路由和存储策略调优。
+| 能力 | 状态 | 当前结果 |
+| --- | --- | --- |
+| 多 VPS Network 计量 | 已完成 | Mihomo、Linux 网卡与 Xray 独立计量；多主机不串账 |
+| Infra Core | 已完成 | MetricPoint、Collector、Source、Resource、Policy 与 Projection 合同 |
+| 本地时序存储 | 已完成最小闭环 | SQLite WAL、幂等写入、旧网络回填、受限聚合查询 |
+| Tauri 桌面壳 | 已完成 | macOS App、菜单栏健康状态、设置、通知与受限 Rust bridge |
+| AI 用量 | 已完成首批来源 | OpenCode 与 Codex 今日/历史/模型/活动观测 |
+| 跨资源洞察 | 尚未开始 | 等待足够稳定、可比较的长期样本 |
+| 本地计算与存储 | 候选 | 只有出现明确需求和可靠归因路径后才进入主线 |
 
-项目继续坚持本地优先、只读优先和隐私最小化。默认不采集提示词、请求正文、响应正文、URL 路径、文件内容或抓包数据。
-
-## 阶段速览
-
-版本号是建议落点，阶段退出标准优先于版本日期。
-
-| 阶段 | 建议版本 | 结果 | 状态 |
-| --- | --- | --- | --- |
-| 0 | 1.1 | 稳定多 VPS 与现有网络统计 | 进行中 |
-| 1 | 1.2 | 建立统一指标和 Collector 合同 | 最小闭环已完成 |
-| 2 | 1.3 | SQLite 时序存储与一次性迁移 | 进行中 |
-| 3 | 2.0 | Infra Sentinel 外壳与健康状态菜单栏 | 进行中 |
-| 4 | 2.1 | 本地 AI 用量与工作负载模块 | 进行中：OpenCode 与 Codex 本地元数据 |
-| 5 | 2.2 | 本地存储与计算模块 | 候选 |
-| 6 | 3.x | 跨资源分析与调优建议 | 远期 |
-
-## 不做什么
-
-- 不把字节、Token、磁盘容量、GPU 利用率强行合成一个没有意义的“总资源量”；
-- 不把估算值伪装成精确账单；
-- 不为了支持未来功能提前实现大量空采集器；
-- 不长期维护两套配置、存储或计算管线；
-- 不在第一阶段引入云端账户、遥测上传或中心服务器；
-- 不自动杀进程、删文件、调整路由或修改 Infra 配置。
-
-## 目标架构
+## 已形成的架构
 
 ```text
 Collectors
     ↓
 Canonical metric model
     ↓
-Local time-series store
+Local SQLite time-series store
     ↓
-Attribution engine
+Policies / attribution
     ↓
-Budget / anomaly policies
-    ↓
-UI projections ── Notifications ── Insights
+Versioned UI projections ── Notifications
 ```
 
-### 语义所有者
+语义所有者：
 
-目标代码边界按生命周期和失败策略划分：
+- **Runtime**：进程生命周期、采样调度、健康状态和 Collector 注册；
+- **Collectors**：协议访问、来源 checkpoint、增量守恒和来源错误；
+- **Metrics / Store**：单位、counter/gauge 语义、幂等写入、查询和迁移；
+- **Policies**：网络突增、VPS 每日用量和事件状态机；
+- **Projections**：将事实转换为菜单栏、概览、资源详情和通知；
+- **Native App**：窗口、导航、本地化和交互，不承担业务计量。
 
-- **Runtime**：进程生命周期、采样调度、健康状态和模块注册；
-- **Collectors**：协议访问、原始计数器 checkpoint 和来源错误；
-- **Metrics**：指标命名、单位、counter/gauge/quota/event 语义和校验；
-- **Store**：原子写入、查询、保留策略、降采样和迁移；
-- **Attribution**：实体映射、残差、方法和可信度；
-- **Policies**：预算、阈值、异常和事件状态机；
-- **Projections**：为菜单栏、仪表板、报告和通知生成只读视图；
-- **Native App**：窗口、导航、交互和本地化，不承担业务计算。
+## 下一阶段：稳定与信任
 
-现有 Mihomo、VPS 和 Xray 逻辑迁入网络 Collector。`infra_agent.py` 负责组合、生命周期、Projection 与本地命令；Dashboard Controller 只负责界面路由与协议消费。
+暂不增加新的资源类型，先完成以下收尾：
 
-## 统一指标模型
-
-所有资源模块输出同一种逻辑记录：
-
-```text
-MetricPoint
-  observed_at
-  interval_start / interval_end
-  metric                 # network.bytes, api.tokens.input, disk.used_bytes
-  instrument             # counter, gauge, quota, event
-  value
-  unit                   # bytes, count, seconds, ratio, usd ...
-  source_id
-  resource_id
-  dimensions             # provider, model, project, host, device ...
-  attribution_method     # exact, mapped, inferred, residual
-  confidence
-  estimated
-```
-
-要求：
-
-- 指标名与单位稳定，展示文案由 UI 本地化；
-- counter 保存区间增量，gauge 保存时点值；
-- 真实费用与估算费用使用不同标记；
-- 高基数字段、密钥、路径和请求内容不得进入 dimensions；
-- 未归因数据必须保留为 residual，不能静默丢失。
-
-## Source / Policy 配置预留结构
-
-配置围绕数据源和策略组织，版本标识采用 `YYYYMMDD.修订号`。以下是目标轮廓，不代表当前版本已经支持所有类型：
-
-```toml
-schema_version = "20260808.4"
-
-[app]
-menu_bar_mode = "health"
-retention_days = 90
-
-[[sources]]
-id = "local-mihomo"
-kind = "network.mihomo"
-enabled = true
-
-[[sources]]
-id = "vps-primary"
-kind = "network.linux-xray"
-label = "Primary VPS"
-enabled = true
-
-[sources.connection]
-ssh_host = "my-vps"
-
-[sources.billing]
-mode = "both"
-cycle_start_day = 1
-
-[[sources]]
-id = "api-primary"
-kind = "api.provider"
-label = "Primary API Account"
-enabled = false
-
-[sources.credentials]
-keychain_account = "infra-sentinel-api-primary"
-
-[[policies]]
-id = "vps-primary-billing-alert"
-kind = "network.billing.threshold"
-source_id = "vps-primary"
-metric = "network.billable_bytes"
-period = "month"
-warning_bytes = 1099511627776
-critical_bytes = 1374389534720
-```
-
-密钥只进入 macOS Keychain，配置文件只保存引用。SSH 继续只保存 `~/.ssh/config` 中的 Host 别名。
-
-## 迁移映射
-
-| 当前职责 | 目标职责 | 迁移方式 |
-| --- | --- | --- |
-| Mihomo Socket 与连接归因 | `network.mihomo` Collector | 保留算法和精确总量不变量，改变输出接口 |
-| 多 VPS 网卡采样 | `network.linux` Collector | 每个 source 独立 checkpoint 和健康状态 |
-| Xray 用户统计 | `network.xray` Collector / attribution input | 保留用户维度，输出标准指标 |
-| `SessionMeter` | 查询范围与会话投影 | 会话不再拥有一套独立账本 |
-| `events.jsonl` 与 AlertEngine | Policies 与 Incidents | 保留告警状态机语义 |
-| `menubar.json` | `projection.json` | 版本化本地 Agent Projection，不作为事实来源 |
-| JSONL 主存储 | SQLite 主存储 | 单次导入后停止双写；JSONL 仅用于导出和诊断 |
-| `[monitor]` / `[remote]` | `[[sources]]` / `[[policies]]` | 已实施一次性迁移并备份旧配置 |
-
-## 阶段路线
-
-### 0. 稳定 Network 模块 1.x
-
-状态：进行中。
-
-范围：
-
-- 完成多 VPS 独立采样、配置和仪表盘显示；
-- 为每台 VPS 保留独立的角色、计费口径和账单告警策略；全局本机告警与任一 VPS 账单告警不得混算；
-- 修复设置页和远端明细的布局、迁移和保存问题；
-- 为现有流量统计建立 golden fixtures；
-- 明确当前隐私边界和统计不变量；
-- 对菜单栏进程进行至少一次长时间稳定性观察。
+1. 长时间运行验证：重启、休眠、Mihomo 重载、SSH 超时和状态库变化不造成重复计数；
+2. 存储生命周期：明确 SQLite 保留、降采样、导出和旧 JSONL 退出条件；
+3. 观测可信度：每个总量都能追溯到来源、窗口、方法和覆盖范围；
+4. 分析一致性：Network 与 AI 详情共享时间范围、总量、组成和速率的交互结构；
+5. 发布质量：匿名截图、准确 README、构建验证、最低系统版本和未公证说明同步更新。
 
 退出标准：
 
-- 本机总量、域名归因与未归因始终闭合；
-- 多 VPS 基线不串账，重启后不重放旧区间；
-- 汇总倍率仅使用同一 VPS 上同时具备网卡账单与 Xray 逻辑流量的配对数据；
-- 设置、重置、通知跳转和 App 构建均有回归验证；
-- 当前功能可以作为迁移前对照实现。
+- Collector 失败不阻断其他资源；
+- App 重启不重放已经写入的区间；
+- 总量与维度分解守恒，残差明确展示；
+- 查询不阻塞网络采样，UI 不直接访问存储；
+- 文档描述与当前 App 行为一致。
 
-### 1. 建立 Infra Core
+## 新指标的进入门槛
 
-状态：最小闭环已完成；后续资源模块接入时继续扩展。
+未来任何新资源必须同时满足：
 
-范围：
+1. **可观测**：存在稳定、只读且可验证的数据来源；
+2. **可归因**：至少能归到来源、模型、主机或工作负载之一；
+3. **可行动**：数据能支持预算、异常发现或 Infra 调优；
+4. **低侵入**：采样成本和隐私风险与收益相称；
+5. **不伪装**：缺失字段保持未知，不用推断值冒充账单。
 
-- 定义 MetricPoint、Source、Resource、Entity、Attribution 与 Policy 合同；
-- 建立 Collector 注册表和能力声明；
-- 将运行时健康状态与业务指标分开；
-- 建立内存实现与合同测试，暂不更换现有存储；
-- 网络模块通过适配器产出标准指标与资源投影；原网络详情作为正式 Network 模块保留。
+因此，屏幕时间目前不进入路线图。它难以区分“人在操作”“AI 在后台运行”和“为任务阅读资料”，归因弱且隐私成本高。
 
-退出标准：
+## 候选方向
 
-- 新增一个虚拟 Collector 不需要修改 Runtime、存储和 UI 核心；
-- 单位、counter/gauge 语义和来源身份拥有固定测试；
-- 网络标准指标与当前流量账本在 fixtures 上完全对得上；
-- 没有把新模型塞回 `infra_agent.py` 或 Native Controller。
+这些方向没有承诺顺序，也不会提前创建空模块。
 
-### 2. SQLite 时序存储与一次性迁移
+### Provider/API 成本
 
-状态：进行中。
+- 使用 Provider 明确返回的费用、额度或限流事件；
+- 在价格表足够稳定时提供带版本和时间戳的估算费用；
+- 真实费用与费率估算始终分开。
 
-已完成：`MetricStore` 使用 SQLite WAL、原子事务和稳定去重键，首次运行会一次性回填既有网络 JSONL。`metrics.query` 已通过本地 Agent 协议提供按时间、资源、来源和指标的受限 counter 查询，并支持分钟、5 分钟、小时和天级桶聚合。当前网络原始 JSONL 仍是会话恢复、证据和旧报告的输入；在查询、报表与保留策略全部切换前，它不会被删除或伪装成已退役。
+### 可靠性与浪费
 
-范围：
+- 失败、重试、超时、限流及其对应的 Token/流量增量；
+- 区分真实额外工作、上下文重放与无法解释的残差；
+- 只在数据能支持时给出结论，不把相关性写成因果性。
 
-- 建立 metrics、entities、attributions、policies、incidents 和 collector checkpoints；
-- 使用 WAL 与原子事务；
-- 支持按时间、来源、资源和维度查询；
-- 建立分钟、小时和天级降采样；
-- 导入现有网络 JSONL 和当前会话；
-- 迁移前备份旧配置和状态，成功后停止双写。
+### 本地计算
 
-退出标准：
+- 本地模型实际启用后再接入 CPU/GPU、显存或统一内存与活跃时间；
+- 无权限、无 GPU 或无本地推理时隐藏模块；
+- gauge 与累计运行时间不能相加。
 
-- 崩溃不会产生重复计数或半写入区间；
-- 迁移工具可重复检查，但只提交一次迁移事务；
-- 新旧网络统计在同一时间范围内误差为零；
-- 可明确回滚到迁移前备份，不维护永久兼容分支。
+### 存储
 
-### 3. Infra Sentinel App 外壳
+- 仅扫描用户明确授权的模型、缓存、构建和日志目录；
+- 展示当前体积、增长量和增长最快实体；
+- 不扫描整个磁盘，不读取文件内容。
 
-状态：进行中。首个 Tauri 跨平台桌面壳已建立：它只读取版本化
-Projection，并通过受限桥接提交既有 Agent 命令。Python Agent 仍是数据与
-策略的唯一所有者；下一步将把它封装为每个目标平台的 sidecar，再完成网络
-详情、设置与托盘生命周期迁移。
+### 跨资源洞察
 
-范围：
+- 每个 Agent、模型或工作负载的 Token、网络、费用和可靠性对比；
+- 基线、突变、周期异常和可解释残差；
+- 基于证据的模型、并发、缓存、路由和保留策略建议。
 
-- 品牌从 Traffic Sentinel 迁移为 Infra Sentinel；
-- 菜单栏默认只显示正常、警告、严重或采集异常状态；
-- 点击菜单栏进入完整仪表盘；
-- 建立概览、资源使用、归因、预算与告警、数据源、分析建议和设置导航；第一轮先交付概览、Network 资源卡和数据源健康摘要；
-- 卡片由 Projection 提供，未启用的资源模块不显示；
-- 网络模块成为第一张正式资源卡片。
-- UI 实现迁移到 `ui/`：Web 前端负责渲染，Rust bridge 只负责最小本地协议
-  访问；不将 Collector、SQLite 或账单计算移入前端或 Rust bridge。
+## 长期不做
 
-退出标准：
-
-- 菜单栏不依赖某个特定指标或单位；
-- 网络模块达到 1.x 功能对等；
-- Native App 不直接查询 Collector 或计算账单；
-- 中文和 English 覆盖全部新导航及状态。
-
-### 4. API 使用与配额模块
-
-状态：进行中。已接入无需密钥的 OpenCode 本地会话用量：优先只读聚合 Desktop
-assistant 消息的 Token 元数据，库不存在时才调用 `opencode stats --days 0 --models`。已接入
-Codex 本地状态库的线程累计 Token、模型与匿名化工作拓扑。两者的统计窗口和精度不同；面板仅以“粗略本地汇总”合并可解释的当日计数，不将其标示为 API 账单。下一步已开始把按模型 Token 增量写入统一时序库，用于跨应用趋势对比。
-
-范围：
-
-- 先支持一个明确、可验证的本地 Agent 或 Provider；
-- 采集请求数、Token、真实费用、配额快照和限流事件中实际可获得的部分；
-- 账户凭证存入 Keychain；
-- 支持 provider、account、model、project 等低敏维度；
-- 无法从 Provider 获得的数据保持未知，不用推断值补齐。
-
-退出标准：
-
-- 不保存提示词、请求正文、响应正文和 API Key；
-- Provider 返回值与账单/额度页面可对账；
-- 真实费用和费率估算在 UI 中有明确区别；
-- Provider 失败不会影响网络模块采样。
-
-### 5. 本地存储与计算模块
-
-状态：候选。
-
-范围：
-
-- 受控目录的当前体积、增长量和增长最快实体；
-- 本地 GPU 可用性、利用率、显存/统一内存和活跃时间中系统允许只读获取的部分；
-- 能力探测和权限说明；
-- 默认不扫描整个磁盘，不记录文件内容；
-- 将本地计算归因到明确的工作负载或保留为 residual。
-
-退出标准：
-
-- 采样开销可量化且默认低影响；
-- 无权限或无 GPU 时优雅隐藏模块；
-- 目录范围由用户明确授权；
-- gauge 与累计使用时间不会被错误相加。
-
-### 6. 跨资源洞察
-
-状态：远期。
-
-范围：
-
-- 基线、趋势、突变和周期异常；
-- 每项目、每工作负载、每模型的资源与费用视图；
-- 网络、API、本地计算和存储之间的相关性分析；
-- 基于证据的并发、缓存、模型、路由和保留策略建议；
-- 明确区分观察、相关、推断和建议。
-
-退出标准：
-
-- 每条建议能追溯到指标、时间范围和归因方法；
-- 不把相关性表述成因果性；
-- 用户可以关闭洞察但继续使用监控与预算功能；
-- 建议系统不自动修改 Infra。
-
-## UI 演进
-
-### 菜单栏
-
-- 正常：安静的应用图标；
-- 警告：预算接近、异常增长或单个 Collector 退化；
-- 严重：预算超限、持续异常或关键来源失联；
-- 点击：打开仪表盘；
-- 默认不常驻展示某一种资源数字。
-
-### 概览页
-
-- 时间范围与总体健康状态；
-- 当前预算风险和活跃异常；
-- 网络、API、本地计算、存储等资源卡片；
-- 每张卡只显示自身单位、趋势和最大来源；
-- 没有数据的模块隐藏，而不是展示大面积零值。
-
-### 资源详情
-
-- 使用量与趋势；
-- 真实费用、估算费用和额度余量；
-- Top sources 与 residual；
-- 数据来源、最近采样和可信度；
-- 与其他资源的相关事件。
-
-## 数据与隐私约束
-
-- 本地 SQLite 是事实来源，导出文件不是；
-- API 密钥使用 Keychain，SSH 使用已有 Host alias；
-- 不存储提示词、消息、响应、URL 路径、请求头和文件内容；
-- 项目名、模型名和账户标签允许用户重命名或隐藏；
-- 每个 Collector 声明采集字段、权限、频率和保留策略；
-- 删除数据是显式操作，并说明影响范围；
-- 任何云端同步都必须作为未来独立功能重新设计和授权。
-
-## 工程门槛
-
-每个阶段都必须满足：
-
-- Collector 失败隔离，不阻塞其他资源；
-- 写入幂等，累计计数不因重启或补采重复；
-- 配置和存储迁移有备份、验证与明确终点；
-- 新指标拥有单位和聚合语义测试；
-- UI 只消费 Projection，不复制业务计算；
-- 构建包显式包含所有新增模块；
-- README、配置示例、隐私说明和测试同时更新；
-- 不引入永久兼容层或无主的 `helpers/common` 模块。
-
-## 当前建议的下一步
-
-阶段 1 的最小闭环已经落地：
-
-1. `MetricPoint`、Source、Resource、Entity、Attribution 与 Policy 的基础合同已建立；
-2. Mihomo、每台 VPS、每台 VPS 的 Xray 都通过独立 Collector 注册，失败互不阻塞；
-3. 网络适配器输出与此前账本在 fixtures 中逐点相等；
-4. Collector 健康状态作为运行时状态进入 Projection，不与业务流量或告警混算；
-5. 没有新增 API、GPU 或磁盘采集，也没有把新模型塞回 Native Controller。
-
-OpenCode 与 Codex Collector 已验证“独立资源模块不影响网络采样”的路径。下一步先为 AI counter 查询增加范围和降采样投影，再评估更多本地客户端或可验证 Provider；API/订阅额度仍须等待供应商公开接口，不能由本地 Hook 或本地累计值伪造精确账单。
+- 云端集中遥测或默认同步个人使用数据；
+- 提示词、响应内容和文件内容分析；
+- 将字节、Token、GPU 与磁盘强行合成单一分数；
+- 自动修改用户的代理、VPS、模型或 Agent 配置；
+- 为尚不存在的 Provider API 长期维护猜测性兼容代码。

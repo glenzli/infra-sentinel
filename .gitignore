@@ -1,14 +1,38 @@
 state/
 config.toml
+.env
+.env.*
+!.env.example
+
 __pycache__/
 *.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
 Codex Traffic Sentinel.app/
 Traffic Sentinel.app/
 Infra Sentinel.app/
 .build/
 dist/
+
 ui/node_modules/
 ui/dist/
+ui/.vite/
 ui/src-tauri/target/
 ui/src-tauri/binaries/
+
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.log
+npm-debug.log*
+
 .DS_Store
+._*

@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+Infra Sentinel now presents Network and AI usage as peer resource modules.
+
+### Added
+
+- Tauri desktop shell with a health-only menu bar, native notifications, settings, and runtime language switching.
+- Canonical SQLite metrics, bounded local queries, and independently failing collectors.
+- Multiple VPS sources with per-host billing direction, Xray statistics, and daily usage thresholds.
+- OpenCode and Codex local Token observation with provider/model composition, rate trends, and daily history.
+
+### Changed
+
+- Renamed the product from Traffic Sentinel to Infra Sentinel.
+- Replaced traffic-heavy menu-bar text with quiet health states and a dense resource dashboard.
+- Clarified observed-today, local-history, logical-traffic, and VPS-billing scopes throughout the UI.
+
+### Privacy
+
+- AI collectors read aggregate local metadata only; prompts, responses, task titles, project paths, and credentials are excluded.
+- Documentation screenshots use generated anonymous data.
+
 ## 1.0.0 — 2026-07-30
 
 Traffic Sentinel's first public release.
