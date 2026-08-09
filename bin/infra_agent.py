@@ -419,6 +419,7 @@ def write_projection_state(
             "command": "metrics.query",
             "instrument": "counter",
             "bucket_seconds": sorted(BUCKET_SECONDS),
+            "bucket_offset_seconds": True,
             "max_range_seconds": MAX_RANGE_SECONDS,
         },
         "collectors": [run.as_dict() for run in collector_runs],

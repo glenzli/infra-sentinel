@@ -207,6 +207,7 @@ class MetricStore:
         metric: str | None = None,
         instrument: str | None = None,
         bucket_seconds: int | None = None,
+        bucket_offset_seconds: int = 0,
         limit: int = 10_000,
     ) -> list[dict[str, Any]]:
         """Read canonical points with parameterized filters and optional sums.
@@ -218,6 +219,8 @@ class MetricStore:
             raise ValueError("until_epoch must not precede since_epoch")
         if limit < 1:
             raise ValueError("limit must be positive")
+        if bucket_seconds is not None and not 0 <= bucket_offset_seconds < bucket_seconds:
+            raise ValueError("bucket_offset_seconds must be within the bucket")
         clauses = ["observed_epoch >= ?", "observed_epoch <= ?"]
         parameters: list[Any] = [float(since_epoch), float(until_epoch)]
         for column, value in (("resource_id", resource_id), ("source_id", source_id), ("metric", metric), ("instrument", instrument)):
@@ -239,7 +242,7 @@ class MetricStore:
                 """, (*parameters, limit)).fetchall()
             else:
                 rows = connection.execute(f"""
-                    SELECT CAST(observed_epoch / ? AS INTEGER) * ? AS bucket_epoch,
+                    SELECT CAST((observed_epoch - ?) / ? AS INTEGER) * ? + ? AS bucket_epoch,
                            metric, instrument, SUM(value) AS value, unit,
                            source_id, resource_id, dimensions_json, attribution_method,
                            confidence, estimated
@@ -249,7 +252,10 @@ class MetricStore:
                              dimensions_json, attribution_method, confidence, estimated
                     ORDER BY bucket_epoch, metric, source_id, dimensions_json
                     LIMIT ?
-                """, (bucket_seconds, bucket_seconds, *parameters, limit)).fetchall()
+                """, (
+                    bucket_offset_seconds, bucket_seconds, bucket_seconds, bucket_offset_seconds,
+                    *parameters, limit,
+                )).fetchall()
         points: list[dict[str, Any]] = []
         for row in rows:
             try:

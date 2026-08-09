@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 
-AI_USAGE_SNAPSHOT_SCHEMA = "20260809.1"
+AI_USAGE_SNAPSHOT_SCHEMA = "20260809.2"
 
 
 def localized(en: str, zh: str) -> dict[str, str]:
@@ -92,6 +92,23 @@ def model_usage(
     }
 
 
+def daily_usage(day: str, tokens: int, models: list[dict[str, Any]]) -> dict[str, Any]:
+    """Create one provider-normalized calendar-day usage row.
+
+    Providers may derive these rows differently, but consumers never need to
+    know which local database or API supplied them.  A missing daily history is
+    distinct from an available history containing no rows.
+    """
+    return {
+        "date": day,
+        "tokens": max(0, int(tokens)),
+        "models": [
+            {"id": str(model.get("id") or "unknown"), "tokens": max(0, int(model.get("tokens") or 0))}
+            for model in models
+        ],
+    }
+
+
 def ai_usage_snapshot(
     *,
     source_id: str,
@@ -105,6 +122,7 @@ def ai_usage_snapshot(
     details: list[dict[str, Any]],
     confidence: str,
     privacy: str,
+    daily_history: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the only snapshot shape consumed by AI projection and UI."""
     return {
@@ -117,6 +135,10 @@ def ai_usage_snapshot(
         "collection_method": collection_method,
         "usage": {"today": today, "cumulative": cumulative},
         "models": models,
+        "history": {
+            "daily_available": daily_history is not None,
+            "daily": daily_history or [],
+        },
         "details": details,
         "attribution_method": "local-reported",
         "confidence": confidence,

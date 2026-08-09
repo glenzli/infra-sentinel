@@ -61,5 +61,32 @@ class MetricQueryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported query fields"):
             MetricQuery.from_payload({"sql": "DROP TABLE metric_points"})
 
+    def test_daily_query_aligns_buckets_to_the_requested_local_day_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            store = MetricStore(Path(temporary))
+            store.write((point(143_999.0, 10), point(144_001.0, 20)))
+            query = MetricQuery.from_payload({
+                "since_epoch": 0,
+                "until_epoch": 172_799,
+                "resource_id": "network",
+                "metric": "network.bytes",
+                "bucket_seconds": 86_400,
+                "bucket_offset_seconds": 57_600,
+            })
+
+            result = execute_metric_query(store, query)
+
+            self.assertEqual(
+                [(item["observed_epoch"], item["value"]) for item in result["points"]],
+                [(57_600.0, 10.0), (144_000.0, 20.0)],
+            )
+
+    def test_bucket_offset_must_fit_inside_the_bucket(self) -> None:
+        with self.assertRaisesRegex(ValueError, "within the bucket"):
+            MetricQuery.from_payload({
+                "since_epoch": 0, "until_epoch": 60,
+                "bucket_seconds": 60, "bucket_offset_seconds": 60,
+            })
+
 if __name__ == "__main__":
     unittest.main()

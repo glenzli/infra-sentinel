@@ -11,7 +11,7 @@ from typing import Any
 from metric_store import MetricStore
 
 
-QUERY_SCHEMA = "20260808.4"
+QUERY_SCHEMA = "20260809.1"
 MAX_RANGE_SECONDS = 90 * 24 * 60 * 60
 MAX_DAILY_RANGE_SECONDS = 730 * 24 * 60 * 60
 MAX_POINTS = 10_000
@@ -27,10 +27,14 @@ class MetricQuery:
     source_id: str | None
     metric: str | None
     bucket_seconds: int
+    bucket_offset_seconds: int
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any], now: float | None = None) -> "MetricQuery":
-        supported = {"since_epoch", "until_epoch", "resource_id", "source_id", "metric", "bucket_seconds"}
+        supported = {
+            "since_epoch", "until_epoch", "resource_id", "source_id", "metric",
+            "bucket_seconds", "bucket_offset_seconds",
+        }
         unknown = set(payload) - supported
         if unknown:
             raise ValueError(f"unsupported query fields: {', '.join(sorted(unknown))}")
@@ -42,6 +46,9 @@ class MetricQuery:
         bucket = payload.get("bucket_seconds", 60)
         if isinstance(bucket, bool) or not isinstance(bucket, int) or bucket not in BUCKET_SECONDS:
             raise ValueError("bucket_seconds must be one of 60, 300, 3600, 86400")
+        offset = payload.get("bucket_offset_seconds", 0)
+        if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset < bucket:
+            raise ValueError("bucket_offset_seconds must be an integer within the bucket")
         maximum_range = MAX_DAILY_RANGE_SECONDS if bucket == 86_400 else MAX_RANGE_SECONDS
         if until - since > maximum_range:
             raise ValueError(f"query range exceeds {int(maximum_range // 86_400)} days")
@@ -52,6 +59,7 @@ class MetricQuery:
             source_id=cls._identifier(payload.get("source_id"), "source_id"),
             metric=cls._identifier(payload.get("metric"), "metric"),
             bucket_seconds=bucket,
+            bucket_offset_seconds=offset,
         )
 
     @staticmethod
@@ -73,6 +81,7 @@ class MetricQuery:
             "since_epoch": self.since_epoch,
             "until_epoch": self.until_epoch,
             "bucket_seconds": self.bucket_seconds,
+            "bucket_offset_seconds": self.bucket_offset_seconds,
         }
         for key in ("resource_id", "source_id", "metric"):
             value = getattr(self, key)
@@ -91,6 +100,7 @@ def execute_metric_query(store: MetricStore, query: MetricQuery) -> dict[str, An
         metric=query.metric,
         instrument="counter",
         bucket_seconds=query.bucket_seconds,
+        bucket_offset_seconds=query.bucket_offset_seconds,
         limit=MAX_POINTS + 1,
     )
     truncated = len(rows) > MAX_POINTS

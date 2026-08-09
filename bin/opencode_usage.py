@@ -22,14 +22,15 @@ import subprocess
 import time
 from typing import Any
 
-from ai_usage_contract import ai_usage_snapshot, detail_group, localized, model_usage, token_metric, usage_window
+from ai_usage_contract import ai_usage_snapshot, daily_usage, detail_group, localized, model_usage, token_metric, usage_window
 from infra_collectors import Collection, CollectorCapability, CollectorContext
 from infra_model import MetricPoint
 
 
 OPENCODE_POLL_SECONDS = 60
 OPENCODE_TIMEOUT_SECONDS = 20
-OPENCODE_CHECKPOINT_SCHEMA = "20260809.1"
+OPENCODE_CHECKPOINT_SCHEMA = "20260809.2"
+OPENCODE_COUNTER_SCHEMA = "20260809.1"
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _MODEL_HEADER = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.:@-]+$")
 _NUMBER = re.compile(r"^(\d+(?:\.\d+)?)([KMB])?$")
@@ -55,6 +56,13 @@ class OpenCodeStats:
     @property
     def total_tokens(self) -> int:
         return self.input_tokens + self.output_tokens + self.reasoning_tokens + self.cache_read_tokens + self.cache_write_tokens
+
+
+@dataclass(frozen=True)
+class OpenCodeDailyUsage:
+    date: str
+    total_tokens: int
+    models: tuple[dict[str, Any], ...]
 
 
 def discover_opencode() -> str | None:
@@ -271,6 +279,47 @@ def read_opencode_desktop_stats(path: Path, epoch: float, since_epoch: float | N
     )
 
 
+def read_opencode_desktop_daily_history(path: Path) -> tuple[OpenCodeDailyUsage, ...]:
+    """Read exact calendar-day/model totals without selecting message content."""
+    if not path.is_file():
+        raise OSError("OpenCodeDesktopDatabaseMissing")
+    uri = f"{path.resolve().as_uri()}?mode=ro"
+    with closing(sqlite3.connect(uri, uri=True)) as connection:
+        connection.execute("PRAGMA query_only = ON")
+        rows = connection.execute("""
+            SELECT
+                date(time_created / 1000.0, 'unixepoch', 'localtime') AS local_day,
+                COALESCE(NULLIF(json_extract(data, '$.providerID'), ''), 'unknown') AS provider,
+                COALESCE(NULLIF(json_extract(data, '$.modelID'), ''), 'unknown') AS model,
+                COALESCE(SUM(CAST(json_extract(data, '$.tokens.input') AS INTEGER)), 0)
+                  + COALESCE(SUM(CAST(json_extract(data, '$.tokens.output') AS INTEGER)), 0)
+                  + COALESCE(SUM(CAST(json_extract(data, '$.tokens.reasoning') AS INTEGER)), 0)
+                  + COALESCE(SUM(CAST(json_extract(data, '$.tokens.cache.read') AS INTEGER)), 0)
+                  + COALESCE(SUM(CAST(json_extract(data, '$.tokens.cache.write') AS INTEGER)), 0) AS total_tokens
+            FROM message
+            WHERE json_extract(data, '$.role') = 'assistant'
+            GROUP BY local_day, provider, model
+            ORDER BY local_day, total_tokens DESC, provider, model
+        """).fetchall()
+    days: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        day = str(row[0] or "")
+        if not day:
+            continue
+        days.setdefault(day, []).append({
+            "id": f"{str(row[1])}/{str(row[2])}",
+            "tokens": _number_from_database(row[3]),
+        })
+    return tuple(
+        OpenCodeDailyUsage(
+            date=day,
+            total_tokens=sum(int(model["tokens"]) for model in models),
+            models=tuple(models),
+        )
+        for day, models in sorted(days.items())
+    )
+
+
 def _iso_now(epoch: float) -> str:
     return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
 
@@ -336,12 +385,13 @@ class OpenCodeUsageCollector:
             except (OSError, json.JSONDecodeError):
                 payload = {}
         counters = payload.get("counters")
+        counter_schema = payload.get("counter_schema", payload.get("schema"))
         self._previous = {
             str(key): value
             for key, value in counters.items()
             if isinstance(value, (int, float)) and not isinstance(value, bool)
         } if (
-            payload.get("schema") == OPENCODE_CHECKPOINT_SCHEMA
+            counter_schema == OPENCODE_COUNTER_SCHEMA
             and payload.get("day") == day
             and isinstance(counters, dict)
         ) else {}
@@ -354,6 +404,7 @@ class OpenCodeUsageCollector:
         temporary = self._checkpoint_path.with_suffix(".tmp")
         temporary.write_text(json.dumps({
             "schema": OPENCODE_CHECKPOINT_SCHEMA,
+            "counter_schema": OPENCODE_COUNTER_SCHEMA,
             "day": self._checkpoint_day,
             "counters": self._previous,
         }, separators=(",", ":")), encoding="utf-8")
@@ -373,17 +424,24 @@ class OpenCodeUsageCollector:
         collection_method: str,
         lifetime_tokens: int | None,
         lifetime_models: list[dict[str, Any]] | None,
+        daily_history: tuple[OpenCodeDailyUsage, ...] | None = None,
     ) -> dict[str, Any]:
+        today_models = self._models_with_totals(stats)
+        today_by_model = {str(model["id"]): int(model["total_tokens"]) for model in today_models}
         lifetime_by_model = {str(model["id"]): int(model["total_tokens"]) for model in lifetime_models or []}
+        model_ids = list(dict.fromkeys([
+            *(str(model["id"]) for model in lifetime_models or []),
+            *(str(model["id"]) for model in today_models),
+        ]))
         models = [model_usage(
-            str(model["id"]),
-            today_tokens=int(model["total_tokens"]),
-            cumulative_tokens=lifetime_by_model.get(str(model["id"])),
+            model_id,
+            today_tokens=today_by_model.get(model_id, 0),
+            cumulative_tokens=lifetime_by_model.get(model_id),
             today_method="provider-day",
             today_detail=localized("provider model total", "提供方模型累计"),
             cumulative_method="provider-history",
             cumulative_detail=localized("readable local history", "可读本地历史"),
-        ) for model in self._models_with_totals(stats)]
+        ) for model_id in model_ids]
         output_label = localized("Output + reasoning", "输出 + 推理") if stats.output_includes_reasoning else localized("Output", "输出")
         return ai_usage_snapshot(
             source_id="opencode",
@@ -417,6 +475,10 @@ class OpenCodeUsageCollector:
             ],
             confidence="high",
             privacy="aggregate-session-stats-only",
+            daily_history=[
+                daily_usage(day.date, day.total_tokens, list(day.models))
+                for day in daily_history
+            ] if daily_history is not None else None,
         )
 
     def _interval_points(self, stats: OpenCodeStats, timestamp: str, epoch: float) -> tuple[MetricPoint, ...]:
@@ -487,6 +549,7 @@ class OpenCodeUsageCollector:
             if desktop_database:
                 stats = read_opencode_desktop_stats(desktop_database, epoch)
                 lifetime_stats = read_opencode_desktop_stats(desktop_database, epoch, since_epoch=0)
+                daily_history = read_opencode_desktop_daily_history(desktop_database)
                 lifetime_tokens = lifetime_stats.total_tokens
                 lifetime_models = self._models_with_totals(lifetime_stats)
                 collection_method = "desktop-session-metadata"
@@ -503,11 +566,14 @@ class OpenCodeUsageCollector:
                 stats = parse_opencode_stats(completed.stdout)
                 lifetime_tokens = None
                 lifetime_models = None
+                daily_history = None
                 collection_method = "cli-session-summary"
-            snapshot = self._snapshot_for(stats, timestamp, collection_method, lifetime_tokens, lifetime_models)
+            snapshot = self._snapshot_for(
+                stats, timestamp, collection_method, lifetime_tokens, lifetime_models, daily_history,
+            )
             points = self._interval_points(stats, timestamp, epoch)
             self._write_checkpoint()
-        except (OSError, subprocess.TimeoutExpired, ValueError, RuntimeError):
+        except (OSError, sqlite3.DatabaseError, subprocess.TimeoutExpired, ValueError, RuntimeError):
             # Keep the last complete aggregate visible, but make its stale
             # state unmistakable.  A parser or CLI failure must never turn a
             # known total into a misleading zero.

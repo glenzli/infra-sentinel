@@ -15,7 +15,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "bin"))
 
 from infra_collectors import CollectorContext  # noqa: E402
-from opencode_usage import OpenCodeUsageCollector, parse_opencode_stats, read_opencode_desktop_stats  # noqa: E402
+from opencode_usage import (  # noqa: E402
+    OPENCODE_COUNTER_SCHEMA, OpenCodeUsageCollector, parse_opencode_stats,
+    read_opencode_desktop_daily_history, read_opencode_desktop_stats,
+)
 
 
 STATS_OUTPUT = """
@@ -135,6 +138,42 @@ class OpenCodeStatsTests(unittest.TestCase):
         self.assertTrue(first.points)
         self.assertEqual(restarted.points, ())
 
+    def test_checkpoint_envelope_upgrade_does_not_replay_stable_counters(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / "opencode-usage-counters.json"
+            checkpoint.write_text(json.dumps({
+                "schema": "20990101.9",
+                "counter_schema": OPENCODE_COUNTER_SCHEMA,
+                "day": "2026-08-09",
+                "counters": {
+                    "openai/gpt-5.6:ai.tokens.total": 7_800,
+                    "openai/gpt-5.6:ai.tokens.input": 5_000,
+                    "openai/gpt-5.6:ai.tokens.output": 1_100,
+                    "openai/gpt-5.6:ai.tokens.cache_read": 1_500,
+                    "openai/gpt-5.6:ai.tokens.cache_write": 200,
+                    "openai/gpt-5.6:ai.tokens.reasoning": 0,
+                    "openai/gpt-5.6:ai.cost.usd": 0.12,
+                    "deepseek/deepseek-chat:ai.tokens.total": 4_000,
+                    "deepseek/deepseek-chat:ai.tokens.input": 3_000,
+                    "deepseek/deepseek-chat:ai.tokens.output": 300,
+                    "deepseek/deepseek-chat:ai.tokens.cache_read": 500,
+                    "deepseek/deepseek-chat:ai.tokens.cache_write": 200,
+                    "deepseek/deepseek-chat:ai.tokens.reasoning": 0,
+                    "deepseek/deepseek-chat:ai.cost.usd": 0.03,
+                    "all:ai.messages": 12,
+                },
+            }), encoding="utf-8")
+
+            def runner(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+                return subprocess.CompletedProcess(command, 0, STATS_OUTPUT, "")
+
+            result = OpenCodeUsageCollector(
+                executable_finder=lambda: "/test/opencode", desktop_database_finder=lambda: None,
+                runner=runner, checkpoint_path=checkpoint,
+            ).collect(CollectorContext({"epoch": datetime(2026, 8, 9, 12).timestamp()}, {}))
+
+        self.assertEqual(result.points, ())
+
     def test_failed_later_poll_keeps_last_complete_snapshot_visible(self) -> None:
         outputs = iter([STATS_OUTPUT, "not a supported stats table"])
 
@@ -186,18 +225,68 @@ class OpenCodeStatsTests(unittest.TestCase):
         self.assertFalse(stats.output_includes_reasoning)
         self.assertEqual([item["id"] for item in stats.models], ["openai/gpt-5.6", "deepseek/deepseek-chat"])
 
+    def test_desktop_database_exposes_exact_daily_model_history(self) -> None:
+        today = datetime(2026, 8, 9, 9, tzinfo=timezone.utc).timestamp()
+        yesterday = today - 86_400
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "opencode.db"
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute("CREATE TABLE message (session_id TEXT, time_created INTEGER, data TEXT)")
+                connection.executemany("INSERT INTO message VALUES (?, ?, ?)", [
+                    ("session-a", int(yesterday * 1000), json.dumps({
+                        "role": "assistant", "providerID": "openai", "modelID": "gpt-5.6",
+                        "tokens": {"input": 100, "output": 20, "reasoning": 30, "cache": {"read": 40, "write": 5}},
+                    })),
+                    ("session-b", int(today * 1000), json.dumps({
+                        "role": "assistant", "providerID": "deepseek", "modelID": "deepseek-chat",
+                        "tokens": {"input": 50, "output": 10, "reasoning": 0, "cache": {"read": 5, "write": 0}},
+                    })),
+                    ("session-b", int(today * 1000), json.dumps({"role": "user", "text": "never selected"})),
+                ])
+                connection.commit()
+            history = read_opencode_desktop_daily_history(database)
+
+        self.assertEqual([day.date for day in history], ["2026-08-08", "2026-08-09"])
+        self.assertEqual([day.total_tokens for day in history], [195, 65])
+        self.assertEqual(history[0].models, ({"id": "openai/gpt-5.6", "tokens": 195},))
+        self.assertEqual(history[1].models, ({"id": "deepseek/deepseek-chat", "tokens": 65},))
+
     def test_snapshot_keeps_lifetime_models_when_the_desktop_database_is_available(self) -> None:
         stats = parse_opencode_stats(STATS_OUTPUT)
         collector = OpenCodeUsageCollector(desktop_database_finder=lambda: None)
-        snapshot = collector._snapshot_for(stats, "2026-08-09T12:00:00+08:00", "desktop-session-metadata", 11_800, collector._models_with_totals(stats))
+        lifetime_models = [
+            *collector._models_with_totals(stats),
+            {"id": "historical/model", "total_tokens": 42},
+        ]
+        snapshot = collector._snapshot_for(
+            stats, "2026-08-09T12:00:00+08:00", "desktop-session-metadata", 11_842, lifetime_models,
+        )
 
-        self.assertEqual(snapshot["usage"]["cumulative"]["tokens"], 11_800)
-        self.assertEqual([model["id"] for model in snapshot["models"]], ["openai/gpt-5.6", "deepseek/deepseek-chat"])
+        self.assertEqual(snapshot["usage"]["cumulative"]["tokens"], 11_842)
+        self.assertEqual(
+            [model["id"] for model in snapshot["models"]],
+            ["openai/gpt-5.6", "deepseek/deepseek-chat", "historical/model"],
+        )
         self.assertTrue(all(model["cumulative"]["available"] for model in snapshot["models"]))
+        self.assertEqual(snapshot["models"][-1]["today"]["tokens"], 0)
         activity = next(group for group in snapshot["details"] if group["id"] == "activity")
         reported_cost = next(metric for metric in activity["metrics"] if metric["id"] == "reported-cost")
         self.assertAlmostEqual(reported_cost["value"], 0.15)
         self.assertEqual(reported_cost["unit"], "usd")
+
+    def test_snapshot_distinguishes_available_daily_history_from_missing_history(self) -> None:
+        stats = parse_opencode_stats(STATS_OUTPUT)
+        collector = OpenCodeUsageCollector(desktop_database_finder=lambda: None)
+        available = collector._snapshot_for(
+            stats, "2026-08-09T12:00:00+08:00", "desktop-session-metadata", 11_800,
+            collector._models_with_totals(stats), (),
+        )
+        unavailable = collector._snapshot_for(
+            stats, "2026-08-09T12:00:00+08:00", "cli-session-summary", None, None,
+        )
+
+        self.assertEqual(available["history"], {"daily_available": True, "daily": []})
+        self.assertEqual(unavailable["history"], {"daily_available": False, "daily": []})
 
 
 if __name__ == "__main__":

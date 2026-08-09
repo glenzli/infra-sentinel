@@ -1,7 +1,8 @@
 import { requestAgentCommand } from "./agent_client";
+import { AnalysisTimeRange, analysisTimeWindow } from "./analysis_time";
 
 export type NetworkViewMode = "billing" | "attribution" | "efficiency";
-export type NetworkTimeRange = "today" | "7d" | "30d" | "recorded";
+export type NetworkTimeRange = AnalysisTimeRange;
 
 export type NetworkAnalysisData = {
   servicePoints: Record<string, unknown>[];
@@ -21,18 +22,6 @@ export type NetworkAnalysisSnapshot = {
 type CacheEntry = { fetchedAt: number; data: NetworkAnalysisData };
 
 const emptyData = (): NetworkAnalysisData => ({ servicePoints: [], localPoints: [], vpsPoints: [], xrayPoints: [] });
-
-function localDayStartEpoch(): number {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1_000;
-}
-
-function rangeStart(range: NetworkTimeRange, now: number): number {
-  if (range === "today") return localDayStartEpoch();
-  if (range === "7d") return now - 7 * 86_400;
-  if (range === "30d") return now - 30 * 86_400;
-  return now - 730 * 86_400;
-}
 
 function pointsFrom(result: Awaited<ReturnType<typeof requestAgentCommand>>): Record<string, unknown>[] {
   if (result.status !== "ok") throw new Error(result.message ?? "Metrics query failed");
@@ -107,16 +96,15 @@ export class NetworkAnalysisController {
   }
 
   private async fetch(mode: NetworkViewMode, range: NetworkTimeRange): Promise<NetworkAnalysisData> {
-    const now = Date.now() / 1_000;
-    const since = rangeStart(range, now);
-    const bucketSeconds = mode === "attribution" && range === "today" ? 300 : 86_400;
+    const window = analysisTimeWindow(range, mode === "attribution" ? 300 : 86_400);
     const query = (metric: string, sourceId?: string) => requestAgentCommand("metrics.query", {
-      since_epoch: since,
-      until_epoch: now,
+      since_epoch: window.sinceEpoch,
+      until_epoch: window.untilEpoch,
       resource_id: "network",
       ...(sourceId ? { source_id: sourceId } : {}),
       metric,
-      bucket_seconds: bucketSeconds,
+      bucket_seconds: window.bucketSeconds,
+      bucket_offset_seconds: window.bucketOffsetSeconds,
     });
 
     if (mode === "attribution") {
