@@ -18,7 +18,7 @@ use crate::app_paths::state_dir;
 // Keep this in lockstep with bin/agent_protocol.py. The desktop bridge owns
 // command/projection validation, so a dated protocol revision must change on
 // both sides before a new Agent can be displayed.
-const PROTOCOL_SCHEMA: &str = "20260810.1";
+const PROTOCOL_SCHEMA: &str = "20260811.1";
 
 #[derive(Serialize)]
 pub struct CommandReceipt {
@@ -148,9 +148,20 @@ fn validated_console_url(value: &str) -> Result<url::Url, String> {
     Ok(parsed)
 }
 
-#[tauri::command]
-pub fn open_console(url: String) -> Result<(), String> {
-    let url = validated_console_url(&url)?.to_string();
+fn validated_external_status_url(value: &str) -> Result<url::Url, String> {
+    let parsed = url::Url::parse(value).map_err(|_| "Status URL is invalid".to_owned())?;
+    if parsed.scheme() != "https" || !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("Status URL must use public HTTPS".to_owned());
+    }
+    let host = parsed.host_str().ok_or_else(|| "Status URL has no host".to_owned())?;
+    if !matches!(host, "status.openai.com" | "status.claude.com" | "status.deepseek.com") {
+        return Err("Status URL host is not allowlisted".to_owned());
+    }
+    Ok(parsed)
+}
+
+fn launch_url(url: url::Url) -> Result<(), String> {
+    let url = url.to_string();
     #[cfg(target_os = "macos")]
     let mut command = Command::new("/usr/bin/open");
     #[cfg(target_os = "windows")]
@@ -164,18 +175,29 @@ pub fn open_console(url: String) -> Result<(), String> {
     let status = command
         .arg(url)
         .status()
-        .map_err(|error| format!("cannot open facility Console: {error}"))?;
+        .map_err(|error| format!("cannot open URL: {error}"))?;
     if status.success() {
         Ok(())
     } else {
-        Err("the platform URL opener rejected the facility Console".to_owned())
+        Err("the platform URL opener rejected the URL".to_owned())
     }
+}
+
+#[tauri::command]
+pub fn open_console(url: String) -> Result<(), String> {
+    launch_url(validated_console_url(&url)?)
+}
+
+#[tauri::command]
+pub fn open_external_status(url: String) -> Result<(), String> {
+    launch_url(validated_external_status_url(&url)?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        command_allowed, decode_projection, publish_command, validated_console_url, PROTOCOL_SCHEMA,
+        command_allowed, decode_projection, publish_command, validated_console_url,
+        validated_external_status_url, PROTOCOL_SCHEMA,
     };
     use serde_json::{json, Map, Value};
     use std::fs;
@@ -222,5 +244,15 @@ mod tests {
         assert!(validated_console_url("https://example.com/").is_err());
         assert!(validated_console_url("http://localhost:4318/").is_err());
         assert!(validated_console_url("file:///tmp/console.html").is_err());
+    }
+
+    #[test]
+    fn external_status_links_are_https_and_provider_allowlisted() {
+        assert!(validated_external_status_url("https://status.openai.com/").is_ok());
+        assert!(validated_external_status_url("https://status.claude.com/incidents/example").is_ok());
+        assert!(validated_external_status_url("https://status.deepseek.com/").is_ok());
+        assert!(validated_external_status_url("http://status.openai.com/").is_err());
+        assert!(validated_external_status_url("https://example.com/").is_err());
+        assert!(validated_external_status_url("https://status.openai.com@example.com/").is_err());
     }
 }

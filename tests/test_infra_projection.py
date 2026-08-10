@@ -42,7 +42,7 @@ class InfraProjectionTests(unittest.TestCase):
             "none",
         )
 
-        self.assertEqual(projection["schema"], "20260810.1")
+        self.assertEqual(projection["schema"], "20260811.1")
         self.assertEqual(projection["overall"]["status"], "healthy")
         self.assertEqual(projection["resources"][0]["primary_metric"], "network.local_bytes")
         self.assertEqual(projection["resources"][0]["primary_value"], 1234)
@@ -193,6 +193,54 @@ class InfraProjectionTests(unittest.TestCase):
         self.assertEqual(projection["facilities"], facilities)
         self.assertEqual(projection["overall"]["status"], "degraded")
         self.assertEqual(projection["overall"]["active_alerts"], 1)
+
+    def test_upstream_status_is_an_independent_resource_and_only_confirmed_incidents_affect_health(self) -> None:
+        upstream = {
+            "schema": "20260811.1",
+            "status": "warning",
+            "total": 3,
+            "healthy": 2,
+            "attention": 1,
+            "unknown": 0,
+            "items": [
+                {"id": "openai", "label": "OpenAI", "status": "healthy", "available": True, "observed_at": "now"},
+                {"id": "claude", "label": "Claude", "status": "warning", "available": True, "observed_at": "now"},
+                {"id": "deepseek", "label": "DeepSeek", "status": "healthy", "available": True, "observed_at": "now"},
+            ],
+        }
+        projection = build_infra_projection(
+            sample(),
+            {"kernel": {"total_bytes": 100}, "vps": {"total_bytes": 0}},
+            {"enabled": False, "status": "disabled", "servers": []},
+            "none",
+            (),
+            None,
+            upstream,
+        )
+
+        resources = {resource["id"]: resource for resource in projection["resources"]}
+        self.assertEqual(resources["network"]["source_count"], 1)
+        self.assertEqual(resources["upstream_status"]["primary_value"], 2)
+        self.assertEqual(resources["upstream_status"]["online_source_count"], 3)
+        self.assertEqual(projection["overall"]["status"], "warning")
+        self.assertEqual(projection["overall"]["active_alerts"], 1)
+        self.assertEqual(projection["upstream_status"], upstream)
+
+    def test_unknown_upstream_reads_do_not_become_service_alerts(self) -> None:
+        upstream = {
+            "schema": "20260811.1", "status": "degraded", "total": 3, "healthy": 2,
+            "attention": 0, "unknown": 1, "items": [
+                {"id": "openai", "label": "OpenAI", "status": "unknown", "available": False},
+                {"id": "claude", "label": "Claude", "status": "healthy", "available": True},
+                {"id": "deepseek", "label": "DeepSeek", "status": "healthy", "available": True},
+            ],
+        }
+        projection = build_infra_projection(
+            sample(), {"kernel": {}, "vps": {}}, {"enabled": False, "status": "disabled", "servers": []},
+            "none", (), None, upstream,
+        )
+        self.assertEqual(projection["overall"]["status"], "healthy")
+        self.assertEqual(projection["overall"]["active_alerts"], 0)
 
 
 if __name__ == "__main__":

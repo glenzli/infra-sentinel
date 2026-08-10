@@ -38,4 +38,5 @@ DEFAULT_SOURCE_REGISTRY = SourceRegistry((
     SourceKind("network.xray", "network", "network.", "resource.network"),
     SourceKind("ai.opencode", "ai_usage", "ai.", "resource.ai_usage"),
     SourceKind("ai.codex", "ai_usage", "ai.", "resource.ai_usage"),
+    SourceKind("upstream.statuspage", "upstream_status", "upstream.", "resource.upstream_status"),
 ))

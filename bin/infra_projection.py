@@ -11,7 +11,7 @@ from infra_model import MetricPoint, SourceStatus
 from infra_registry import DEFAULT_SOURCE_REGISTRY
 
 
-PROJECTION_SCHEMA = "20260810.1"
+PROJECTION_SCHEMA = "20260811.1"
 
 
 def _number(value: Any) -> int:
@@ -44,6 +44,39 @@ def _overall_status(base: str, facilities: dict[str, Any]) -> str:
     facility_status = str(facilities.get("status") or "disabled")
     rank = {"healthy": 0, "starting": 0, "disabled": 0, "warning": 1, "degraded": 1, "critical": 2}
     return facility_status if rank.get(facility_status, 1) > rank.get(base, 1) else base
+
+
+def _overall_with_upstream(base: str, upstream: dict[str, Any]) -> str:
+    """Let confirmed upstream incidents affect health, but not read failures."""
+    upstream_status = str(upstream.get("status") or "degraded")
+    if upstream_status not in {"warning", "critical"}:
+        return base
+    rank = {"healthy": 0, "degraded": 1, "warning": 2, "critical": 3}
+    return upstream_status if rank.get(upstream_status, 0) > rank.get(base, 0) else base
+
+
+def _upstream_resource(upstream: dict[str, Any]) -> tuple[dict[str, Any], list[SourceStatus]]:
+    items = upstream.get("items") if isinstance(upstream.get("items"), list) else []
+    sources = [SourceStatus(
+        id=f"upstream:{item.get('id', 'unknown')}",
+        kind="upstream.statuspage",
+        resource_id="upstream_status",
+        enabled=True,
+        status="ok" if item.get("available") else "error",
+        label=str(item.get("label") or item.get("id") or "Upstream"),
+        updated_at=item.get("observed_at") if isinstance(item.get("observed_at"), str) else None,
+    ) for item in items if isinstance(item, dict)]
+    return {
+        "id": "upstream_status",
+        "status": str(upstream.get("status") or "degraded"),
+        "enabled": True,
+        "primary_metric": "upstream.providers.healthy",
+        "primary_value": _number(upstream.get("healthy")),
+        "primary_unit": "providers",
+        "primary_source_id": "upstream_status.aggregate",
+        "source_count": len(sources),
+        "online_source_count": sum(source.status == "ok" for source in sources),
+    }, sources
 
 
 def _remote_sources(remote: dict[str, Any], runs: Iterable[CollectorRun]) -> list[SourceStatus]:
@@ -150,12 +183,17 @@ def build_infra_projection(
     alert_level: str,
     collector_runs: tuple[CollectorRun, ...] = (),
     facilities: dict[str, Any] | None = None,
+    upstream_status: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Produce a generic overview without changing existing network accounting."""
 
     timestamp = str(sample.get("timestamp") or "")
     facility_state = facilities if isinstance(facilities, dict) else {
         "schema": "20260810.1", "status": "disabled", "total": 0, "healthy": 0, "attention": 0, "items": [],
+    }
+    upstream_state = upstream_status if isinstance(upstream_status, dict) else {
+        "schema": "20260811.1", "status": "degraded", "total": 0, "healthy": 0,
+        "attention": 0, "unknown": 0, "items": [],
     }
     kernel = session.get("kernel") if isinstance(session.get("kernel"), dict) else {}
     vps = session.get("vps") if isinstance(session.get("vps"), dict) else {}
@@ -182,9 +220,11 @@ def build_infra_projection(
     ai_resource, ai_sources, ai_snapshots = _ai_usage_resource(collector_runs)
     ai_aggregate = _ai_usage_aggregate(ai_snapshots)
     sources.extend(ai_sources)
+    upstream_resource, upstream_sources = _upstream_resource(upstream_state)
+    sources.extend(upstream_sources)
     source_dicts = [source.as_dict() for source in sources]
-    active_sources = [source for source in sources if source.enabled]
-    online_sources = [source for source in active_sources if source.status == "ok"]
+    network_sources = [source for source in sources if source.resource_id == "network" and source.enabled]
+    online_network_sources = [source for source in network_sources if source.status == "ok"]
     metrics = [
         MetricPoint(
             observed_at=timestamp,
@@ -215,9 +255,20 @@ def build_infra_projection(
         "primary_value": primary_total,
         "primary_unit": "bytes",
         "primary_source_id": primary_source,
-        "source_count": len(active_sources),
-        "online_source_count": len(online_sources),
+        "source_count": len(network_sources),
+        "online_source_count": len(online_network_sources),
     }]
+    if upstream_resource["source_count"]:
+        resources.append(upstream_resource)
+        metrics.append(MetricPoint(
+            observed_at=timestamp,
+            metric="upstream.providers.healthy",
+            instrument="gauge",
+            value=upstream_resource["primary_value"],
+            unit="providers",
+            source_id="upstream_status.aggregate",
+            resource_id="upstream_status",
+        ).as_dict())
     if ai_resource:
         resources.append(ai_resource)
         metrics.append(MetricPoint(
@@ -232,13 +283,14 @@ def build_infra_projection(
             attribution_method="exact",
             confidence="high",
         ).as_dict())
-    base_status = _status_for(alert_level, remote, collector_runs)
+    base_status = _overall_with_upstream(_status_for(alert_level, remote, collector_runs), upstream_state)
     return {
         "schema": PROJECTION_SCHEMA,
         "product": {"id": "infra-sentinel", "mode": "network"},
         "overall": {
             "status": _overall_status(base_status, facility_state),
-            "active_alerts": (active_daily_guards or (0 if alert_level == "none" else 1)) + _number(facility_state.get("attention")),
+            "active_alerts": (active_daily_guards or (0 if alert_level == "none" else 1))
+            + _number(facility_state.get("attention")) + _number(upstream_state.get("attention")),
         },
         "resources": resources,
         "sources": source_dicts,
@@ -246,5 +298,6 @@ def build_infra_projection(
         "capabilities": DEFAULT_SOURCE_REGISTRY.capabilities(),
         "collectors": [run.as_dict() for run in collector_runs],
         "facilities": facility_state,
+        "upstream_status": upstream_state,
         "ai_usage": {"schema": AI_USAGE_SNAPSHOT_SCHEMA, "sources": ai_snapshots, "aggregate": ai_aggregate} if ai_resource else {},
     }

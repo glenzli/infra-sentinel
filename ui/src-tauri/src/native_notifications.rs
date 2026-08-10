@@ -49,13 +49,24 @@ fn notification_event(projection: &Value) -> Option<NotificationEvent> {
         .unwrap_or("Infra Sentinel");
     let event_type = event.get("type").and_then(Value::as_str).unwrap_or("alert");
     let level = event.get("level").and_then(Value::as_str).unwrap_or("warning");
-    let title = match (event_type, level) {
-        ("recovered", _) => format!("{label} 已恢复"),
-        ("deescalated", _) => format!("{label} 告警降级"),
-        (_, "critical") => format!("{label} 严重告警"),
+    let scope = event.get("scope").and_then(Value::as_str);
+    let title = match (scope, event_type, level) {
+        (Some("upstream_status"), "recovered", _) => format!("{label} 已恢复"),
+        (Some("upstream_status"), "deescalated", _) => format!("{label} 状态改善"),
+        (Some("upstream_status"), _, "critical") => format!("{label} 严重服务异常"),
+        (Some("upstream_status"), _, _) => format!("{label} 服务异常"),
+        (_, "recovered", _) => format!("{label} 已恢复"),
+        (_, "deescalated", _) => format!("{label} 告警降级"),
+        (_, _, "critical") => format!("{label} 严重告警"),
         _ => format!("{label} 流量告警"),
     };
-    let body = if event.get("scope").and_then(Value::as_str) == Some("vps_daily_usage") {
+    let body = if scope == Some("upstream_status") {
+        event
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("请查看官方状态页")
+            .to_owned()
+    } else if scope == Some("vps_daily_usage") {
         format!(
             "今日 {} · 阈值 {}",
             bytes(number(event.get("usage_bytes"))),
@@ -132,5 +143,15 @@ mod tests {
         .expect("notification event");
         assert_eq!(event.title, "Primary VPS 严重告警");
         assert_eq!(event.body, "今日 1.0 GiB · 阈值 512.0 MiB");
+    }
+
+    #[test]
+    fn upstream_alerts_use_service_language_and_incident_summary() {
+        let event = notification_event(&json!({
+            "last_event": {"id": "event-2", "type": "alert", "level": "warning", "scope": "upstream_status", "alert_group": "Claude", "description": "Elevated API errors"}
+        }))
+        .expect("notification event");
+        assert_eq!(event.title, "Claude 服务异常");
+        assert_eq!(event.body, "Elevated API errors");
     }
 }

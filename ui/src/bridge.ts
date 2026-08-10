@@ -72,12 +72,56 @@ export interface FacilitiesProjection {
   error_kind?: string;
 }
 
+export interface UpstreamComponentProjection {
+  id: string;
+  name: string;
+  status: string;
+  level: string;
+  group?: string;
+}
+
+export interface UpstreamIncidentProjection {
+  id: string;
+  name: string;
+  status: string;
+  impact: string;
+  level: string;
+  updated_at?: string;
+  url?: string;
+}
+
+export interface UpstreamProviderProjection {
+  id: string;
+  label: string;
+  status: string;
+  available: boolean;
+  description: string;
+  observed_at: string;
+  official_updated_at?: string;
+  status_url: string;
+  components: UpstreamComponentProjection[];
+  incidents: UpstreamIncidentProjection[];
+  error_kind?: string;
+}
+
+export interface UpstreamStatusProjection {
+  schema: string;
+  status: string;
+  total: number;
+  healthy: number;
+  attention: number;
+  unknown: number;
+  updated_at: string;
+  items: UpstreamProviderProjection[];
+}
+
 export interface InfraProjection {
   overall: { status: OverallStatus; active_alerts: number };
   resources: ResourceProjection[];
   sources: SourceProjection[];
   ai_usage?: Record<string, unknown>;
   facilities?: FacilitiesProjection;
+  upstream_status?: UpstreamStatusProjection;
 }
 
 export interface AgentProjection {
@@ -121,4 +165,8 @@ export function readAgentCommandResult(commandId: string): Promise<AgentCommandR
 
 export function openConsole(url: string): Promise<void> {
   return invoke<void>("open_console", { url });
+}
+
+export function openExternalStatus(url: string): Promise<void> {
+  return invoke<void>("open_external_status", { url });
 }

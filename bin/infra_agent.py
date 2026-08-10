@@ -53,6 +53,7 @@ from opencode_usage import OpenCodeUsageCollector
 from sample_timing import annotate_sample_timing, sample_is_realtime
 from remote import RemoteFleetMonitor
 from session import SessionMeter
+from upstream_status import UpstreamStatusMonitor
 
 
 PARENT_PROCESS_ENV = "INFRA_SENTINEL_PARENT_PID"
@@ -174,7 +175,7 @@ def latest_delta_event(path: Path) -> dict[str, Any] | None:
         if (
             sample.get("schema") == SAMPLE_SCHEMA
             and sample_is_realtime(sample)
-        ) or record.get("scope") == "vps_daily_usage":
+        ) or record.get("scope") in {"vps_daily_usage", "upstream_status"}:
             latest = record
     return latest
 
@@ -295,6 +296,21 @@ def build_billing_event(transition: BillingBudgetTransition) -> dict[str, Any]:
     }
 
 
+def build_upstream_event(transition: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema": 1,
+        "id": uuid.uuid4().hex,
+        "timestamp": transition["timestamp"],
+        "type": transition["type"],
+        "level": transition["level"],
+        "scope": "upstream_status",
+        "alert_group": transition["label"],
+        "provider_id": transition["provider_id"],
+        "previous": transition["previous"],
+        "description": transition["description"],
+    }
+
+
 def notify(
     event_type: str,
     level: str,
@@ -352,6 +368,22 @@ def notify_billing(transition: BillingBudgetTransition) -> None:
     send_native_notification(title, body)
 
 
+def notify_upstream(event: dict[str, Any]) -> None:
+    """Deliver standalone Agent notifications; the packaged app owns its own."""
+    if os.environ.get(APP_NOTIFICATIONS_ENV) == "1":
+        return
+    label = str(event.get("alert_group") or "Upstream service")
+    event_type = str(event.get("type") or "alert")
+    level = str(event.get("level") or "warning")
+    if event_type == "recovered":
+        title = f"{label} 已恢复"
+    elif event_type == "deescalated":
+        title = f"{label} 状态改善"
+    else:
+        title = f"{label} {'严重' if level == 'critical' else ''}服务异常"
+    send_native_notification(title, str(event.get("description") or "请查看官方状态页"))
+
+
 def write_projection_state(
     config: Config,
     sample: dict[str, Any],
@@ -363,6 +395,7 @@ def write_projection_state(
     collector_runs: tuple[CollectorRun, ...] = (),
     storage: dict[str, Any] | None = None,
     facilities: dict[str, Any] | None = None,
+    upstream_status: dict[str, Any] | None = None,
 ) -> None:
     remote_servers = remote.get("servers", [])
     xray_servers = [server.get("xray_stats", {}) for server in remote_servers]
@@ -427,7 +460,9 @@ def write_projection_state(
         "collectors": [run.as_dict() for run in collector_runs],
         # This is a derived, generic resource projection.  The legacy-shaped
         # network fields above remain facts for the detailed network panel.
-        "infra": build_infra_projection(sample, session, remote, level, collector_runs, facilities),
+        "infra": build_infra_projection(
+            sample, session, remote, level, collector_runs, facilities, upstream_status,
+        ),
         "last_event": latest_delta_event(config.state_dir / "events.jsonl"),
     }
     write_projection(config.state_dir, state)
@@ -555,6 +590,7 @@ def handle_sample(
     metric_store: MetricStore,
     collector_registry: CollectorRegistry,
     facility_monitor: FacilityMonitor,
+    upstream_monitor: UpstreamStatusMonitor,
     logger: logging.Logger,
 ) -> tuple[dict[str, Any], bool]:
     sample = collect_interval(client, tracker, config.monitor.sample_seconds)
@@ -628,6 +664,11 @@ def handle_sample(
         if run.status == "error":
             logger.warning("metric collector failed id=%s kind=%s", run.capability.id, run.error_kind)
     metric_store.write(collected_points(collector_runs))
+    upstream_snapshot = upstream_monitor.snapshot()
+    for upstream_transition in upstream_monitor.drain_transitions():
+        event = build_upstream_event(upstream_transition)
+        append_jsonl(config.state_dir / "events.jsonl", event, config.state)
+        notify_upstream(event)
     write_projection_state(
         config,
         sample,
@@ -641,6 +682,7 @@ def handle_sample(
         collector_runs,
         metric_store.summary(),
         facility_monitor.snapshot(),
+        upstream_snapshot,
     )
     write_health_state(config, "ok")
     return sample, command_effects.restart_requested
@@ -705,6 +747,8 @@ def main() -> int:
         collector_registry.register(CodexUsageCollector(checkpoint_path=config.state_dir / "codex-usage-day.json"))
         facility_monitor = FacilityMonitor(logger)
         facility_monitor.start()
+        upstream_monitor = UpstreamStatusMonitor(logger)
+        upstream_monitor.start()
         imported = metric_store.import_legacy_network()
         if imported:
             logger.info("imported legacy network metric points=%s", imported)
@@ -737,6 +781,7 @@ def main() -> int:
                         metric_store,
                         collector_registry,
                         facility_monitor,
+                        upstream_monitor,
                         logger,
                     )
                     if restart_requested:
@@ -750,6 +795,7 @@ def main() -> int:
             read_only_command_stop.set()
             read_only_command_thread.join(timeout=1)
             facility_monitor.stop()
+            upstream_monitor.stop()
             lock.close()
         return 0
     except KeyboardInterrupt:

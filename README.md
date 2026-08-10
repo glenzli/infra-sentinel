@@ -2,10 +2,11 @@
 
 **English** | [中文](README.zh-CN.md)
 
-Infra Sentinel is a local-first observability dashboard for personal AI infrastructure. It currently covers two metered resource categories and the health of participating local facilities:
+Infra Sentinel is a local-first observability dashboard for personal AI infrastructure. It currently covers metered resources, upstream service status, and the health of participating local facilities:
 
 - **Network**: local Mihomo traffic, domain and proxy-route attribution, Linux VPS billable traffic, and Xray per-user logical traffic;
 - **AI usage**: local Token records from OpenCode and Codex, model composition, consumption rate, and Agent activity;
+- **Upstream services**: low-frequency, read-only observation of the official OpenAI, Claude, and DeepSeek API status feeds;
 - **Local facilities**: automatically discovered, protocol-bounded health projections for compatible runtimes and services.
 
 It also discovers participating local infrastructure facilities through the
@@ -32,6 +33,7 @@ Infra Sentinel does not force bytes, Tokens, and alerts into a synthetic “scor
 - Is the current growth rate abnormal?
 - Why do local observations, proxy logical traffic, and VPS billable traffic differ?
 - Is a data source unavailable, or is its observation window incomplete?
+- Is the local failure accompanied by a confirmed upstream API incident?
 - Which local infrastructure facilities are healthy or degraded, and where is their native Console?
 
 When data cannot be obtained reliably, the interface reports it as unknown, hides the unavailable module, or marks the source unhealthy. It does not present an inferred value as a bill.
@@ -82,6 +84,12 @@ The AI module reads only aggregate metadata already stored by local clients. Eve
 
 OpenCode calendar-day totals and Codex local-baseline windows may differ. The interface shows the observation coverage for every source directly. AI summaries are local trend measurements, not account billing for ChatGPT, Codex, or any API Provider.
 
+## Upstream service status
+
+Infra Sentinel reads the public official status summaries for OpenAI, Claude, and DeepSeek every five minutes. It shows relevant API components, active incidents, official update time, and a link to the provider's native status page. No API key or synthetic model request is used.
+
+Official status is diagnostic context rather than a guarantee for a particular account, model, tier, or region. Transport and parsing failures are reported as **unknown** and never converted into a provider outage. Only confirmed API degradation and recovery transitions contribute alerts and notifications.
+
 ## Analysis views
 
 Network and AI usage share the same observation structure:
@@ -115,8 +123,9 @@ compatible. See [facility discovery](docs/facility-discovery.md).
 
 ```text
 Mihomo / VPS / Xray / OpenCode / Codex → Collectors → SQLite metrics ┐
-Local facilities → Infra Protocol discovery → provider adapters ─────┤
-                                                                     ↓
+Official provider status feeds → low-frequency status observer ───────┤
+Local facilities → Infra Protocol discovery → provider adapters ──────┤
+                                                                      ↓
                                               Versioned Projection + commands
                                                                      ↓
                                                  Tauri UI / notifications
@@ -144,6 +153,7 @@ Officially supported:
 - Optional Xray StatsService per-user statistics;
 - The OpenCode Desktop local session database or compatible CLI;
 - The Codex local state database;
+- Public official status feeds for OpenAI, Claude, and DeepSeek;
 - Local facilities publishing compatible Infra Protocol discovery offers for the supported
   [PCP](https://github.com/glenzli/paged-context-protocol) or
   [Infer Runtime](https://github.com/glenzli/infer-runtime) protocol.
@@ -222,7 +232,7 @@ This includes the SQLite metric store, counter checkpoints, health state, bounde
 - SSH private keys, passwords, API keys, or authentication credentials;
 - Packet captures.
 
-All collection, storage, and analysis happen locally by default.
+All collection, storage, and analysis happen locally by default. Upstream status observation makes anonymous, read-only HTTPS requests only to the providers' public status feeds.
 
 ## Development verification
 

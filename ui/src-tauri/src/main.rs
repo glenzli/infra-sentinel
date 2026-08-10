@@ -25,6 +25,7 @@ fn main() {
             agent_bridge::read_agent_command_result,
             agent_bridge::submit_agent_command,
             agent_bridge::open_console,
+            agent_bridge::open_external_status,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Infra Sentinel desktop shell");

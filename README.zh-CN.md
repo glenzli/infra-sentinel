@@ -2,10 +2,11 @@
 
 [English](README.md) | **中文**
 
-Infra Sentinel 是一个本地优先的个人 AI Infra 可观测面板。它目前覆盖两类可计量资源，以及参与接入的本地设施健康状态：
+Infra Sentinel 是一个本地优先的个人 AI Infra 可观测面板。它目前覆盖可计量资源、上游服务状态，以及参与接入的本地设施健康状态：
 
 - **网络**：本机 Mihomo 流量、域名与代理路径归因、Linux VPS 账单量、Xray 用户逻辑流量；
 - **AI 用量**：OpenCode 与 Codex 的本地 Token 记录、模型构成、消耗速率和 Agent 活动；
+- **上游服务**：低频、只读观测 OpenAI、Claude 与 DeepSeek 的官方 API 状态；
 - **本地设施**：自动发现兼容的 runtime 与服务，按各自协议投影受限健康状态。
 
 它还会通过 [Infra Protocol](https://github.com/glenzli/infra-protocol) 的发现合同自动发现参与接入的本地基础设施。每个设施都作为独立资源卡展示受限的只读详情；设施专属的诊断与操作仍留在原生 Console，并由系统浏览器打开。
@@ -29,6 +30,7 @@ Infra Sentinel 不把字节、Token 和告警硬凑成一个“总分”。每�
 - 当前增长速度是否异常？
 - 本机观测值、代理逻辑量和 VPS 账单量为什么不同？
 - 某个数据源是否失联，统计窗口是否完整？
+- 本地异常发生时，上游 API 是否也有已经确认的公共事件？
 - 哪些本地基础设施正常或降级，它的原生 Console 在哪里？
 
 如果某项数据无法可靠获得，界面会显示未知、隐藏该模块或标记来源异常，不用推断值冒充账单。
@@ -79,6 +81,12 @@ AI 模块只读取客户端已经保存在本机的聚合元数据。每个 Prov
 
 OpenCode 的自然日统计与 Codex 的本机基线窗口可能不同，界面会直接展示每个来源的窗口覆盖。AI 汇总用于本机趋势分析，不是 ChatGPT、Codex 或任意 API Provider 的账户账单。
 
+## 上游服务状态
+
+Infra Sentinel 每 5 分钟只读获取一次 OpenAI、Claude 与 DeepSeek 的公开官方状态摘要，展示相关 API 组件、活动事件、官方更新时间，并提供进入供应商原生状态页的链接。整个过程不需要 API Key，也不会发起合成模型调用。
+
+官方状态只用于辅助诊断，不保证特定账户、模型、层级或地区一定可用。网络或解析失败会明确显示为**未知**，不会被转换为供应商故障；只有官方 API 组件已经确认的异常与恢复才会形成告警和通知。
+
 ## 分析视图
 
 Network 和 AI 用量都使用同一套观测结构：
@@ -108,8 +116,9 @@ Sentinel 为两者分别实现 adapter，只把有界状态、指标、问题、
 
 ```text
 Mihomo / VPS / Xray / OpenCode / Codex → Collectors → SQLite 指标 ┐
-本地设施 → Infra Protocol discovery → Provider adapters ─────────┤
-                                                                  ↓
+供应商官方状态源 → 低频状态观测器 ─────────────────────────────────┤
+本地设施 → Infra Protocol discovery → Provider adapters ──────────┤
+                                                                   ↓
                                                 版本化 Projection + 命令
                                                                   ↓
                                                     Tauri UI / 通知
@@ -135,6 +144,7 @@ Projection 与发现合同使用日期化 schema，并要求精确的兼容版�
 - 可选 Xray StatsService 用户统计；
 - OpenCode Desktop 本地会话库或兼容 CLI；
 - Codex 本地状态库；
+- OpenAI、Claude 与 DeepSeek 的公开官方状态源；
 - 发布兼容 Infra Protocol discovery offer 的
   [PCP](https://github.com/glenzli/paged-context-protocol) 与
   [Infer Runtime](https://github.com/glenzli/infer-runtime) 本地设施。
@@ -213,7 +223,7 @@ Host edge-a
 - SSH 私钥、密码、API Key 或认证凭据；
 - 抓包数据。
 
-所有采集、存储和分析默认只发生在本机。
+所有采集、存储和分析默认只发生在本机。上游状态观测只会向供应商公开状态源发出匿名、只读的 HTTPS 请求。
 
 ## 开发验证
 

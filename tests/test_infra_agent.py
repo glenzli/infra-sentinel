@@ -35,6 +35,7 @@ from infra_agent import (  # noqa: E402
     SAMPLE_SCHEMA,
     apply_agent_commands,
     build_billing_event,
+    build_upstream_event,
     latest_delta_event,
     send_native_notification,
     process_read_only_commands,
@@ -729,6 +730,23 @@ class SnapshotAndEventTests(unittest.TestCase):
             visible = latest_delta_event(path)
             self.assertEqual((visible["scope"], visible["source_id"], visible["threshold_bytes"]),
                              ("vps_daily_usage", "primary", 100))
+
+    def test_upstream_transition_is_visible_to_the_native_notification_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "events.jsonl"
+            event = build_upstream_event({
+                "provider_id": "claude",
+                "label": "Claude",
+                "previous": "healthy",
+                "level": "warning",
+                "type": "alert",
+                "description": "Elevated API errors",
+                "timestamp": "2026-08-11T10:00:00+08:00",
+            })
+            path.write_text(json.dumps(event) + "\n", encoding="utf-8")
+            visible = latest_delta_event(path)
+            self.assertEqual((visible["scope"], visible["provider_id"], visible["description"]),
+                             ("upstream_status", "claude", "Elevated API errors"))
 
     def test_snapshot_contains_only_aggregate_mihomo_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -16,7 +16,7 @@ import re
 from typing import Any, Iterable
 
 
-PROJECTION_SCHEMA = "20260810.1"
+PROJECTION_SCHEMA = "20260811.1"
 COMMAND_SCHEMA = PROJECTION_SCHEMA
 PROJECTION_FILENAME = "projection.json"
 COMMANDS_DIRECTORY = "commands"

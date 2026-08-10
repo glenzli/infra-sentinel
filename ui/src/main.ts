@@ -1,6 +1,7 @@
 import "./styles.css";
 import "./facility_view.css";
-import { AgentProjection, OverallStatus, openConsole, readProjection, resetSession } from "./bridge";
+import "./upstream_status_view.css";
+import { AgentProjection, OverallStatus, openConsole, openExternalStatus, readProjection, resetSession } from "./bridge";
 import { formatDuration } from "./format";
 import { tr } from "./i18n";
 import { renderNetworkResourcePage } from "./network_view";
@@ -10,8 +11,9 @@ import { AiAnalysisController, AiTimeRange, AiViewMode } from "./ai_analysis";
 import { renderOverview } from "./overview_view";
 import { loadSettings, renderSettings } from "./settings_view";
 import { renderFacilityDetailPage } from "./facility_view";
+import { renderUpstreamStatusResourcePage } from "./upstream_status_view";
 
-type AppView = "overview" | "network" | "ai_usage" | "facility" | "settings";
+type AppView = "overview" | "network" | "ai_usage" | "upstream_status" | "facility" | "settings";
 
 function appRoot(): HTMLDivElement {
   const root = document.querySelector<HTMLDivElement>("#app");
@@ -63,6 +65,7 @@ function renderProjection(projection: AgentProjection): void {
   latestProjection = projection;
   const network = projection.infra.resources.find((resource) => resource.enabled && resource.id === "network");
   const aiUsage = projection.infra.resources.find((resource) => resource.enabled && resource.id === "ai_usage");
+  const upstreamStatus = projection.infra.resources.find((resource) => resource.enabled && resource.id === "upstream_status");
   const sources = network ? projection.infra.sources.filter((source) => source.resource_id === network.id) : [];
   const aiSources = aiUsage ? projection.infra.sources.filter((source) => source.resource_id === aiUsage.id) : [];
   const controls = `<section class="dashboard-actions"><div><p class="eyebrow">${tr("CURRENT SESSION", "当前统计周期")}</p><strong>${formatDuration(projection.session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button></div></section>`;
@@ -72,6 +75,8 @@ function renderProjection(projection: AgentProjection): void {
     ? `<section class="dashboard-actions"><div><p class="eyebrow">${tr("CURRENT SESSION", "当前统计周期")}</p><strong>${formatDuration(projection.session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button><button class="button button--danger" id="reset"><span>${tr("Reset totals", "重置统计")}</span></button></div></section>${renderNetworkResourcePage(projection, network, sources, networkAnalysis.snapshot())}`
     : activeView === "ai_usage" && aiUsage
       ? `${controls}${renderAiUsageResourcePage(projection, aiUsage, aiSources, aiAnalysis.snapshot())}`
+    : activeView === "upstream_status" && upstreamStatus
+      ? `${controls}${renderUpstreamStatusResourcePage(upstreamStatus, projection.infra.upstream_status)}`
     : activeView === "facility"
       ? `${facilityControls}${renderFacilityDetailPage(selectedFacility)}`
     : renderOverview(projection, networkOverviewAnalysis.snapshot());
@@ -81,7 +86,7 @@ function renderProjection(projection: AgentProjection): void {
   root.querySelector<HTMLButtonElement>("#reset")?.addEventListener("click", () => void requestReset());
   root.querySelector<HTMLButtonElement>("#back")?.addEventListener("click", () => { activeView = "overview"; selectedFacilityId = undefined; renderProjection(projection); });
   root.querySelectorAll<HTMLButtonElement>("[data-resource-id]").forEach((button) => button.addEventListener("click", () => {
-    if (button.dataset.resourceId === "network" || button.dataset.resourceId === "ai_usage") { activeView = button.dataset.resourceId; renderProjection(projection); }
+    if (button.dataset.resourceId === "network" || button.dataset.resourceId === "ai_usage" || button.dataset.resourceId === "upstream_status") { activeView = button.dataset.resourceId; renderProjection(projection); }
   }));
   root.querySelectorAll<HTMLElement>("[data-facility-id]").forEach((card) => {
     const openDetails = () => {
@@ -106,6 +111,11 @@ function renderProjection(projection: AgentProjection): void {
     const url = button.dataset.consoleUrl;
     if (!url) return;
     try { await openConsole(url); } catch (error) { window.alert(`${tr("Cannot open Console", "无法打开 Console")}：${String(error)}`); }
+  }));
+  root.querySelectorAll<HTMLButtonElement>("[data-status-url]").forEach((button) => button.addEventListener("click", async () => {
+    const url = button.dataset.statusUrl;
+    if (!url) return;
+    try { await openExternalStatus(url); } catch (error) { window.alert(`${tr("Cannot open official status page", "无法打开官方状态页")}：${String(error)}`); }
   }));
   root.querySelectorAll<HTMLButtonElement>("[data-ai-mode]").forEach((button) => button.addEventListener("click", () => {
     const mode = button.dataset.aiMode as AiViewMode;
