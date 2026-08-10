@@ -1,5 +1,4 @@
 .daily-bars-frame {
-  background: linear-gradient(to bottom, transparent 49.5%, #edf0f3 50%, transparent 50.5%);
   border-top: 1px dashed #dce2e8;
   padding: 8px 0 0 54px;
   position: relative;
@@ -17,9 +16,40 @@
   white-space: nowrap;
 }
 
+.daily-bars__plot {
+  background: linear-gradient(to bottom, transparent 49.5%, #edf0f3 50%, transparent 50.5%);
+  height: 128px;
+  overflow: hidden;
+}
+
 .daily-bars {
+  gap: 7px;
   grid-template-columns: repeat(var(--daily-bucket-count), minmax(0, 1fr));
-  padding-top: 0;
+  height: 100%;
+  padding: 0 2px;
+}
+
+.daily-bar-day {
+  display: block;
+  height: 100%;
+}
+
+.daily-bars__labels {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: repeat(var(--daily-bucket-count), minmax(0, 1fr));
+  min-height: 13px;
+  padding: 7px 2px 0;
+}
+
+.daily-bars__labels span {
+  color: #858b93;
+  font-size: 9px;
+  min-width: 0;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .daily-bar-day--empty .daily-bar-day__bars::after {
@@ -38,12 +68,14 @@
 .daily-bar-day__bars--stacked {
   align-items: center;
   flex-direction: column-reverse;
-  gap: 1px;
+  gap: 0;
   justify-content: flex-start;
   max-width: 28px;
 }
 
 .daily-bar-day__bars--stacked i {
+  border-top: 1px solid #fff;
+  box-sizing: border-box;
   flex: 0 0 auto;
   max-width: none;
   min-height: 0;

@@ -14,7 +14,7 @@ Infra Sentinel 是一个本地优先的个人 AI Infra 可观测面板。它目�
 
 它不会抓包，不读取提示词、响应正文、URL 路径或项目文件，也不会杀进程、删除文件、断网或修改代理配置。
 
-![Infra Sentinel Network 与 AI 资源模块](assets/overview-zh.png)
+![Infra Sentinel 中文概览](assets/overview-zh.png)
 
 ![Infra Sentinel AI 用量](assets/ai-usage-zh.png)
 
@@ -93,16 +93,13 @@ Network 和 AI 用量都使用同一套观测结构：
 
 ## 本地设施发现
 
-接入服务发布短时、仅当前用户可读的
-[`infra.discovery.registration@20260810.1`](https://github.com/glenzli/infra-protocol) 租约。
-Sentinel 不扫描端口、不按进程名猜测，只对具体协议版本和 binding 做精确交集，然后连接所选
-服务。Discovery 不携带指标、Console URL、通用请求信封，也不会赋予启停、配置或维护权限。
+接入服务发布由 [Infra Protocol](https://github.com/glenzli/infra-protocol) 定义的短时、仅当前用户可读租约。
+Sentinel 不扫描端口、不按进程名猜测，只对具体协议版本和 binding 做精确交集，然后连接所选服务。
+Discovery 不携带指标、Console URL、通用请求信封，也不会赋予启停、配置或维护权限。
 
 当前已验证的接入包括
-[Paged Context Protocol (PCP)](https://github.com/glenzli/paged-context-protocol) 的
-`pcp.runtime.observer@20260810.1`，以及
-[Infer Runtime](https://github.com/glenzli/infer-runtime) 的
-`infer-runtime.status@20260810.1`。两套应用协议仍彼此独立；Infra Protocol 只统一发现。
+[Paged Context Protocol (PCP)](https://github.com/glenzli/paged-context-protocol) 与
+[Infer Runtime](https://github.com/glenzli/infer-runtime)。两套应用协议仍彼此独立；Infra Protocol 只统一发现。
 Sentinel 为两者分别实现 adapter，只把有界状态、指标、问题、观测时间与可选的本机
 **打开 Console** 链接投影到 UI。每个被发现的设施都是独立的一级模块与详情页。
 未知协议会被忽略，不会被猜测为兼容。详见[设施发现](docs/facility-discovery.md)。
@@ -125,7 +122,7 @@ Mihomo / VPS / Xray / OpenCode / Codex → Collectors → SQLite 指标 ┐
 - Collector 失败相互隔离，一个来源异常不会阻断其他资源；
 - 设施发现与 Provider 协议 I/O 使用独立生命周期，不会阻塞资源采样。
 
-当前本地 Projection 协议版本为 `20260810.1`，指标查询支持分钟、5 分钟、小时和天级聚合，查询范围和结果点数均有上限。
+Projection 与发现合同使用日期化 schema，并要求精确的兼容版本。指标查询支持分钟、5 分钟、小时和天级聚合，查询范围和结果点数均有上限。
 
 ## 支持范围
 
@@ -198,7 +195,7 @@ Host edge-a
 
 若启用 Xray 用户统计，需要为每个客户端设置唯一 `email` 标签、开启用户上下行统计，并让 StatsService 只监听远端回环地址。具体字段由 Xray 自己的配置格式决定；Infra Sentinel 不会自动修改服务端配置。
 
-配置合同使用 `YYYYMMDD.修订号`，当前版本为 `20260808.4`。默认配置不包含任何真实主机或账户。
+配置合同使用 `YYYYMMDD.修订号`。默认配置不包含任何真实主机或账户。
 
 ## 本地数据与隐私
 

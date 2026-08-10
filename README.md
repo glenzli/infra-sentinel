@@ -17,7 +17,7 @@ The menu bar icon only communicates overall health. Open the app to inspect reso
 
 Infra Sentinel does not capture packets, read prompts or response bodies, inspect URL paths or project files, terminate processes, delete files, disconnect the network, or modify proxy configuration.
 
-![Infra Sentinel network and AI resource modules](assets/overview-en.png)
+![Infra Sentinel overview](assets/overview-en.png)
 
 ![Infra Sentinel AI usage](assets/ai-usage-en.png)
 
@@ -96,22 +96,20 @@ Historical queries run through a dedicated read-only channel and do not wait for
 
 ## Local facility discovery
 
-Participating services publish a short-lived, owner-only
-[`infra.discovery.registration@20260810.1`](https://github.com/glenzli/infra-protocol) lease. Sentinel
-discovers these leases without scanning ports or guessing process names, intersects exact protocol
-versions and bindings, and connects to the selected service. Discovery carries no metrics, Console
-URL, request envelope, or control authority.
+Participating services publish a short-lived, owner-only lease defined by
+[Infra Protocol](https://github.com/glenzli/infra-protocol). Sentinel discovers these leases without
+scanning ports or guessing process names, intersects exact protocol versions and bindings, and
+connects to the selected service. Discovery carries no metrics, Console URL, request envelope, or
+control authority.
 
 Current verified integrations are
-[Paged Context Protocol (PCP)](https://github.com/glenzli/paged-context-protocol) through
-`pcp.runtime.observer@20260810.1`, and
-[Infer Runtime](https://github.com/glenzli/infer-runtime) through
-`infer-runtime.status@20260810.1`. These application protocols remain independent; Infra Protocol
-only standardizes discovery. Sentinel implements one adapter for each and normalizes only bounded
-status, metrics, issues, observation time, and an optional loopback **Open Console** link into its
-private UI projection. Every discovered facility is presented as its own first-class module and
-detail view. Unknown protocols are ignored rather than guessed compatible. See
-[facility discovery](docs/facility-discovery.md).
+[Paged Context Protocol (PCP)](https://github.com/glenzli/paged-context-protocol) and
+[Infer Runtime](https://github.com/glenzli/infer-runtime). Their application protocols remain
+independent; Infra Protocol only standardizes discovery. Sentinel implements one adapter for each
+and normalizes only bounded status, metrics, issues, observation time, and an optional loopback
+**Open Console** link into its private UI projection. Every discovered facility is presented as its
+own first-class module and detail view. Unknown protocols are ignored rather than guessed
+compatible. See [facility discovery](docs/facility-discovery.md).
 
 ## Architecture
 
@@ -131,7 +129,9 @@ Local facilities → Infra Protocol discovery → provider adapters ────
 - Collector failures are isolated so one unavailable source cannot block other resources;
 - Facility discovery and provider-protocol I/O have their own lifecycle and never block resource sampling.
 
-The current local Projection protocol version is `20260810.1`. Metric queries support minute, 5-minute, hourly, and daily aggregation, with bounded time ranges and result counts.
+Projection and discovery contracts use date-versioned schemas and require an exact compatible
+version. Metric queries support minute, 5-minute, hourly, and daily aggregation, with bounded time
+ranges and result counts.
 
 ## Support matrix
 
@@ -204,7 +204,7 @@ Host edge-a
 
 To enable Xray user statistics, assign a unique `email` label to every client, enable per-user uplink and downlink statistics, and keep StatsService bound to the remote loopback address. Exact fields follow Xray’s own configuration format; Infra Sentinel never modifies server configuration automatically.
 
-Configuration contracts use `YYYYMMDD.revision`. The current version is `20260808.4`. The default configuration contains no real host or account.
+Configuration contracts use `YYYYMMDD.revision`. The default configuration contains no real host or account.
 
 ## Local data and privacy
 
