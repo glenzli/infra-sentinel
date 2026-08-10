@@ -33,6 +33,7 @@ from configuration import (
     write_user_settings,
 )
 from infra_collectors import CollectorContext, CollectorRegistry, CollectorRun, collected_points
+from facility_observer import FacilityMonitor
 from infra_projection import build_infra_projection
 from metric_query import BUCKET_SECONDS, MAX_RANGE_SECONDS, QUERY_SCHEMA, MetricQuery, execute_metric_query
 from metric_store import MetricStore
@@ -361,6 +362,7 @@ def write_projection_state(
     session: dict[str, Any],
     collector_runs: tuple[CollectorRun, ...] = (),
     storage: dict[str, Any] | None = None,
+    facilities: dict[str, Any] | None = None,
 ) -> None:
     remote_servers = remote.get("servers", [])
     xray_servers = [server.get("xray_stats", {}) for server in remote_servers]
@@ -425,7 +427,7 @@ def write_projection_state(
         "collectors": [run.as_dict() for run in collector_runs],
         # This is a derived, generic resource projection.  The legacy-shaped
         # network fields above remain facts for the detailed network panel.
-        "infra": build_infra_projection(sample, session, remote, level, collector_runs),
+        "infra": build_infra_projection(sample, session, remote, level, collector_runs, facilities),
         "last_event": latest_delta_event(config.state_dir / "events.jsonl"),
     }
     write_projection(config.state_dir, state)
@@ -552,6 +554,7 @@ def handle_sample(
     session_meter: SessionMeter,
     metric_store: MetricStore,
     collector_registry: CollectorRegistry,
+    facility_monitor: FacilityMonitor,
     logger: logging.Logger,
 ) -> tuple[dict[str, Any], bool]:
     sample = collect_interval(client, tracker, config.monitor.sample_seconds)
@@ -637,6 +640,7 @@ def handle_sample(
         session_snapshot,
         collector_runs,
         metric_store.summary(),
+        facility_monitor.snapshot(),
     )
     write_health_state(config, "ok")
     return sample, command_effects.restart_requested
@@ -699,6 +703,8 @@ def main() -> int:
             checkpoint_path=config.state_dir / "opencode-usage-counters.json"
         ))
         collector_registry.register(CodexUsageCollector(checkpoint_path=config.state_dir / "codex-usage-day.json"))
+        facility_monitor = FacilityMonitor(logger)
+        facility_monitor.start()
         imported = metric_store.import_legacy_network()
         if imported:
             logger.info("imported legacy network metric points=%s", imported)
@@ -730,6 +736,7 @@ def main() -> int:
                         session_meter,
                         metric_store,
                         collector_registry,
+                        facility_monitor,
                         logger,
                     )
                     if restart_requested:
@@ -742,6 +749,7 @@ def main() -> int:
         finally:
             read_only_command_stop.set()
             read_only_command_thread.join(timeout=1)
+            facility_monitor.stop()
             lock.close()
         return 0
     except KeyboardInterrupt:

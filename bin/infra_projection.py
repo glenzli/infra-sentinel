@@ -11,7 +11,7 @@ from infra_model import MetricPoint, SourceStatus
 from infra_registry import DEFAULT_SOURCE_REGISTRY
 
 
-PROJECTION_SCHEMA = "20260809.3"
+PROJECTION_SCHEMA = "20260810.1"
 
 
 def _number(value: Any) -> int:
@@ -38,6 +38,12 @@ def _status_for(level: str, remote: dict[str, Any], runs: Iterable[CollectorRun]
     if remote.get("enabled") and remote.get("status") == "error":
         return "degraded"
     return "healthy"
+
+
+def _overall_status(base: str, facilities: dict[str, Any]) -> str:
+    facility_status = str(facilities.get("status") or "disabled")
+    rank = {"healthy": 0, "starting": 0, "disabled": 0, "warning": 1, "degraded": 1, "critical": 2}
+    return facility_status if rank.get(facility_status, 1) > rank.get(base, 1) else base
 
 
 def _remote_sources(remote: dict[str, Any], runs: Iterable[CollectorRun]) -> list[SourceStatus]:
@@ -143,10 +149,14 @@ def build_infra_projection(
     remote: dict[str, Any],
     alert_level: str,
     collector_runs: tuple[CollectorRun, ...] = (),
+    facilities: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Produce a generic overview without changing existing network accounting."""
 
     timestamp = str(sample.get("timestamp") or "")
+    facility_state = facilities if isinstance(facilities, dict) else {
+        "schema": "20260810.1", "status": "disabled", "total": 0, "healthy": 0, "attention": 0, "items": [],
+    }
     kernel = session.get("kernel") if isinstance(session.get("kernel"), dict) else {}
     vps = session.get("vps") if isinstance(session.get("vps"), dict) else {}
     local_total = _number(kernel.get("total_bytes"))
@@ -222,17 +232,19 @@ def build_infra_projection(
             attribution_method="exact",
             confidence="high",
         ).as_dict())
+    base_status = _status_for(alert_level, remote, collector_runs)
     return {
         "schema": PROJECTION_SCHEMA,
         "product": {"id": "infra-sentinel", "mode": "network"},
         "overall": {
-            "status": _status_for(alert_level, remote, collector_runs),
-            "active_alerts": active_daily_guards or (0 if alert_level == "none" else 1),
+            "status": _overall_status(base_status, facility_state),
+            "active_alerts": (active_daily_guards or (0 if alert_level == "none" else 1)) + _number(facility_state.get("attention")),
         },
         "resources": resources,
         "sources": source_dicts,
         "metrics": metrics,
         "capabilities": DEFAULT_SOURCE_REGISTRY.capabilities(),
         "collectors": [run.as_dict() for run in collector_runs],
+        "facilities": facility_state,
         "ai_usage": {"schema": AI_USAGE_SNAPSHOT_SCHEMA, "sources": ai_snapshots, "aggregate": ai_aggregate} if ai_resource else {},
     }

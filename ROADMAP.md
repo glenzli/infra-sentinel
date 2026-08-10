@@ -20,6 +20,7 @@ Infra Sentinel 已从单一流量工具迁移为个人 AI Infra 可观测面板�
 | 本地时序存储 | 已完成最小闭环 | SQLite WAL、幂等写入、旧网络回填、受限聚合查询 |
 | Tauri 桌面壳 | 已完成 | macOS App、菜单栏健康状态、设置、通知与受限 Rust bridge |
 | AI 用量 | 已完成首批来源 | OpenCode 与 Codex 今日/历史/模型/活动观测 |
+| 本地设施观测 | 已完成 | Infra Discovery 自动发现、PCP / Infer Runtime 独立协议 adapter 与 Console 深链 |
 | 跨资源洞察 | 尚未开始 | 等待足够稳定、可比较的长期样本 |
 | 本地计算与存储 | 候选 | 只有出现明确需求和可靠归因路径后才进入主线 |
 
@@ -45,6 +46,8 @@ Versioned UI projections ── Notifications
 - **Policies**：网络突增、VPS 每日用量和事件状态机；
 - **Projections**：将事实转换为菜单栏、概览、资源详情和通知；
 - **Native App**：窗口、导航、本地化和交互，不承担业务计量。
+- **Infra Discovery**：只负责验证注册、租约以及具体协议版本与 binding 的精确匹配；
+- **Facility adapters**：分别拥有 PCP 与 Infer Runtime 应用 wire 的读取和私有 Projection 归一化；专属诊断留在设施 Console。
 
 ## 下一阶段：稳定与信任
 

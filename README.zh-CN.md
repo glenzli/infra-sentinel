@@ -7,6 +7,8 @@ Infra Sentinel 是一个本地优先的个人 AI Infra 可观测面板。它目�
 - **网络**：本机 Mihomo 流量、域名与代理路径归因、Linux VPS 账单量、Xray 用户逻辑流量；
 - **AI 用量**：OpenCode 与 Codex 的本地 Token 记录、模型构成、消耗速率和 Agent 活动。
 
+它还会通过 Infra Discovery 自动发现参与接入的本地基础设施，再由各自协议适配器展示有界健康数据；设施专属的诊断与操作仍留在各自的 Console。
+
 菜单栏只表达整体健康状态。详细数据、趋势、来源差异和告警都在 App 中查看。
 
 它不会抓包，不读取提示词、响应正文、URL 路径或项目文件，也不会杀进程、删除文件、断网或修改代理配置。
@@ -87,28 +89,36 @@ Network 和 AI 用量都使用同一套观测结构：
 
 历史查询通过独立只读通道执行，不等待 5 秒网络采样周期；UI 只消费受限查询结果，不接触 SQLite 或任意文件。
 
+## 本地设施发现
+
+接入服务发布短时、仅当前用户可读的 `infra.discovery.registration@20260810.1` 租约。
+Sentinel 不扫描端口、不按进程名猜测，只对具体协议版本和 binding 做精确交集，然后连接所选
+服务。Discovery 不携带指标、Console URL、通用请求信封，也不会赋予启停、配置或维护权限。
+
+Paged Context Protocol 与 Infer Runtime 分别拥有独立应用协议：
+`pcp.runtime.observer@20260810.1` 和 `infer-runtime.status@20260810.1`。Sentinel 为两者分别实现
+adapter，只把有界状态、指标、问题、观测时间与可选的本机 **打开 Console** 链接投影到 UI。
+未知协议会被忽略，不会被猜测为兼容。详见[设施发现](docs/facility-discovery.md)。
+
 ## 架构
 
 ```text
-Mihomo / VPS / Xray / OpenCode / Codex
-                  ↓
-        Python Infra Agent
-   Collectors · Checkpoints · Policies
-                  ↓
-        SQLite canonical metrics
-                  ↓
-   Versioned Projection + typed commands
-                  ↓
-       Tauri desktop UI / notifications
+Mihomo / VPS / Xray / OpenCode / Codex → Collectors → SQLite 指标 ┐
+本地设施 → Infra Discovery → Provider adapters ──────────────────┤
+                                                                  ↓
+                                                版本化 Projection + 命令
+                                                                  ↓
+                                                    Tauri UI / 通知
 ```
 
 - Python Agent 是采样、计量、存储、策略和 Projection 的唯一所有者；
 - SQLite WAL 使用稳定身份键写入区间 counter，防止重启或回填重复计数；
 - Tauri WebView 只能读取版本化 Projection，并提交白名单命令；
 - Rust bridge 不提供任意文件访问、Shell 或 SQL 能力；
-- Collector 失败相互隔离，一个来源异常不会阻断其他资源。
+- Collector 失败相互隔离，一个来源异常不会阻断其他资源；
+- 设施发现与 Provider 协议 I/O 使用独立生命周期，不会阻塞资源采样。
 
-当前本地协议版本为 `20260809.2`，指标查询支持分钟、5 分钟、小时和天级聚合，查询范围和结果点数均有上限。
+当前本地 Projection 协议版本为 `20260810.1`，指标查询支持分钟、5 分钟、小时和天级聚合，查询范围和结果点数均有上限。
 
 ## 支持范围
 
@@ -120,7 +130,8 @@ Mihomo / VPS / Xray / OpenCode / Codex
 - 通过 OpenSSH Host alias 访问的 Linux VPS；
 - 可选 Xray StatsService 用户统计；
 - OpenCode Desktop 本地会话库或兼容 CLI；
-- Codex 本地状态库。
+- Codex 本地状态库；
+- 发布兼容 Infra Discovery offer 的 PCP 与 Infer Runtime 本地设施。
 
 当前不支持：
 

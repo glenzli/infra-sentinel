@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:infra:discovery:registration:20260810.1",
+  "title": "Infra Discovery Registration",
+  "description": "A leased declaration of protocol offers from one local service process.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "schema_version", "service", "lease", "offers"],
+  "properties": {
+    "schema": { "const": "infra.discovery.registration" },
+    "schema_version": { "const": "20260810.1" },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "instance_id", "generation"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/service_kind" },
+        "instance_id": { "$ref": "#/$defs/file_token" },
+        "generation": { "$ref": "#/$defs/file_token" }
+      }
+    },
+    "lease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["renewed_at", "expires_at"],
+      "properties": {
+        "renewed_at": { "type": "string", "format": "date-time", "maxLength": 40 },
+        "expires_at": { "type": "string", "format": "date-time", "maxLength": 40 }
+      }
+    },
+    "offers": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/offer" }
+    }
+  },
+  "$defs": {
+    "service_kind": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$"
+    },
+    "file_token": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "contract_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+/@%-]*$"
+    },
+    "contract_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$"
+    },
+    "offer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "protocol_versions", "binding", "endpoint"],
+      "properties": {
+        "protocol": { "$ref": "#/$defs/contract_id" },
+        "protocol_versions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/contract_version" }
+        },
+        "binding": { "$ref": "#/$defs/contract_id" },
+        "endpoint": { "type": "string", "minLength": 1, "maxLength": 512 }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "binding": { "const": "infra.local.unix-socket" } },
+            "required": ["binding"]
+          },
+          "then": {
+            "properties": {
+              "endpoint": {
+                "pattern": "^sockets/[A-Za-z0-9][A-Za-z0-9._-]{0,63}\\.sock$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "binding": { "const": "infra.local.windows-named-pipe" } },
+            "required": ["binding"]
+          },
+          "then": {
+            "properties": {
+              "endpoint": {
+                "pattern": "^\\\\\\\\\\.\\\\pipe\\\\infra-protocol\\\\[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

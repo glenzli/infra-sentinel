@@ -7,6 +7,10 @@ Infra Sentinel is a local-first observability dashboard for personal AI infrastr
 - **Network**: local Mihomo traffic, domain and proxy-route attribution, Linux VPS billable traffic, and Xray per-user logical traffic;
 - **AI usage**: local Token records from OpenCode and Codex, model composition, consumption rate, and Agent activity.
 
+It also discovers participating local infrastructure facilities through Infra Discovery and uses a
+provider-owned adapter to show bounded health data. Facility-specific diagnosis and operations
+remain in each facility's own Console.
+
 The menu bar icon only communicates overall health. Open the app to inspect resource details, trends, source discrepancies, and alerts.
 
 Infra Sentinel does not capture packets, read prompts or response bodies, inspect URL paths or project files, terminate processes, delete files, disconnect the network, or modify proxy configuration.
@@ -87,28 +91,39 @@ Network and AI usage share the same observation structure:
 
 Historical queries run through a dedicated read-only channel and do not wait for the 5-second network sampling cycle. The UI consumes bounded query results and never accesses SQLite or arbitrary files directly.
 
+## Local facility discovery
+
+Participating services publish a short-lived, owner-only
+`infra.discovery.registration@20260810.1` lease. Sentinel discovers these leases without scanning
+ports or guessing process names, intersects exact protocol versions and bindings, and connects to
+the selected service. Discovery carries no metrics, Console URL, request envelope, or control
+authority.
+
+Paged Context Protocol and Infer Runtime own independent application protocols:
+`pcp.runtime.observer@20260810.1` and `infer-runtime.status@20260810.1`. Sentinel implements one
+adapter for each and normalizes only bounded status, metrics, issues, observation time, and an
+optional loopback **Open Console** link into its private UI projection. Unknown protocols are
+ignored rather than guessed compatible. See [facility discovery](docs/facility-discovery.md).
+
 ## Architecture
 
 ```text
-Mihomo / VPS / Xray / OpenCode / Codex
-                  ↓
-        Python Infra Agent
-   Collectors · Checkpoints · Policies
-                  ↓
-        SQLite canonical metrics
-                  ↓
-   Versioned Projection + typed commands
-                  ↓
-       Tauri desktop UI / notifications
+Mihomo / VPS / Xray / OpenCode / Codex → Collectors → SQLite metrics ┐
+Local facilities → Infra Discovery → provider adapters ──────────────┤
+                                                                     ↓
+                                              Versioned Projection + commands
+                                                                     ↓
+                                                 Tauri UI / notifications
 ```
 
 - The Python Agent is the sole owner of sampling, accounting, storage, policies, and Projection generation;
 - SQLite WAL stores interval counters with stable identity keys to prevent duplicate accounting after restart or backfill;
 - The Tauri WebView can only read a versioned Projection and submit allowlisted commands;
 - The Rust bridge exposes no arbitrary file, shell, or SQL access;
-- Collector failures are isolated so one unavailable source cannot block other resources.
+- Collector failures are isolated so one unavailable source cannot block other resources;
+- Facility discovery and provider-protocol I/O have their own lifecycle and never block resource sampling.
 
-The current local protocol version is `20260809.2`. Metric queries support minute, 5-minute, hourly, and daily aggregation, with bounded time ranges and result counts.
+The current local Projection protocol version is `20260810.1`. Metric queries support minute, 5-minute, hourly, and daily aggregation, with bounded time ranges and result counts.
 
 ## Support matrix
 
@@ -120,7 +135,8 @@ Officially supported:
 - Linux VPS hosts accessed through OpenSSH Host aliases;
 - Optional Xray StatsService per-user statistics;
 - The OpenCode Desktop local session database or compatible CLI;
-- The Codex local state database.
+- The Codex local state database;
+- Local facilities publishing compatible Infra Discovery offers for the supported PCP or Infer Runtime protocol.
 
 Not currently supported:
 

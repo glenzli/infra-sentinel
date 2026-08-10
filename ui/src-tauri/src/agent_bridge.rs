@@ -9,6 +9,7 @@ use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
@@ -17,7 +18,7 @@ use crate::app_paths::state_dir;
 // Keep this in lockstep with bin/agent_protocol.py. The desktop bridge owns
 // command/projection validation, so a dated protocol revision must change on
 // both sides before a new Agent can be displayed.
-const PROTOCOL_SCHEMA: &str = "20260809.2";
+const PROTOCOL_SCHEMA: &str = "20260810.1";
 
 #[derive(Serialize)]
 pub struct CommandReceipt {
@@ -128,9 +129,54 @@ pub fn submit_agent_command(
     write_command(&command_type, object)
 }
 
+fn validated_console_url(value: &str) -> Result<url::Url, String> {
+    let parsed = url::Url::parse(value).map_err(|_| "Console URL is invalid".to_owned())?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err("Console URL must use loopback HTTP(S)".to_owned());
+    }
+    let address = match parsed.host() {
+        Some(url::Host::Ipv4(address)) => std::net::IpAddr::V4(address),
+        Some(url::Host::Ipv6(address)) => std::net::IpAddr::V6(address),
+        _ => return Err("Console URL must use a literal loopback address".to_owned()),
+    };
+    if !address.is_loopback() {
+        return Err("Console URL must use a loopback address".to_owned());
+    }
+    Ok(parsed)
+}
+
+#[tauri::command]
+pub fn open_console(url: String) -> Result<(), String> {
+    let url = validated_console_url(&url)?.to_string();
+    #[cfg(target_os = "macos")]
+    let mut command = Command::new("/usr/bin/open");
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("rundll32.exe");
+        command.arg("url.dll,FileProtocolHandler");
+        command
+    };
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    let mut command = Command::new("xdg-open");
+    let status = command
+        .arg(url)
+        .status()
+        .map_err(|error| format!("cannot open facility Console: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("the platform URL opener rejected the facility Console".to_owned())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{command_allowed, decode_projection, publish_command, PROTOCOL_SCHEMA};
+    use super::{
+        command_allowed, decode_projection, publish_command, validated_console_url, PROTOCOL_SCHEMA,
+    };
     use serde_json::{json, Map, Value};
     use std::fs;
 
@@ -167,5 +213,14 @@ mod tests {
         assert!(
             decode_projection(&format!(r#"{{"schema":"{PROTOCOL_SCHEMA}","infra":{{}}}}"#)).is_ok()
         );
+    }
+
+    #[test]
+    fn console_links_are_limited_to_literal_loopback_urls() {
+        assert!(validated_console_url("http://127.0.0.1:4318/#health").is_ok());
+        assert!(validated_console_url("http://[::1]:8790/").is_ok());
+        assert!(validated_console_url("https://example.com/").is_err());
+        assert!(validated_console_url("http://localhost:4318/").is_err());
+        assert!(validated_console_url("file:///tmp/console.html").is_err());
     }
 }

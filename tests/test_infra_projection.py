@@ -42,7 +42,7 @@ class InfraProjectionTests(unittest.TestCase):
             "none",
         )
 
-        self.assertEqual(projection["schema"], "20260809.3")
+        self.assertEqual(projection["schema"], "20260810.1")
         self.assertEqual(projection["overall"]["status"], "healthy")
         self.assertEqual(projection["resources"][0]["primary_metric"], "network.local_bytes")
         self.assertEqual(projection["resources"][0]["primary_value"], 1234)
@@ -166,6 +166,33 @@ class InfraProjectionTests(unittest.TestCase):
         self.assertEqual(projection["ai_usage"]["aggregate"]["today"]["tokens"], 42)
         self.assertEqual(projection["ai_usage"]["sources"][0]["source_id"], "future-agent")
         self.assertIn("future-agent", {item["id"] for item in projection["sources"]})
+
+    def test_facility_health_is_separate_from_resources_and_contributes_to_overall_status(self) -> None:
+        facilities = {
+            "schema": "20260810.1",
+            "status": "degraded",
+            "total": 2,
+            "healthy": 1,
+            "attention": 1,
+            "items": [
+                {"id": "pcp:default", "status": "healthy"},
+                {"id": "infer-runtime:default", "status": "stale"},
+            ],
+        }
+
+        projection = build_infra_projection(
+            sample(),
+            {"kernel": {"total_bytes": 100}, "vps": {"total_bytes": 0}},
+            {"enabled": False, "status": "disabled", "servers": []},
+            "none",
+            (),
+            facilities,
+        )
+
+        self.assertEqual({resource["id"] for resource in projection["resources"]}, {"network"})
+        self.assertEqual(projection["facilities"], facilities)
+        self.assertEqual(projection["overall"]["status"], "degraded")
+        self.assertEqual(projection["overall"]["active_alerts"], 1)
 
 
 if __name__ == "__main__":

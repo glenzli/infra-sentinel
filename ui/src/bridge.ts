@@ -24,11 +24,60 @@ export interface ResourceProjection {
   online_source_count: number;
 }
 
+export interface FacilityMetric {
+  id: string;
+  kind: "gauge" | "counter" | "state" | string;
+  value: number | string | boolean;
+  unit?: string;
+  window_seconds?: number;
+  dimensions?: Record<string, string>;
+}
+
+export interface FacilityObservationSnapshot {
+  schema: string;
+  schema_version: string;
+  captured_at: string;
+  sequence: number;
+  status: { state: string; reason_codes: string[] };
+  headline_metrics: string[];
+  metrics: FacilityMetric[];
+  issues: Array<{ code: string; severity: string; subject_id?: string; observed_at: string }>;
+  extensions?: Record<string, unknown>;
+}
+
+export interface FacilityProjection {
+  id: string;
+  kind: string;
+  instance_id: string;
+  generation: string;
+  label: string;
+  status: string;
+  observed_at?: string;
+  lease_expires_at: string;
+  console_url?: string;
+  protocol: string;
+  protocol_version: string;
+  binding: string;
+  snapshot?: FacilityObservationSnapshot;
+  error_kind?: string;
+}
+
+export interface FacilitiesProjection {
+  schema: string;
+  status: string;
+  total: number;
+  healthy: number;
+  attention: number;
+  items: FacilityProjection[];
+  error_kind?: string;
+}
+
 export interface InfraProjection {
   overall: { status: OverallStatus; active_alerts: number };
   resources: ResourceProjection[];
   sources: SourceProjection[];
   ai_usage?: Record<string, unknown>;
+  facilities?: FacilitiesProjection;
 }
 
 export interface AgentProjection {
@@ -68,4 +117,8 @@ export function submitAgentCommand(commandType: string, payload: Record<string, 
 
 export function readAgentCommandResult(commandId: string): Promise<AgentCommandResult | null> {
   return invoke<AgentCommandResult | null>("read_agent_command_result", { commandId });
+}
+
+export function openConsole(url: string): Promise<void> {
+  return invoke<void>("open_console", { url });
 }
