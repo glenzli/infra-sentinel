@@ -1,43 +1,345 @@
-.section-link { background: transparent; border: 0; color: #456a9e; cursor: pointer; font-size: 12px; font-weight: 700; padding: 4px 0; }
-.facility-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
-.facility-card { background: #fff; border: 1px solid #e1e5ea; border-radius: 12px; display: grid; gap: 10px; min-height: 154px; padding: 15px 16px 13px; }
-.facility-card--unavailable, .facility-card--unreachable { border-color: #efc9c6; }
-.facility-card--degraded, .facility-card--stale { border-color: #ead9ae; }
-.facility-card__heading, .facility-card__heading > span, .facility-card__footer, .facility-card__meta { align-items: center; display: flex; }
-.facility-card__heading, .facility-card__footer, .facility-card__meta { justify-content: space-between; }
-.facility-card__heading > span { gap: 8px; min-width: 0; }
-.facility-card__heading b { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.facility-card__heading em { color: #707780; font-size: 11px; font-style: normal; font-weight: 650; }
-.facility-card__meta { color: #888e96; font-size: 10px; gap: 10px; }
-.facility-card__metrics { display: grid; gap: 10px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.facility-card__metrics span { border-left: 2px solid #d9e3ef; display: grid; gap: 3px; min-width: 0; padding-left: 8px; }
-.facility-card__metrics small { color: #7b828b; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.facility-card__metrics strong { font-size: 17px; letter-spacing: -.03em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.facility-card__footer { border-top: 1px solid #eff0f2; color: #8b9199; font-size: 10px; padding-top: 9px; }
-.facility-console { background: transparent; border: 0; color: #456a9e; cursor: pointer; font-size: 10px; font-weight: 720; padding: 0; }
-.facility-console--missing { color: #a1a6ad; cursor: default; }
-.facility-page-note { background: #f1f6fb; border-radius: 8px; color: #52677f; font-size: 12px; margin: 0 0 14px; padding: 10px 12px; }
-.facility-page-note--warning { background: #fff7e8; color: #8a5b12; margin-bottom: 0; }
-.facility-detail-list { display: grid; gap: 12px; }
-.facility-detail { background: #fff; border: 1px solid #e1e5ea; border-radius: 12px; padding: 18px; }
-.facility-detail > header { align-items: flex-start; display: flex; gap: 20px; justify-content: space-between; }
-.facility-detail > header > div:last-child { align-items: center; display: flex; gap: 9px; }
-.facility-detail__identity { align-items: center; display: flex; gap: 9px; }
-.facility-detail h3 { font-size: 17px; margin: 0; }
-.facility-detail header p { color: #7c828a; font-size: 11px; margin: 5px 0 0 17px; }
-.facility-detail__facts { border-bottom: 1px solid #eceff2; border-top: 1px solid #eceff2; display: grid; gap: 15px; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 14px; padding: 12px 0; }
-.facility-detail__facts span { display: grid; gap: 4px; min-width: 0; }
-.facility-detail__facts small { color: #858b93; font-size: 10px; }
-.facility-detail__facts strong { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.facility-detail__columns { display: grid; gap: 22px; grid-template-columns: 1fr 1fr; padding-top: 14px; }
-.facility-detail__columns h4 { font-size: 12px; margin: 0 0 8px; }
-.facility-detail__columns ul { list-style: none; margin: 0; padding: 0; }
-.facility-detail__columns li { align-items: center; border-top: 1px solid #eff0f2; display: flex; font-size: 11px; justify-content: space-between; padding: 8px 0; }
-.facility-detail__columns li:first-child { border-top: 0; }
-.facility-detail__columns li span { display: grid; gap: 2px; }
-.facility-detail__columns li small { color: #9aa0a6; font-size: 9px; }
-.facility-detail__columns li strong { font-size: 11px; }
-.facility-issue--warning strong { color: #a76500; }.facility-issue--critical strong { color: #c5221f; }
-.facility-detail__empty { color: #858b93; }
-.facility-detail__overflow { color: #858b93; font-size: 10px; margin: 10px 0 0; text-align: right; }
-@media (max-width: 820px) { .facility-detail__facts, .facility-detail__columns { grid-template-columns: 1fr; }.facility-card__metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.facility-card {
+  background: #fff;
+  border: 1px solid #e1e5ea;
+  box-sizing: border-box;
+  border-radius: 12px;
+  display: grid;
+  gap: 10px;
+  min-height: 154px;
+  min-width: 0;
+  padding: 15px 16px 13px;
+  transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease;
+  width: 100%;
+}
+
+.facility-card--interactive {
+  cursor: pointer;
+}
+
+.facility-card--interactive:hover,
+.facility-card--interactive:focus-visible {
+  border-color: #b7c3d2;
+  box-shadow: 0 8px 24px rgba(31, 42, 58, .08);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.resource-grid--compact > .facility-card {
+  grid-column: span 2;
+  min-height: 176px;
+  padding: 17px 18px;
+}
+
+.facility-card--unavailable,
+.facility-card--unreachable {
+  border-color: #efc9c6;
+}
+
+.facility-card--degraded,
+.facility-card--stale {
+  border-color: #ead9ae;
+}
+
+.facility-card__heading,
+.facility-card__heading > span,
+.facility-card__footer,
+.facility-card__meta,
+.facility-card__actions {
+  align-items: center;
+  display: flex;
+}
+
+.facility-card__heading,
+.facility-card__footer,
+.facility-card__meta {
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.facility-card__heading > span {
+  gap: 8px;
+  min-width: 0;
+}
+
+.facility-card__heading b {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.facility-card__heading em {
+  color: #707780;
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 650;
+}
+
+.facility-card__meta {
+  color: #888e96;
+  font-size: 10px;
+  gap: 10px;
+}
+
+.facility-card__meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.facility-card__meta span:last-child {
+  flex: 0 0 auto;
+}
+
+.facility-card__metrics,
+.facility-instance-headlines {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.facility-card__metrics {
+  min-width: 0;
+}
+
+.facility-card__metrics span,
+.facility-instance-headlines span {
+  border-left: 2px solid #d9e3ef;
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding-left: 8px;
+}
+
+.facility-card__metrics small,
+.facility-instance-headlines small {
+  color: #7b828b;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.facility-card__metrics strong,
+.facility-instance-headlines strong {
+  font-size: 17px;
+  letter-spacing: -.03em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.facility-card__footer {
+  border-top: 1px solid #eff0f2;
+  color: #8b9199;
+  font-size: 10px;
+  padding-top: 9px;
+}
+
+.facility-card__footer > span:first-child {
+  flex: 0 0 auto;
+}
+
+.facility-card__actions {
+  flex: 0 1 auto;
+  gap: 14px;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.facility-console,
+.facility-details-link {
+  background: transparent;
+  border: 0;
+  color: #456a9e;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 720;
+  padding: 0;
+}
+
+.facility-details-link {
+  color: #1f4f86;
+  white-space: nowrap;
+}
+
+.facility-console--missing {
+  color: #a1a6ad;
+  cursor: default;
+}
+
+.facility-page-note {
+  background: #f1f6fb;
+  border-radius: 8px;
+  color: #52677f;
+  font-size: 12px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+}
+
+.facility-page-note--warning {
+  background: #fff7e8;
+  color: #8a5b12;
+}
+
+.facility-instance-page {
+  background: #fff;
+  border: 1px solid #e1e5ea;
+  border-radius: 14px;
+  padding: 22px;
+}
+
+.facility-instance-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+}
+
+.facility-instance-header > div:last-child {
+  align-items: center;
+  display: flex;
+  gap: 9px;
+}
+
+.facility-instance-header h2 {
+  font-size: 24px;
+  margin: 0;
+}
+
+.facility-instance-header p:last-child {
+  color: #7c828a;
+  font-size: 11px;
+  margin: 6px 0 0 17px;
+}
+
+.facility-detail__identity {
+  align-items: center;
+  display: flex;
+  gap: 9px;
+}
+
+.facility-instance-headlines {
+  background: #f7f9fb;
+  border-radius: 10px;
+  margin-top: 18px;
+  padding: 14px;
+}
+
+.facility-instance-headlines strong {
+  font-size: 22px;
+}
+
+.facility-detail__facts {
+  border-bottom: 1px solid #eceff2;
+  border-top: 1px solid #eceff2;
+  display: grid;
+  gap: 15px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 18px;
+  padding: 14px 0;
+}
+
+.facility-detail__facts span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.facility-detail__facts small {
+  color: #858b93;
+  font-size: 10px;
+}
+
+.facility-detail__facts strong {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.facility-detail__columns {
+  display: grid;
+  gap: 28px;
+  grid-template-columns: minmax(0, 1.35fr) minmax(260px, .65fr);
+  padding-top: 18px;
+}
+
+.facility-detail__columns h3 {
+  font-size: 13px;
+  margin: 0 0 8px;
+}
+
+.facility-detail__columns ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.facility-detail__columns li {
+  align-items: center;
+  border-top: 1px solid #eff0f2;
+  display: flex;
+  font-size: 11px;
+  justify-content: space-between;
+  padding: 8px 0;
+}
+
+.facility-detail__columns li:first-child {
+  border-top: 0;
+}
+
+.facility-detail__columns li span {
+  display: grid;
+  gap: 2px;
+}
+
+.facility-detail__columns li small {
+  color: #9aa0a6;
+  font-size: 9px;
+}
+
+.facility-detail__columns li strong {
+  font-size: 11px;
+}
+
+.facility-issue--warning strong {
+  color: #a76500;
+}
+
+.facility-issue--critical strong {
+  color: #c5221f;
+}
+
+.facility-detail__empty {
+  color: #858b93;
+}
+
+.facility-detail__overflow {
+  color: #858b93;
+  font-size: 10px;
+  margin: 14px 0 0;
+  text-align: right;
+}
+
+@media (max-width: 820px) {
+  .resource-grid--compact > .facility-card {
+    grid-column: auto;
+  }
+
+  .facility-detail__facts,
+  .facility-detail__columns,
+  .facility-instance-headlines {
+    grid-template-columns: 1fr;
+  }
+
+  .facility-card__metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .facility-instance-header {
+    display: grid;
+  }
+}

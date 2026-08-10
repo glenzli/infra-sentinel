@@ -2,18 +2,19 @@
 
 [English](README.md) | **中文**
 
-Infra Sentinel 是一个本地优先的个人 AI Infra 可观测面板。它目前专注于两类最实际、也最容易失控的投入：
+Infra Sentinel 是一个本地优先的个人 AI Infra 可观测面板。它目前覆盖两类可计量资源，以及参与接入的本地设施健康状态：
 
 - **网络**：本机 Mihomo 流量、域名与代理路径归因、Linux VPS 账单量、Xray 用户逻辑流量；
-- **AI 用量**：OpenCode 与 Codex 的本地 Token 记录、模型构成、消耗速率和 Agent 活动。
+- **AI 用量**：OpenCode 与 Codex 的本地 Token 记录、模型构成、消耗速率和 Agent 活动；
+- **本地设施**：自动发现兼容的 runtime 与服务，按各自协议投影受限健康状态。
 
-它还会通过 Infra Discovery 自动发现参与接入的本地基础设施，再由各自协议适配器展示有界健康数据；设施专属的诊断与操作仍留在各自的 Console。
+它还会通过 [Infra Protocol](https://github.com/glenzli/infra-protocol) 的发现合同自动发现参与接入的本地基础设施。每个设施都作为独立资源卡展示受限的只读详情；设施专属的诊断与操作仍留在原生 Console，并由系统浏览器打开。
 
 菜单栏只表达整体健康状态。详细数据、趋势、来源差异和告警都在 App 中查看。
 
 它不会抓包，不读取提示词、响应正文、URL 路径或项目文件，也不会杀进程、删除文件、断网或修改代理配置。
 
-![Infra Sentinel 中文概览](assets/overview-zh.png)
+![Infra Sentinel Network 与 AI 资源模块](assets/overview-zh.png)
 
 ![Infra Sentinel AI 用量](assets/ai-usage-zh.png)
 
@@ -28,6 +29,7 @@ Infra Sentinel 不把字节、Token 和告警硬凑成一个“总分”。每�
 - 当前增长速度是否异常？
 - 本机观测值、代理逻辑量和 VPS 账单量为什么不同？
 - 某个数据源是否失联，统计窗口是否完整？
+- 哪些本地基础设施正常或降级，它的原生 Console 在哪里？
 
 如果某项数据无法可靠获得，界面会显示未知、隐藏该模块或标记来源异常，不用推断值冒充账单。
 
@@ -91,20 +93,25 @@ Network 和 AI 用量都使用同一套观测结构：
 
 ## 本地设施发现
 
-接入服务发布短时、仅当前用户可读的 `infra.discovery.registration@20260810.1` 租约。
+接入服务发布短时、仅当前用户可读的
+[`infra.discovery.registration@20260810.1`](https://github.com/glenzli/infra-protocol) 租约。
 Sentinel 不扫描端口、不按进程名猜测，只对具体协议版本和 binding 做精确交集，然后连接所选
 服务。Discovery 不携带指标、Console URL、通用请求信封，也不会赋予启停、配置或维护权限。
 
-Paged Context Protocol 与 Infer Runtime 分别拥有独立应用协议：
-`pcp.runtime.observer@20260810.1` 和 `infer-runtime.status@20260810.1`。Sentinel 为两者分别实现
-adapter，只把有界状态、指标、问题、观测时间与可选的本机 **打开 Console** 链接投影到 UI。
+当前已验证的接入包括
+[Paged Context Protocol (PCP)](https://github.com/glenzli/paged-context-protocol) 的
+`pcp.runtime.observer@20260810.1`，以及
+[Infer Runtime](https://github.com/glenzli/infer-runtime) 的
+`infer-runtime.status@20260810.1`。两套应用协议仍彼此独立；Infra Protocol 只统一发现。
+Sentinel 为两者分别实现 adapter，只把有界状态、指标、问题、观测时间与可选的本机
+**打开 Console** 链接投影到 UI。每个被发现的设施都是独立的一级模块与详情页。
 未知协议会被忽略，不会被猜测为兼容。详见[设施发现](docs/facility-discovery.md)。
 
 ## 架构
 
 ```text
 Mihomo / VPS / Xray / OpenCode / Codex → Collectors → SQLite 指标 ┐
-本地设施 → Infra Discovery → Provider adapters ──────────────────┤
+本地设施 → Infra Protocol discovery → Provider adapters ─────────┤
                                                                   ↓
                                                 版本化 Projection + 命令
                                                                   ↓
@@ -131,7 +138,9 @@ Mihomo / VPS / Xray / OpenCode / Codex → Collectors → SQLite 指标 ┐
 - 可选 Xray StatsService 用户统计；
 - OpenCode Desktop 本地会话库或兼容 CLI；
 - Codex 本地状态库；
-- 发布兼容 Infra Discovery offer 的 PCP 与 Infer Runtime 本地设施。
+- 发布兼容 Infra Protocol discovery offer 的
+  [PCP](https://github.com/glenzli/paged-context-protocol) 与
+  [Infer Runtime](https://github.com/glenzli/infer-runtime) 本地设施。
 
 当前不支持：
 

@@ -9,9 +9,9 @@ import { renderAiUsageResourcePage } from "./ai_usage_view";
 import { AiAnalysisController, AiTimeRange, AiViewMode } from "./ai_analysis";
 import { renderOverview } from "./overview_view";
 import { loadSettings, renderSettings } from "./settings_view";
-import { renderFacilitiesPage } from "./facility_view";
+import { renderFacilityDetailPage } from "./facility_view";
 
-type AppView = "overview" | "network" | "ai_usage" | "facilities" | "settings";
+type AppView = "overview" | "network" | "ai_usage" | "facility" | "settings";
 
 function appRoot(): HTMLDivElement {
   const root = document.querySelector<HTMLDivElement>("#app");
@@ -21,6 +21,7 @@ function appRoot(): HTMLDivElement {
 
 const root = appRoot();
 let activeView: AppView = "overview";
+let selectedFacilityId: string | undefined;
 let latestProjection: AgentProjection | undefined;
 const networkAnalysis = new NetworkAnalysisController();
 const networkOverviewAnalysis = new NetworkAnalysisController("attribution", "today");
@@ -48,6 +49,7 @@ function topbar(status?: OverallStatus): string {
 function bindChrome(): void {
   root.querySelector<HTMLButtonElement>("#home")?.addEventListener("click", () => {
     activeView = "overview";
+    selectedFacilityId = undefined;
     if (latestProjection) renderProjection(latestProjection);
     else void refresh();
   });
@@ -64,25 +66,42 @@ function renderProjection(projection: AgentProjection): void {
   const sources = network ? projection.infra.sources.filter((source) => source.resource_id === network.id) : [];
   const aiSources = aiUsage ? projection.infra.sources.filter((source) => source.resource_id === aiUsage.id) : [];
   const controls = `<section class="dashboard-actions"><div><p class="eyebrow">${tr("CURRENT SESSION", "当前统计周期")}</p><strong>${formatDuration(projection.session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button></div></section>`;
+  const facilityControls = `<section class="dashboard-actions"><div><p class="eyebrow">${tr("FACILITY", "运行设施")}</p><strong>${projection.infra.facilities?.total ?? 0} ${tr("discovered", "个已发现")}</strong></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button></div></section>`;
+  const selectedFacility = projection.infra.facilities?.items.find((facility) => facility.id === selectedFacilityId);
   const content = activeView === "network" && network
     ? `<section class="dashboard-actions"><div><p class="eyebrow">${tr("CURRENT SESSION", "当前统计周期")}</p><strong>${formatDuration(projection.session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button><button class="button button--danger" id="reset"><span>${tr("Reset totals", "重置统计")}</span></button></div></section>${renderNetworkResourcePage(projection, network, sources, networkAnalysis.snapshot())}`
     : activeView === "ai_usage" && aiUsage
       ? `${controls}${renderAiUsageResourcePage(projection, aiUsage, aiSources, aiAnalysis.snapshot())}`
-    : activeView === "facilities"
-      ? `${controls}${renderFacilitiesPage(projection.infra.facilities)}`
+    : activeView === "facility"
+      ? `${facilityControls}${renderFacilityDetailPage(selectedFacility)}`
     : renderOverview(projection, networkOverviewAnalysis.snapshot());
   root.innerHTML = `<main class="shell">${topbar(projection.infra.overall.status)}${content}${footer(projection)}</main>`;
   root.querySelector<HTMLButtonElement>("#settings")?.addEventListener("click", () => void openSettings());
   root.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", () => void refresh());
   root.querySelector<HTMLButtonElement>("#reset")?.addEventListener("click", () => void requestReset());
-  root.querySelector<HTMLButtonElement>("#back")?.addEventListener("click", () => { activeView = "overview"; renderProjection(projection); });
+  root.querySelector<HTMLButtonElement>("#back")?.addEventListener("click", () => { activeView = "overview"; selectedFacilityId = undefined; renderProjection(projection); });
   root.querySelectorAll<HTMLButtonElement>("[data-resource-id]").forEach((button) => button.addEventListener("click", () => {
     if (button.dataset.resourceId === "network" || button.dataset.resourceId === "ai_usage") { activeView = button.dataset.resourceId; renderProjection(projection); }
   }));
-  root.querySelectorAll<HTMLButtonElement>("[data-view='facilities']").forEach((button) => button.addEventListener("click", () => {
-    activeView = "facilities";
-    renderProjection(projection);
-  }));
+  root.querySelectorAll<HTMLElement>("[data-facility-id]").forEach((card) => {
+    const openDetails = () => {
+      const facilityId = card.dataset.facilityId;
+      if (!facilityId) return;
+      selectedFacilityId = facilityId;
+      activeView = "facility";
+      renderProjection(projection);
+    };
+    card.addEventListener("click", (event) => {
+      if (event.target instanceof Element && event.target.closest("[data-console-url]")) return;
+      openDetails();
+    });
+    card.addEventListener("keydown", (event) => {
+      if (event.target instanceof Element && event.target.closest("[data-console-url]")) return;
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      openDetails();
+    });
+  });
   root.querySelectorAll<HTMLButtonElement>("[data-console-url]").forEach((button) => button.addEventListener("click", async () => {
     const url = button.dataset.consoleUrl;
     if (!url) return;

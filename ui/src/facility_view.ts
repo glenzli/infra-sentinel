@@ -83,43 +83,58 @@ function metricValue(metric: FacilityMetric): string {
 function headlineMetrics(facility: FacilityProjection): FacilityMetric[] {
   const metrics = facility.snapshot?.metrics ?? [];
   const byId = new Map(metrics.map((metric) => [metric.id, metric]));
-  const requested = (facility.snapshot?.headline_metrics ?? []).map((id) => byId.get(id)).filter((metric): metric is FacilityMetric => Boolean(metric));
+  const requested = (facility.snapshot?.headline_metrics ?? [])
+    .map((id) => byId.get(id))
+    .filter((metric): metric is FacilityMetric => Boolean(metric));
   return (requested.length ? requested : metrics).slice(0, 3);
 }
 
-function consoleButton(facility: FacilityProjection, compact = false): string {
+function consoleControl(facility: FacilityProjection, compact = false): string {
   if (!facility.console_url) return `<span class="facility-console facility-console--missing">${tr("No Console", "无 Console")}</span>`;
   return `<button class="${compact ? "facility-console" : "button button--subtle"}" type="button" data-console-url="${escapeHtml(facility.console_url)}">${tr("Open Console", "打开 Console")} ↗</button>`;
 }
 
-function compactCard(facility: FacilityProjection): string {
-  const metrics = headlineMetrics(facility).map((metric) => `<span><small>${escapeHtml(metricLabel(metric.id))}</small><strong>${escapeHtml(metricValue(metric))}</strong></span>`).join("");
-  return `<article class="facility-card facility-card--${escapeHtml(facility.status)}"><div class="facility-card__heading"><span><i class="source-state source-state--${escapeHtml(facility.status)}"></i><b>${escapeHtml(facility.label)}</b></span><em>${escapeHtml(statusLabel(facility.status))}</em></div><div class="facility-card__meta"><span>${escapeHtml(facility.kind)}</span><span>${escapeHtml(facility.protocol_version)}</span></div><div class="facility-card__metrics">${metrics || `<small>${tr("Waiting for the first observation", "等待首次观测")}</small>`}</div><div class="facility-card__footer"><span>${facility.observed_at ? new Date(facility.observed_at).toLocaleTimeString() : "—"}</span>${consoleButton(facility, true)}</div></article>`;
+function facilityCard(facility: FacilityProjection): string {
+  const metrics = headlineMetrics(facility)
+    .map((metric) => `<span><small>${escapeHtml(metricLabel(metric.id))}</small><strong>${escapeHtml(metricValue(metric))}</strong></span>`)
+    .join("");
+  return `<article class="facility-card facility-card--interactive facility-card--${escapeHtml(facility.status)}" data-facility-id="${escapeHtml(facility.id)}" role="button" tabindex="0" aria-label="${escapeHtml(tr(`Open ${facility.label} details`, `打开 ${facility.label} 详情`))}">
+    <div class="facility-card__heading"><span><i class="source-state source-state--${escapeHtml(facility.status)}"></i><b>${escapeHtml(facility.label)}</b></span><em>${escapeHtml(statusLabel(facility.status))}</em></div>
+    <div class="facility-card__meta"><span>${escapeHtml(facility.kind)} · ${escapeHtml(facility.instance_id)}</span><span>${escapeHtml(facility.protocol_version)}</span></div>
+    <div class="facility-card__metrics">${metrics || `<small>${tr("Waiting for the first observation", "等待首次观测")}</small>`}</div>
+    <div class="facility-card__footer"><span>${facility.observed_at ? new Date(facility.observed_at).toLocaleTimeString() : "—"}</span><div class="facility-card__actions">${consoleControl(facility, true)}<span class="facility-details-link">${tr("Details", "详情")} →</span></div></div>
+  </article>`;
 }
 
-export function renderFacilityOverview(facilities?: FacilitiesProjection): string {
-  if (!facilities) return "";
-  if (!facilities.items.length && facilities.error_kind) {
-    return `<section class="module-section facility-module"><div class="section-heading"><div><p class="eyebrow">${tr("FACILITIES", "运行设施")}</p><h2>${tr("Facility discovery", "设施发现")}</h2></div><button class="section-link" type="button" data-view="facilities">${tr("Needs attention", "需要关注")} →</button></div><p class="facility-page-note facility-page-note--warning">${tr("The local registration directory is unavailable. Resource sampling continues normally.", "本机注册目录当前不可用；资源采样仍在正常继续。")}</p></section>`;
+export function renderFacilityCards(facilities?: FacilitiesProjection): string {
+  return facilities?.items.map(facilityCard).join("") ?? "";
+}
+
+export function renderFacilityDetailPage(facility?: FacilityProjection): string {
+  if (!facility) {
+    return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("FACILITY", "运行设施")}</p><h2>${tr("Facility no longer available", "设施已不可用")}</h2></div></div><p class="empty">${tr("The selected registration is no longer present. Return to the overview to choose another instance.", "所选注册已经消失，请返回概览选择其他实例。")}</p></section>`;
   }
-  if (!facilities.items.length) return "";
-  return `<section class="module-section facility-module"><div class="section-heading"><div><p class="eyebrow">${tr("FACILITIES", "运行设施")}</p><h2>${tr("Facilities", "运行设施")}</h2></div><button class="section-link" type="button" data-view="facilities">${facilities.healthy} / ${facilities.total} ${tr("healthy", "正常")} · ${tr("Details", "详情")} →</button></div><div class="facility-grid">${facilities.items.map(compactCard).join("")}</div></section>`;
-}
 
-function facilityDetail(facility: FacilityProjection): string {
-  const allMetrics = facility.snapshot?.metrics ?? [];
-  const allIssues = facility.snapshot?.issues ?? [];
-  const metrics = allMetrics.slice(0, 18);
-  const issues = allIssues.slice(0, 8);
+  const metrics = facility.snapshot?.metrics ?? [];
+  const issues = facility.snapshot?.issues ?? [];
   const metricRows = metrics.map((metric) => `<li><span>${escapeHtml(metricLabel(metric.id))}<small>${escapeHtml(metric.id)}</small></span><strong>${escapeHtml(metricValue(metric))}</strong></li>`).join("");
   const issueRows = issues.map((issue) => `<li class="facility-issue facility-issue--${escapeHtml(issue.severity)}"><span>${escapeHtml(issue.code)}${issue.subject_id ? `<small>${escapeHtml(issue.subject_id)}</small>` : ""}</span><strong>${escapeHtml(issue.severity)}</strong></li>`).join("");
-  const overflow = allMetrics.length > metrics.length || allIssues.length > issues.length
-    ? `<p class="facility-detail__overflow">${tr("Additional diagnostics remain in the facility Console.", "更多诊断信息保留在设施 Console 中。")}</p>`
-    : "";
-  return `<article class="facility-detail"><header><div><span class="facility-detail__identity"><i class="source-state source-state--${escapeHtml(facility.status)}"></i><h3>${escapeHtml(facility.label)}</h3></span><p>${escapeHtml(facility.kind)} · ${escapeHtml(facility.instance_id)}</p></div><div><span class="pill pill--${escapeHtml(facility.status)}">${escapeHtml(statusLabel(facility.status))}</span>${consoleButton(facility)}</div></header><div class="facility-detail__facts"><span><small>${tr("Protocol", "协议")}</small><strong>${escapeHtml(facility.protocol)} · ${escapeHtml(facility.protocol_version)}</strong></span><span><small>${tr("Last observed", "最近观测")}</small><strong>${facility.observed_at ? new Date(facility.observed_at).toLocaleString() : "—"}</strong></span><span><small>${tr("Binding", "连接方式")}</small><strong>${escapeHtml(facility.binding)}</strong></span></div><div class="facility-detail__columns"><section><h4>${tr("Read-only metrics", "只读指标")}</h4><ul>${metricRows || `<li>${tr("Waiting for metrics", "等待指标")}</li>`}</ul></section><section><h4>${tr("Issues", "问题")}</h4><ul>${issueRows || `<li class="facility-detail__empty">${tr("No reported issues", "没有已报告问题")}</li>`}</ul></section></div>${overflow}</article>`;
-}
+  const headline = headlineMetrics(facility).map((metric) => `<span><small>${escapeHtml(metricLabel(metric.id))}</small><strong>${escapeHtml(metricValue(metric))}</strong></span>`).join("");
+  const capturedAt = facility.snapshot?.captured_at ?? facility.observed_at;
 
-export function renderFacilitiesPage(facilities?: FacilitiesProjection): string {
-  if (!facilities?.items.length) return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("FACILITIES", "运行设施")}</p><h2>${facilities?.error_kind ? tr("Facility discovery unavailable", "设施发现不可用") : tr("No facilities discovered", "尚未发现运行设施")}</h2></div></div><p class="empty">${facilities?.error_kind ? tr("The Infra Discovery runtime directory could not be validated. Network and AI usage collection are not affected.", "无法验证 Infra Discovery 运行目录；网络和 AI 用量采集不受影响。") : tr("Facilities appear automatically after publishing a compatible Infra Discovery offer.", "设施发布兼容的 Infra Discovery offer 后会自动出现。")}</p></section>`;
-  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("FACILITIES", "运行设施")}</p><h2>${tr("Facility observation", "设施观测")}</h2></div><span class="section-heading__meta">${facilities.healthy} / ${facilities.total} ${tr("healthy", "正常")}</span></div><p class="facility-page-note">${tr("Sentinel shows bounded read-only observations. Use each facility Console for diagnosis and operations.", "Sentinel 仅展示有界的只读观测；诊断与操作请进入对应设施的 Console。")}</p><div class="facility-detail-list">${facilities.items.map(facilityDetail).join("")}</div></section>`;
+  return `<section class="resource-section resource-section--detail facility-instance-page">
+    <header class="facility-instance-header"><div><p class="eyebrow">${escapeHtml(facility.kind)} · ${escapeHtml(facility.instance_id)}</p><span class="facility-detail__identity"><i class="source-state source-state--${escapeHtml(facility.status)}"></i><h2>${escapeHtml(facility.label)}</h2></span><p>${escapeHtml(facility.protocol)} · ${escapeHtml(facility.protocol_version)}</p></div><div><span class="pill pill--${escapeHtml(facility.status)}">${escapeHtml(statusLabel(facility.status))}</span>${consoleControl(facility)}</div></header>
+    ${headline ? `<div class="facility-instance-headlines">${headline}</div>` : ""}
+    ${facility.error_kind ? `<p class="facility-page-note facility-page-note--warning">${tr("Observation error", "观测异常")} · ${escapeHtml(facility.error_kind)}</p>` : ""}
+    <div class="facility-detail__facts">
+      <span><small>${tr("Last observed", "最近观测")}</small><strong>${capturedAt ? new Date(capturedAt).toLocaleString() : "—"}</strong></span>
+      <span><small>${tr("Snapshot sequence", "快照序列")}</small><strong>${escapeHtml(facility.snapshot?.sequence ?? "—")}</strong></span>
+      <span><small>${tr("Binding", "连接方式")}</small><strong>${escapeHtml(facility.binding)}</strong></span>
+      <span><small>${tr("Generation", "运行代次")}</small><strong title="${escapeHtml(facility.generation)}">${escapeHtml(facility.generation)}</strong></span>
+      <span><small>${tr("Lease expires", "注册到期")}</small><strong>${new Date(facility.lease_expires_at).toLocaleString()}</strong></span>
+      <span><small>${tr("Observation schema", "观测协议")}</small><strong>${escapeHtml(facility.snapshot?.schema_version ?? facility.protocol_version)}</strong></span>
+    </div>
+    <div class="facility-detail__columns"><section><h3>${tr("Read-only metrics", "只读指标")}</h3><ul>${metricRows || `<li class="facility-detail__empty">${tr("Waiting for metrics", "等待指标")}</li>`}</ul></section><section><h3>${tr("Issues", "问题")}</h3><ul>${issueRows || `<li class="facility-detail__empty">${tr("No reported issues", "没有已报告问题")}</li>`}</ul></section></div>
+    <p class="facility-detail__overflow">${tr("For operations and deeper diagnostics, open this facility's own Console.", "操作和更深入的诊断请进入该设施自己的 Console。")}</p>
+  </section>`;
 }

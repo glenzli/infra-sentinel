@@ -2,20 +2,22 @@
 
 **English** | [中文](README.zh-CN.md)
 
-Infra Sentinel is a local-first observability dashboard for personal AI infrastructure. It currently focuses on two practical resource categories that can grow out of control quickly:
+Infra Sentinel is a local-first observability dashboard for personal AI infrastructure. It currently covers two metered resource categories and the health of participating local facilities:
 
 - **Network**: local Mihomo traffic, domain and proxy-route attribution, Linux VPS billable traffic, and Xray per-user logical traffic;
-- **AI usage**: local Token records from OpenCode and Codex, model composition, consumption rate, and Agent activity.
+- **AI usage**: local Token records from OpenCode and Codex, model composition, consumption rate, and Agent activity;
+- **Local facilities**: automatically discovered, protocol-bounded health projections for compatible runtimes and services.
 
-It also discovers participating local infrastructure facilities through Infra Discovery and uses a
-provider-owned adapter to show bounded health data. Facility-specific diagnosis and operations
-remain in each facility's own Console.
+It also discovers participating local infrastructure facilities through the
+[Infra Protocol](https://github.com/glenzli/infra-protocol) discovery contract. Each facility appears
+as an independent resource card with a bounded, read-only detail view. Facility-specific diagnosis
+and operations remain in its native Console, opened in the system browser.
 
 The menu bar icon only communicates overall health. Open the app to inspect resource details, trends, source discrepancies, and alerts.
 
 Infra Sentinel does not capture packets, read prompts or response bodies, inspect URL paths or project files, terminate processes, delete files, disconnect the network, or modify proxy configuration.
 
-![Infra Sentinel overview](assets/overview-en.png)
+![Infra Sentinel network and AI resource modules](assets/overview-en.png)
 
 ![Infra Sentinel AI usage](assets/ai-usage-en.png)
 
@@ -30,6 +32,7 @@ Infra Sentinel does not force bytes, Tokens, and alerts into a synthetic “scor
 - Is the current growth rate abnormal?
 - Why do local observations, proxy logical traffic, and VPS billable traffic differ?
 - Is a data source unavailable, or is its observation window incomplete?
+- Which local infrastructure facilities are healthy or degraded, and where is their native Console?
 
 When data cannot be obtained reliably, the interface reports it as unknown, hides the unavailable module, or marks the source unhealthy. It does not present an inferred value as a bill.
 
@@ -94,22 +97,27 @@ Historical queries run through a dedicated read-only channel and do not wait for
 ## Local facility discovery
 
 Participating services publish a short-lived, owner-only
-`infra.discovery.registration@20260810.1` lease. Sentinel discovers these leases without scanning
-ports or guessing process names, intersects exact protocol versions and bindings, and connects to
-the selected service. Discovery carries no metrics, Console URL, request envelope, or control
-authority.
+[`infra.discovery.registration@20260810.1`](https://github.com/glenzli/infra-protocol) lease. Sentinel
+discovers these leases without scanning ports or guessing process names, intersects exact protocol
+versions and bindings, and connects to the selected service. Discovery carries no metrics, Console
+URL, request envelope, or control authority.
 
-Paged Context Protocol and Infer Runtime own independent application protocols:
-`pcp.runtime.observer@20260810.1` and `infer-runtime.status@20260810.1`. Sentinel implements one
-adapter for each and normalizes only bounded status, metrics, issues, observation time, and an
-optional loopback **Open Console** link into its private UI projection. Unknown protocols are
-ignored rather than guessed compatible. See [facility discovery](docs/facility-discovery.md).
+Current verified integrations are
+[Paged Context Protocol (PCP)](https://github.com/glenzli/paged-context-protocol) through
+`pcp.runtime.observer@20260810.1`, and
+[Infer Runtime](https://github.com/glenzli/infer-runtime) through
+`infer-runtime.status@20260810.1`. These application protocols remain independent; Infra Protocol
+only standardizes discovery. Sentinel implements one adapter for each and normalizes only bounded
+status, metrics, issues, observation time, and an optional loopback **Open Console** link into its
+private UI projection. Every discovered facility is presented as its own first-class module and
+detail view. Unknown protocols are ignored rather than guessed compatible. See
+[facility discovery](docs/facility-discovery.md).
 
 ## Architecture
 
 ```text
 Mihomo / VPS / Xray / OpenCode / Codex → Collectors → SQLite metrics ┐
-Local facilities → Infra Discovery → provider adapters ──────────────┤
+Local facilities → Infra Protocol discovery → provider adapters ─────┤
                                                                      ↓
                                               Versioned Projection + commands
                                                                      ↓
@@ -136,7 +144,9 @@ Officially supported:
 - Optional Xray StatsService per-user statistics;
 - The OpenCode Desktop local session database or compatible CLI;
 - The Codex local state database;
-- Local facilities publishing compatible Infra Discovery offers for the supported PCP or Infer Runtime protocol.
+- Local facilities publishing compatible Infra Protocol discovery offers for the supported
+  [PCP](https://github.com/glenzli/paged-context-protocol) or
+  [Infer Runtime](https://github.com/glenzli/infer-runtime) protocol.
 
 Not currently supported:
 
