@@ -28,6 +28,19 @@ def point(epoch: float, value: int, *, source: str = "local-mihomo") -> MetricPo
     )
 
 
+def gauge(epoch: float, value: int) -> MetricPoint:
+    return MetricPoint(
+        observed_at=f"2026-08-08T12:{int(epoch) // 60:02d}:{int(epoch) % 60:02d}+08:00",
+        observed_epoch=epoch,
+        metric="system.cpu.percent",
+        instrument="gauge",
+        value=value,
+        unit="percent",
+        source_id="local-system",
+        resource_id="system",
+    )
+
+
 class MetricQueryTests(unittest.TestCase):
     def test_query_aggregates_counter_intervals_by_minute_and_source(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -60,6 +73,27 @@ class MetricQueryTests(unittest.TestCase):
             MetricQuery.from_payload({"since_epoch": 0, "until_epoch": 731 * 86_400, "bucket_seconds": 86_400})
         with self.assertRaisesRegex(ValueError, "unsupported query fields"):
             MetricQuery.from_payload({"sql": "DROP TABLE metric_points"})
+        with self.assertRaisesRegex(ValueError, "counter or gauge"):
+            MetricQuery.from_payload({"instrument": "histogram"})
+
+    def test_gauge_query_averages_samples_instead_of_summing_them(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            store = MetricStore(Path(temporary))
+            store.write((gauge(121.0, 20), gauge(151.0, 40), gauge(181.0, 80)))
+            query = MetricQuery.from_payload({
+                "since_epoch": 120,
+                "until_epoch": 239,
+                "resource_id": "system",
+                "instrument": "gauge",
+                "bucket_seconds": 60,
+            })
+
+            result = execute_metric_query(store, query)
+
+            self.assertEqual(
+                [(item["observed_epoch"], item["value"]) for item in result["points"]],
+                [(120.0, 30.0), (180.0, 80.0)],
+            )
 
     def test_daily_query_aligns_buckets_to_the_requested_local_day_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

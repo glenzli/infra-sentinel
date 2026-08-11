@@ -5,13 +5,11 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from agent_protocol import PROJECTION_SCHEMA
 from ai_usage_contract import AI_USAGE_SNAPSHOT_SCHEMA, window_tokens
 from infra_collectors import CollectorRun
 from infra_model import MetricPoint, SourceStatus
 from infra_registry import DEFAULT_SOURCE_REGISTRY
-
-
-PROJECTION_SCHEMA = "20260811.1"
 
 
 def _number(value: Any) -> int:
@@ -55,6 +53,54 @@ def _overall_with_upstream(base: str, upstream: dict[str, Any]) -> str:
     return upstream_status if rank.get(upstream_status, 0) > rank.get(base, 0) else base
 
 
+def _highest_status(*statuses: str) -> str:
+    rank = {"healthy": 0, "starting": 0, "disabled": 0, "degraded": 1, "warning": 2, "critical": 3}
+    return max(statuses, key=lambda status: rank.get(status, 1), default="healthy")
+
+
+def _system_resource(
+    runs: Iterable[CollectorRun],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, SourceStatus | None]:
+    for run in runs:
+        if run.capability.resource_id != "system" or not isinstance(run.snapshot, dict):
+            continue
+        snapshot = run.snapshot
+        if not snapshot.get("available"):
+            continue
+        disk = snapshot.get("disk") if isinstance(snapshot.get("disk"), dict) else {}
+        cpu = snapshot.get("cpu") if isinstance(snapshot.get("cpu"), dict) else {}
+        capabilities = snapshot.get("capabilities") if isinstance(snapshot.get("capabilities"), list) else []
+        has_disk_capacity = "disk.capacity" in capabilities
+        primary_metric = "system.disk.free_bytes" if has_disk_capacity else "system.cpu.percent"
+        primary_value = _number(disk.get("free_bytes")) if has_disk_capacity else _number(cpu.get("percent"))
+        primary_unit = "bytes" if has_disk_capacity else "percent"
+        health = str(snapshot.get("status") or "degraded")
+        source_status = "error" if run.status == "error" else "degraded" if run.status == "degraded" else "ok"
+        platform = str(snapshot.get("platform") or "host")
+        source_label = {"macos": "This Mac", "windows": "This Windows PC", "linux": "This Linux host"}.get(platform, "Local host")
+        return snapshot, {
+            "id": "system",
+            "category": "runtime",
+            "status": health,
+            "enabled": True,
+            "primary_metric": primary_metric,
+            "primary_value": primary_value,
+            "primary_unit": primary_unit,
+            "primary_source_id": run.capability.source_id,
+            "source_count": 1,
+            "online_source_count": 1 if run.status in {"ok", "degraded"} else 0,
+        }, SourceStatus(
+            id=run.capability.source_id,
+            kind=run.capability.source_kind,
+            resource_id="system",
+            enabled=True,
+            status=source_status,
+            label=source_label,
+            updated_at=snapshot.get("observed_at") if isinstance(snapshot.get("observed_at"), str) else None,
+        )
+    return None, None, None
+
+
 def _upstream_resource(upstream: dict[str, Any]) -> tuple[dict[str, Any], list[SourceStatus]]:
     items = upstream.get("items") if isinstance(upstream.get("items"), list) else []
     sources = [SourceStatus(
@@ -68,6 +114,7 @@ def _upstream_resource(upstream: dict[str, Any]) -> tuple[dict[str, Any], list[S
     ) for item in items if isinstance(item, dict)]
     return {
         "id": "upstream_status",
+        "category": "dependency",
         "status": str(upstream.get("status") or "degraded"),
         "enabled": True,
         "primary_metric": "upstream.providers.healthy",
@@ -133,6 +180,7 @@ def _ai_usage_resource(runs: Iterable[CollectorRun]) -> tuple[dict[str, Any] | N
     today = aggregate["today"]
     resource = {
         "id": "ai_usage",
+        "category": "usage",
         "status": status,
         "enabled": True,
         "primary_metric": "ai.tokens.total",
@@ -220,6 +268,9 @@ def build_infra_projection(
     ai_resource, ai_sources, ai_snapshots = _ai_usage_resource(collector_runs)
     ai_aggregate = _ai_usage_aggregate(ai_snapshots)
     sources.extend(ai_sources)
+    system_snapshot, system_resource, system_source = _system_resource(collector_runs)
+    if system_source:
+        sources.append(system_source)
     upstream_resource, upstream_sources = _upstream_resource(upstream_state)
     sources.extend(upstream_sources)
     source_dicts = [source.as_dict() for source in sources]
@@ -249,6 +300,7 @@ def build_infra_projection(
         ).as_dict())
     resources = [{
         "id": "network",
+        "category": "usage",
         "status": _status_for(alert_level, remote, collector_runs),
         "enabled": True,
         "primary_metric": "network.billable_bytes" if billing_available else "network.local_bytes",
@@ -258,6 +310,17 @@ def build_infra_projection(
         "source_count": len(network_sources),
         "online_source_count": len(online_network_sources),
     }]
+    if system_resource:
+        resources.append(system_resource)
+        metrics.append(MetricPoint(
+            observed_at=timestamp,
+            metric=str(system_resource["primary_metric"]),
+            instrument="gauge",
+            value=system_resource["primary_value"],
+            unit=str(system_resource["primary_unit"]),
+            source_id=system_resource["primary_source_id"],
+            resource_id="system",
+        ).as_dict())
     if upstream_resource["source_count"]:
         resources.append(upstream_resource)
         metrics.append(MetricPoint(
@@ -284,13 +347,16 @@ def build_infra_projection(
             confidence="high",
         ).as_dict())
     base_status = _overall_with_upstream(_status_for(alert_level, remote, collector_runs), upstream_state)
+    if system_resource:
+        base_status = _highest_status(base_status, str(system_resource["status"]))
+    system_alerts = 1 if system_resource and system_resource["status"] in {"warning", "critical"} else 0
     return {
         "schema": PROJECTION_SCHEMA,
-        "product": {"id": "infra-sentinel", "mode": "network"},
+        "product": {"id": "infra-sentinel", "mode": "infra"},
         "overall": {
             "status": _overall_status(base_status, facility_state),
             "active_alerts": (active_daily_guards or (0 if alert_level == "none" else 1))
-            + _number(facility_state.get("attention")) + _number(upstream_state.get("attention")),
+            + _number(facility_state.get("attention")) + _number(upstream_state.get("attention")) + system_alerts,
         },
         "resources": resources,
         "sources": source_dicts,
@@ -300,4 +366,5 @@ def build_infra_projection(
         "facilities": facility_state,
         "upstream_status": upstream_state,
         "ai_usage": {"schema": AI_USAGE_SNAPSHOT_SCHEMA, "sources": ai_snapshots, "aggregate": ai_aggregate} if ai_resource else {},
+        "system": system_snapshot or {},
     }

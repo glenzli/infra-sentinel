@@ -42,9 +42,10 @@ class InfraProjectionTests(unittest.TestCase):
             "none",
         )
 
-        self.assertEqual(projection["schema"], "20260811.1")
+        self.assertEqual(projection["schema"], "20260811.2")
         self.assertEqual(projection["overall"]["status"], "healthy")
         self.assertEqual(projection["resources"][0]["primary_metric"], "network.local_bytes")
+        self.assertEqual(projection["resources"][0]["category"], "usage")
         self.assertEqual(projection["resources"][0]["primary_value"], 1234)
         self.assertEqual(projection["metrics"][0]["value"], 1234)
         self.assertFalse(projection["metrics"][0]["estimated"])
@@ -125,6 +126,7 @@ class InfraProjectionTests(unittest.TestCase):
         ai_resource = next(item for item in projection["resources"] if item["id"] == "ai_usage")
         self.assertEqual(ai_resource["primary_value"], 12_345)
         self.assertEqual(ai_resource["primary_unit"], "tokens")
+        self.assertEqual(ai_resource["category"], "usage")
         self.assertEqual(projection["ai_usage"]["sources"][0]["label"], "OpenCode")
         self.assertEqual({item["id"] for item in projection["sources"]}, {"local-mihomo", "opencode"})
 
@@ -221,6 +223,7 @@ class InfraProjectionTests(unittest.TestCase):
         resources = {resource["id"]: resource for resource in projection["resources"]}
         self.assertEqual(resources["network"]["source_count"], 1)
         self.assertEqual(resources["upstream_status"]["primary_value"], 2)
+        self.assertEqual(resources["upstream_status"]["category"], "dependency")
         self.assertEqual(resources["upstream_status"]["online_source_count"], 3)
         self.assertEqual(projection["overall"]["status"], "warning")
         self.assertEqual(projection["overall"]["active_alerts"], 1)
@@ -241,6 +244,35 @@ class InfraProjectionTests(unittest.TestCase):
         )
         self.assertEqual(projection["overall"]["status"], "healthy")
         self.assertEqual(projection["overall"]["active_alerts"], 0)
+
+    def test_system_snapshot_is_an_independent_resource_and_health_signal(self) -> None:
+        run = CollectorRun(
+            capability=CollectorCapability(
+                "system.host", "local-system", "system.host", "system",
+                ("system.cpu.percent", "system.disk.free_bytes"),
+            ),
+            status="ok",
+            snapshot={
+                "schema": "20260811.1", "available": True, "status": "warning",
+                "platform": "macos", "capabilities": ["cpu.utilization", "disk.capacity"],
+                "observed_at": "2026-08-11T12:00:00+08:00",
+                "disk": {"free_bytes": 1234}, "cpu": {"percent": 42},
+            },
+        )
+
+        projection = build_infra_projection(
+            sample(), {"kernel": {}, "vps": {}},
+            {"enabled": False, "status": "disabled", "servers": []}, "none", (run,),
+        )
+
+        resource = next(item for item in projection["resources"] if item["id"] == "system")
+        self.assertEqual(resource["primary_value"], 1234)
+        self.assertEqual(resource["status"], "warning")
+        self.assertEqual(resource["category"], "runtime")
+        self.assertEqual(projection["system"]["cpu"]["percent"], 42)
+        self.assertEqual(projection["overall"]["status"], "warning")
+        self.assertEqual(projection["overall"]["active_alerts"], 1)
+        self.assertIn("local-system", {item["id"] for item in projection["sources"]})
 
 
 if __name__ == "__main__":

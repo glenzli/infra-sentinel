@@ -16,7 +16,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "bin"))
 
 from infra_collectors import CollectorContext  # noqa: E402
 from opencode_usage import (  # noqa: E402
-    OPENCODE_COUNTER_SCHEMA, OpenCodeUsageCollector, parse_opencode_stats,
+    OPENCODE_COUNTER_SCHEMA, OpenCodeUsageCollector, discover_opencode,
+    discover_opencode_desktop_database, parse_opencode_stats,
     read_opencode_desktop_daily_history, read_opencode_desktop_stats,
 )
 
@@ -64,6 +65,17 @@ STATS_OUTPUT = """
 
 
 class OpenCodeStatsTests(unittest.TestCase):
+    def test_explicit_portable_executable_and_database_take_precedence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "opencode.exe"
+            database = root / "portable.db"
+            executable.touch()
+            executable.chmod(executable.stat().st_mode | 0o100)
+            database.touch()
+            self.assertEqual(discover_opencode(executable), str(executable))
+            self.assertEqual(discover_opencode_desktop_database(database), database)
+
     def test_stats_parser_uses_model_breakdown_and_marks_combined_reasoning(self) -> None:
         stats = parse_opencode_stats(STATS_OUTPUT)
 

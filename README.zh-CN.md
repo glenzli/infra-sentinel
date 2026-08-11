@@ -6,6 +6,7 @@ Infra Sentinel 是一个本地优先的个人 AI Infra 可观测面板。它目�
 
 - **网络**：本机 Mihomo 流量、域名与代理路径归因、Linux VPS 账单量、Xray 用户逻辑流量；
 - **AI 用量**：OpenCode 与 Codex 的本地 Token 记录、模型构成、消耗速率和 Agent 活动；
+- **本机系统**：整机 CPU、内存压力与 Swap、磁盘容量、物理磁盘吞吐与 IOPS、温度压力；
 - **上游服务**：低频、只读观测 OpenAI、Claude 与 DeepSeek 的官方 API 状态；
 - **本地设施**：自动发现兼容的 runtime 与服务，按各自协议投影受限健康状态。
 
@@ -32,6 +33,7 @@ Infra Sentinel 不把字节、Token 和告警硬凑成一个“总分”。每�
 - 某个数据源是否失联，统计窗口是否完整？
 - 本地异常发生时，上游 API 是否也有已经确认的公共事件？
 - 哪些本地基础设施正常或降级，它的原生 Console 在哪里？
+- Agent 集群是否正在把 Mac 推入内存、磁盘容量、I/O 或温度压力？
 
 如果某项数据无法可靠获得，界面会显示未知、隐藏该模块或标记来源异常，不用推断值冒充账单。
 
@@ -81,6 +83,14 @@ AI 模块只读取客户端已经保存在本机的聚合元数据。每个 Prov
 
 OpenCode 的自然日统计与 Codex 的本机基线窗口可能不同，界面会直接展示每个来源的窗口覆盖。AI 汇总用于本机趋势分析，不是 ChatGPT、Codex 或任意 API Provider 的账户账单。
 
+## 本机系统模块
+
+系统 Collector 消费平台无关的能力合同，不假设每个系统都能提供相同计数。当前经过验证的 macOS backend 会观测整机 CPU 使用率、原生内存压力、压缩内存与 Swap、磁盘剩余空间、物理磁盘字节与操作次数、保守的磁盘健康证据、温度压力。吞吐当前值跟随 Agent 正常采样刷新；历史状态值与区间计数每 5 分钟落盘；平台支持时，磁盘健康在启动时读取一次，之后每 6 小时刷新。
+
+首批 Linux 与 Windows backend 已建立跨平台边界：Linux 使用整机 procfs/sysfs 计数；Windows 使用稳定的 Win32 CPU、内存和磁盘容量接口。每个 backend 会明确声明自身能力，UI 会隐藏不可用测量，而不是把它画成 0 或“正常”。目前打包并经过 Release 验证的桌面目标仍只有 macOS。
+
+告警只采用可靠的压力信号：macOS 内存压力、磁盘空间低于 10% 或 5%，以及较高或严重温度压力。CPU 和磁盘高活动会展示趋势，但在没有持续压力合同前不会仅凭数值触发告警。第一版只看整机，按 Agent 的进程归因留给后续能力。
+
 ## 上游服务状态
 
 Infra Sentinel 每 5 分钟只读获取一次 OpenAI、Claude 与 DeepSeek 的公开官方状态摘要，展示相关 API 组件、活动事件、官方更新时间，并提供进入供应商原生状态页的链接。整个过程不需要 API Key，也不会发起合成模型调用。
@@ -89,7 +99,7 @@ Infra Sentinel 每 5 分钟只读获取一次 OpenAI、Claude 与 DeepSeek 的�
 
 ## 分析视图
 
-Network 和 AI 用量都使用同一套观测结构：
+Network、AI 用量与本机系统资源都使用同一套观测结构：
 
 - 固定摘要：今日观测、历史总量或账单量、采集覆盖；
 - 时间范围：今日、近 7 天、近 30 天、全部历史；
@@ -115,7 +125,7 @@ Sentinel 为两者分别实现 adapter，只把有界状态、指标、问题、
 ## 架构
 
 ```text
-Mihomo / VPS / Xray / OpenCode / Codex → Collectors → SQLite 指标 ┐
+Mihomo / VPS / Xray / OpenCode / Codex / 平台系统 backend → Collectors → SQLite 指标 ┐
 供应商官方状态源 → 低频状态观测器 ─────────────────────────────────┤
 本地设施 → Infra Protocol discovery → Provider adapters ──────────┤
                                                                    ↓
@@ -131,6 +141,8 @@ Mihomo / VPS / Xray / OpenCode / Codex → Collectors → SQLite 指标 ┐
 - Collector 失败相互隔离，一个来源异常不会阻断其他资源；
 - 设施发现与 Provider 协议 I/O 使用独立生命周期，不会阻塞资源采样。
 
+平台专属行为被限制在窄 adapter 后面：系统资源 backend、Agent 单实例锁、原生通知、URL 打开和本地应用发现。Projection、指标存储、策略和 Web UI 保持平台无关，并且只展示 backend 明确声明的能力。
+
 Projection 与发现合同使用日期化 schema，并要求精确的兼容版本。指标查询支持分钟、5 分钟、小时和天级聚合，查询范围和结果点数均有上限。
 
 ## 支持范围
@@ -144,6 +156,7 @@ Projection 与发现合同使用日期化 schema，并要求精确的兼容版�
 - 可选 Xray StatsService 用户统计；
 - OpenCode Desktop 本地会话库或兼容 CLI；
 - Codex 本地状态库；
+- macOS 公共的主机、虚拟内存、IOKit 磁盘、文件系统容量与温度接口；
 - OpenAI、Claude 与 DeepSeek 的公开官方状态源；
 - 发布兼容 Infra Protocol discovery offer 的
   [PCP](https://github.com/glenzli/paged-context-protocol) 与
@@ -156,6 +169,7 @@ Projection 与发现合同使用日期化 schema，并要求精确的兼容版�
 - 非 Xray 服务端用户统计；
 - ChatGPT/Codex 订阅额度和通用 API 账户余额；
 - 屏幕时间、提示词分析或全盘文件扫描。
+- Windows 或 Linux 的正式桌面安装包。首批系统 backend 已存在，但原生通知、Mihomo Controller transport、设施 Named Pipe transport、安装器和目标平台实机验证仍待完成。
 
 接口偶然兼容不等于正式支持。
 
@@ -196,6 +210,8 @@ open "ui/src-tauri/target/release/bundle/macos/Infra Sentinel.app"
 
 本机 Mihomo 自动发现，无需填写地址。远端主机只填写 `~/.ssh/config` 中的 Host 别名；App 不保存私钥、密码或真实主机地址。
 
+“本地集成”设置通常保持为空。若便携版或非标准安装位置无法自动发现，可以在这里覆盖 SSH、OpenCode 程序、OpenCode Desktop 数据库和 Codex 数据库的绝对路径；这对用户自行选择安装目录的 Windows 环境尤其有用。空值始终表示按平台自动发现；这些路径不会被当作命令参数，也不会触发递归扫描。
+
 ```sshconfig
 Host edge-a
   HostName vps.example.com
@@ -221,7 +237,8 @@ Host edge-a
 - URL 路径、查询参数、请求头或网络载荷；
 - 项目路径、文件内容、Git 元数据或任务标题；
 - SSH 私钥、密码、API Key 或认证凭据；
-- 抓包数据。
+- 抓包数据；
+- 文件名、文件系统路径、进程参数、窗口标题或单文件 I/O 活动。
 
 所有采集、存储和分析默认只发生在本机。上游状态观测只会向供应商公开状态源发出匿名、只读的 HTTPS 请求。
 

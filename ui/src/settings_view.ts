@@ -7,6 +7,7 @@ type JsonObject = Record<string, unknown>;
 export interface SettingsPayload {
   schema: string;
   app: JsonObject;
+  integrations: JsonObject;
   policies: JsonObject[];
   sources: JsonObject[];
 }
@@ -17,7 +18,7 @@ export interface SettingsActions {
   languageChanged(): void;
 }
 
-type SettingsSection = "general" | "network";
+type SettingsSection = "general" | "integrations" | "network";
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({
@@ -111,6 +112,12 @@ function readForm(form: HTMLFormElement, existing: SettingsPayload): SettingsPay
   alert.warning_mib = Number(field("warning-mib").value);
   alert.critical_window_minutes = Number(field("critical-window").value);
   alert.critical_mib = Number(field("critical-mib").value);
+  draft.integrations = {
+    ssh_executable: field("integration-ssh-executable").value.trim(),
+    opencode_executable: field("integration-opencode-executable").value.trim(),
+    opencode_database: field("integration-opencode-database").value.trim(),
+    codex_database: field("integration-codex-database").value.trim(),
+  };
   const remotes = remoteSources(draft);
   draft.policies = draft.policies.filter((policy) => policy.kind !== "network.daily.usage");
   for (const source of remotes) {
@@ -142,6 +149,7 @@ export async function loadSettings(): Promise<SettingsPayload> {
 
 export function renderSettings(root: HTMLDivElement, initial: SettingsPayload, actions: SettingsActions): void {
   let settings = cloneSettings(initial);
+  settings.integrations ??= {};
   let activeSection: SettingsSection = "general";
   const render = (notice = "") => {
     const alert = trafficPolicy(settings);
@@ -150,10 +158,19 @@ export function renderSettings(root: HTMLDivElement, initial: SettingsPayload, a
       <main class="shell">
         <header class="topbar"><button class="brand" id="back" type="button"><span class="brand-mark" aria-hidden="true"><i></i></span><span>Infra Sentinel</span></button><div class="topbar-actions"><button class="button button--subtle" id="back-overview">${icon("arrow-left")}<span>Back to overview / 返回概览</span></button></div></header>
         <section class="settings-header"><p class="eyebrow">CONFIGURATION</p><h1>Settings / 设置</h1><p>Local Mihomo is discovered automatically. Choose how Infra Sentinel appears, which hosts it observes, and when it should notify you.</p></section>
-        <div class="settings-layout"><nav class="settings-nav" aria-label="Settings sections"><button type="button" data-settings-section="general" class="${activeSection === "general" ? "is-active" : ""}">General / 通用</button><button type="button" data-settings-section="network" class="${activeSection === "network" ? "is-active" : ""}">Network configuration / 网络配置</button></nav>
+        <div class="settings-layout"><nav class="settings-nav" aria-label="Settings sections"><button type="button" data-settings-section="general" class="${activeSection === "general" ? "is-active" : ""}">General / 通用</button><button type="button" data-settings-section="integrations" class="${activeSection === "integrations" ? "is-active" : ""}">Local integrations / 本地集成</button><button type="button" data-settings-section="network" class="${activeSection === "network" ? "is-active" : ""}">Network configuration / 网络配置</button></nav>
         <form id="settings-form" class="settings-form">
           <section class="settings-section settings-panel ${activeSection === "general" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">GENERAL</p><h2>Appearance / 外观</h2></div></div>
             <div class="general-grid"><label class="setting-choice"><span>Language / 语言</span>${languagePicker()}</label></div>
+          </section>
+          <section class="settings-section settings-panel ${activeSection === "integrations" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">LOCAL INTEGRATIONS</p><h2>Application paths / 应用路径</h2></div></div>
+            <p class="settings-note">Leave a field empty to use platform discovery. Set an absolute path for portable or non-standard installations, including Windows installations outside their usual folders.</p>
+            <div class="integration-grid">
+              <label><span>SSH executable / SSH 程序</span><input name="integration-ssh-executable" value="${escapeHtml(settings.integrations.ssh_executable)}" placeholder="Auto discover / 自动发现" /></label>
+              <label><span>OpenCode executable / OpenCode 程序</span><input name="integration-opencode-executable" value="${escapeHtml(settings.integrations.opencode_executable)}" placeholder="Auto discover / 自动发现" /></label>
+              <label><span>OpenCode database / OpenCode 数据库</span><input name="integration-opencode-database" value="${escapeHtml(settings.integrations.opencode_database)}" placeholder="Auto discover / 自动发现" /></label>
+              <label><span>Codex database / Codex 数据库</span><input name="integration-codex-database" value="${escapeHtml(settings.integrations.codex_database)}" placeholder="Auto discover / 自动发现" /></label>
+            </div>
           </section>
           <section class="settings-section settings-panel ${activeSection === "network" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">NETWORK SOURCES</p><h2>Remote host configuration / 远端主机配置</h2></div><button class="button button--subtle" type="button" id="add-host">${icon("plus")}<span>Add VPS / 添加 VPS</span></button></div>
             <p class="settings-note">Use a Host alias from <code>~/.ssh/config</code>. Xray StatsService remains limited to remote <code>127.0.0.1:10085</code>.</p>

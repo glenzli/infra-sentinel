@@ -10,7 +10,7 @@ from unittest.mock import patch
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "bin"))
 
-from remote_ssh import run_read_only_script  # noqa: E402
+from remote_ssh import resolve_ssh_executable, run_read_only_script  # noqa: E402
 
 
 class RemoteSshTests(unittest.TestCase):
@@ -36,6 +36,18 @@ class RemoteSshTests(unittest.TestCase):
         self.assertEqual(runner.call_args.kwargs["input"], "printf '%s' \"$1\"")
         self.assertTrue(runner.call_args.kwargs["text"])
         self.assertTrue(runner.call_args.kwargs["capture_output"])
+
+    def test_explicit_ssh_executable_is_used_for_portable_installations(self) -> None:
+        completed = subprocess.CompletedProcess([], 0, "ok", "")
+        executable = str(Path("/portable/OpenSSH/ssh.exe"))
+        with patch("remote_ssh.subprocess.run", return_value=completed) as runner:
+            run_read_only_script("my-vps", "exit 0", ssh_executable=executable)
+        self.assertEqual(runner.call_args.args[0][0], executable)
+
+    def test_automatic_discovery_fails_with_a_clear_error(self) -> None:
+        with patch("remote_ssh.shutil.which", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "SSH 客户端"):
+                resolve_ssh_executable()
 
 
 if __name__ == "__main__":

@@ -210,7 +210,7 @@ class MetricStore:
         bucket_offset_seconds: int = 0,
         limit: int = 10_000,
     ) -> list[dict[str, Any]]:
-        """Read canonical points with parameterized filters and optional sums.
+        """Read canonical points with parameterized filters and optional buckets.
 
         Query policy lives in ``metric_query``. This owner only executes a
         bounded, deterministic SQLite read over its own schema.
@@ -241,9 +241,10 @@ class MetricStore:
                     LIMIT ?
                 """, (*parameters, limit)).fetchall()
             else:
+                aggregation = "AVG(value)" if instrument == "gauge" else "SUM(value)"
                 rows = connection.execute(f"""
                     SELECT CAST((observed_epoch - ?) / ? AS INTEGER) * ? + ? AS bucket_epoch,
-                           metric, instrument, SUM(value) AS value, unit,
+                           metric, instrument, {aggregation} AS value, unit,
                            source_id, resource_id, dimensions_json, attribution_method,
                            confidence, estimated
                     FROM metric_points

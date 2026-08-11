@@ -47,6 +47,7 @@ class XrayStatsConfig:
     flagged_users: tuple[str, ...] = ()
     server_id: str = "default"
     label: str = "VPS"
+    ssh_executable: str | None = None
 
 
 def iso_now(epoch: float | None = None) -> str:
@@ -97,6 +98,7 @@ def read_xray_stats(config: XrayStatsConfig) -> dict[str, Any]:
             REMOTE_STATS_SCRIPT,
             (config.api_server, config.binary_path),
             timeout=20,
+            ssh_executable=config.ssh_executable,
         )
     except (ValueError, RuntimeError) as exc:
         raise type(exc)(f"[xray_stats] {exc}") from exc

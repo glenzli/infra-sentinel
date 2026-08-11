@@ -1,9 +1,17 @@
 # Managed by Infra Sentinel. Schema identifiers use YYYYMMDD.revision.
 # Local Mihomo discovery and sampling frequency are fixed product behavior.
-schema_version = "20260808.4"
+schema_version = "20260811.1"
 
 [app]
 menu_bar_mode = "health"
+
+# Leave empty for automatic discovery. Absolute paths are useful when Windows
+# installers or portable applications use non-standard locations.
+[integrations]
+ssh_executable = ""
+opencode_executable = ""
+opencode_database = ""
+codex_database = ""
 
 [[policies]]
 id = "network-traffic-alerts"

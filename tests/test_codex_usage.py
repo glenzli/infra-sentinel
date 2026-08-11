@@ -13,7 +13,7 @@ import unittest
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "bin"))
 
-from codex_usage import CodexUsageCollector, read_codex_state_stats  # noqa: E402
+from codex_usage import CodexUsageCollector, discover_codex_state_database, read_codex_state_stats  # noqa: E402
 from infra_collectors import CollectorContext  # noqa: E402
 
 
@@ -36,6 +36,12 @@ def create_state_database(path: Path, rows: list[tuple[object, ...]]) -> None:
 
 
 class CodexUsageTests(unittest.TestCase):
+    def test_explicit_portable_database_takes_precedence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "codex.sqlite"
+            database.touch()
+            self.assertEqual(discover_codex_state_database(database), database)
+
     def test_state_stats_aggregate_tokens_models_and_safe_topology(self) -> None:
         epoch = datetime(2026, 8, 9, 12, tzinfo=timezone.utc).timestamp()
         with tempfile.TemporaryDirectory() as temporary:

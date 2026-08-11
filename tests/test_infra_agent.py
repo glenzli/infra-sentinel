@@ -15,6 +15,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "bin"))
 
 from configuration import (  # noqa: E402
     Config,
+    LocalIntegrationPaths,
     MonitorConfig,
     StateConfig,
     default_user_settings,
@@ -35,6 +36,7 @@ from infra_agent import (  # noqa: E402
     SAMPLE_SCHEMA,
     apply_agent_commands,
     build_billing_event,
+    build_system_event,
     build_upstream_event,
     latest_delta_event,
     send_native_notification,
@@ -69,6 +71,7 @@ def make_config(state_dir: Path) -> Config:
         state=StateConfig(1024 * 1024, 2),
         remote_servers=(RemoteServerConfig("default", "VPS", vps, xray, TrafficEstimationConfig("both")),),
         remote_billing_policies=(),
+        integrations=LocalIntegrationPaths(),
         state_dir=state_dir,
     )
 
@@ -154,6 +157,23 @@ class RuntimeConfigTests(unittest.TestCase):
             self.assertEqual(payload["schema"], PROJECTION_SCHEMA)
             self.assertEqual(payload["protocol"]["transport"], "local-file")
             self.assertEqual(payload["infra"]["resources"][0]["id"], "network")
+
+    def test_system_event_is_visible_to_the_native_notification_watcher(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "events.jsonl"
+            event = build_system_event({
+                "timestamp": "2026-08-11T12:00:00+08:00",
+                "type": "alert", "level": "critical", "previous": "healthy",
+                "reasons": ["memory_pressure_critical"], "disk_free_bytes": 100,
+                "memory_pressure": "critical", "thermal_state": "nominal",
+            })
+            path.write_text(json.dumps(event, ensure_ascii=False) + "\n", encoding="utf-8")
+
+            visible = latest_delta_event(path)
+
+            self.assertEqual(visible["scope"], "system_resources")
+            self.assertEqual(visible["alert_group"], "本机系统")
+            self.assertIn("内存压力严重", visible["description"])
 
 class AlertEngineTests(unittest.TestCase):
     def test_alerts_use_exact_mihomo_total_windows(self) -> None:

@@ -52,13 +52,14 @@ class CodexStats:
     maximum_depth: int
 
 
-def discover_codex_state_database() -> Path | None:
+def discover_codex_state_database(preferred: Path | None = None) -> Path | None:
     """Find the active Codex state store, preferring the current location."""
     candidates = (
+        preferred,
         Path.home() / ".codex" / "state_5.sqlite",
         Path.home() / ".codex" / "sqlite" / "state_5.sqlite",
     )
-    return next((candidate for candidate in candidates if candidate.is_file()), None)
+    return next((candidate for candidate in candidates if candidate and candidate.is_file()), None)
 
 
 def _integer(value: Any) -> int:

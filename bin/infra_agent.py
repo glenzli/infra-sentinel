@@ -8,7 +8,6 @@ from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
-import fcntl
 import json
 import logging
 from logging.handlers import RotatingFileHandler
@@ -33,6 +32,7 @@ from configuration import (
     write_user_settings,
 )
 from infra_collectors import CollectorContext, CollectorRegistry, CollectorRun, collected_points
+from instance_lock import acquire_process_lock
 from facility_observer import FacilityMonitor
 from infra_projection import build_infra_projection
 from metric_query import BUCKET_SECONDS, MAX_RANGE_SECONDS, QUERY_SCHEMA, MetricQuery, execute_metric_query
@@ -48,12 +48,13 @@ from mihomo_traffic import (
     save_tracker,
 )
 from network_metrics import network_collector_registry
-from codex_usage import CodexUsageCollector
-from opencode_usage import OpenCodeUsageCollector
+from codex_usage import CodexUsageCollector, discover_codex_state_database
+from opencode_usage import OpenCodeUsageCollector, discover_opencode, discover_opencode_desktop_database
 from sample_timing import annotate_sample_timing, sample_is_realtime
 from remote import RemoteFleetMonitor
 from session import SessionMeter
 from upstream_status import UpstreamStatusMonitor
+from system_resources import SystemResourceCollector
 
 
 PARENT_PROCESS_ENV = "INFRA_SENTINEL_PARENT_PID"
@@ -90,15 +91,7 @@ def ensure_state_dir(config: Config) -> None:
 
 
 def acquire_watch_lock(config: Config) -> Any | None:
-    handle = (config.state_dir / "infra-agent.lock").open("a", encoding="utf-8")
-    try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        handle.close()
-        return None
-    handle.write(f"{os.getpid()}\n")
-    handle.flush()
-    return handle
+    return acquire_process_lock(config.state_dir / "infra-agent.lock")
 
 
 def parent_process_exited() -> bool:
@@ -175,7 +168,7 @@ def latest_delta_event(path: Path) -> dict[str, Any] | None:
         if (
             sample.get("schema") == SAMPLE_SCHEMA
             and sample_is_realtime(sample)
-        ) or record.get("scope") in {"vps_daily_usage", "upstream_status"}:
+        ) or record.get("scope") in {"vps_daily_usage", "upstream_status", "system_resources"}:
             latest = record
     return latest
 
@@ -311,6 +304,37 @@ def build_upstream_event(transition: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def build_system_event(transition: dict[str, Any]) -> dict[str, Any]:
+    reason_labels = {
+        "memory_pressure_warning": "内存压力升高",
+        "memory_pressure_critical": "内存压力严重",
+        "disk_space_low": "磁盘剩余空间低于 10%",
+        "disk_space_critical": "磁盘剩余空间低于 5%",
+        "thermal_pressure_serious": "系统温度压力较高",
+        "thermal_pressure_critical": "系统温度压力严重",
+    }
+    event_type = str(transition.get("type") or "alert")
+    reasons = transition.get("reasons") if isinstance(transition.get("reasons"), list) else []
+    description = "本机系统压力已恢复正常" if event_type == "recovered" else "；".join(
+        reason_labels.get(str(reason), str(reason)) for reason in reasons
+    ) or "本机系统状态发生变化"
+    return {
+        "schema": 1,
+        "id": uuid.uuid4().hex,
+        "timestamp": str(transition.get("timestamp") or iso_now()),
+        "type": event_type,
+        "level": str(transition.get("level") or "warning"),
+        "scope": "system_resources",
+        "alert_group": "本机系统",
+        "previous": str(transition.get("previous") or "unknown"),
+        "reasons": reasons,
+        "description": description,
+        "disk_free_bytes": int(transition.get("disk_free_bytes") or 0),
+        "memory_pressure": str(transition.get("memory_pressure") or "unavailable"),
+        "thermal_state": str(transition.get("thermal_state") or "unavailable"),
+    }
+
+
 def notify(
     event_type: str,
     level: str,
@@ -334,13 +358,17 @@ def notify(
 
 
 def send_native_notification(title: str, body: str) -> None:
-    """Deliver UTF-8 text as AppleScript arguments instead of environment variables.
+    """Deliver the CLI fallback notification on platforms with a safe adapter.
 
     `system attribute` has been observed to decode non-ASCII environment values
     inconsistently under launchd/PyInstaller. Positional arguments preserve the
     Python process' UTF-8 text all the way to AppleScript without interpolating
-    untrusted values into script source.
+    untrusted values into script source.  The Tauri application owns native
+    notifications on every supported desktop; non-macOS CLI runs therefore
+    remain intentionally silent until a native fallback adapter is added.
     """
+    if sys.platform != "darwin":
+        return
     script = "on run argv\n display notification (item 2 of argv) with title (item 1 of argv)\nend run"
     try:
         subprocess.run(
@@ -382,6 +410,21 @@ def notify_upstream(event: dict[str, Any]) -> None:
     else:
         title = f"{label} {'严重' if level == 'critical' else ''}服务异常"
     send_native_notification(title, str(event.get("description") or "请查看官方状态页"))
+
+
+def notify_system(event: dict[str, Any]) -> None:
+    """Deliver standalone system notifications when the app is not hosting them."""
+    if os.environ.get(APP_NOTIFICATIONS_ENV) == "1":
+        return
+    event_type = str(event.get("type") or "alert")
+    level = str(event.get("level") or "warning")
+    if event_type == "recovered":
+        title = "本机系统已恢复"
+    elif event_type == "deescalated":
+        title = "本机系统状态改善"
+    else:
+        title = "本机系统严重压力" if level == "critical" else "本机系统需关注"
+    send_native_notification(title, str(event.get("description") or "请查看系统资源详情"))
 
 
 def write_projection_state(
@@ -452,7 +495,7 @@ def write_projection_state(
         "query": {
             "schema": QUERY_SCHEMA,
             "command": "metrics.query",
-            "instrument": "counter",
+            "instruments": ["counter", "gauge"],
             "bucket_seconds": sorted(BUCKET_SECONDS),
             "bucket_offset_seconds": True,
             "max_range_seconds": MAX_RANGE_SECONDS,
@@ -589,6 +632,7 @@ def handle_sample(
     session_meter: SessionMeter,
     metric_store: MetricStore,
     collector_registry: CollectorRegistry,
+    system_collector: SystemResourceCollector,
     facility_monitor: FacilityMonitor,
     upstream_monitor: UpstreamStatusMonitor,
     logger: logging.Logger,
@@ -664,6 +708,10 @@ def handle_sample(
         if run.status == "error":
             logger.warning("metric collector failed id=%s kind=%s", run.capability.id, run.error_kind)
     metric_store.write(collected_points(collector_runs))
+    for system_transition in system_collector.drain_transitions():
+        event = build_system_event(system_transition)
+        append_jsonl(config.state_dir / "events.jsonl", event, config.state)
+        notify_system(event)
     upstream_snapshot = upstream_monitor.snapshot()
     for upstream_transition in upstream_monitor.drain_transitions():
         event = build_upstream_event(upstream_transition)
@@ -742,9 +790,16 @@ def main() -> int:
             (server.id, server.estimation.billing_mode) for server in config.remote_servers
         )
         collector_registry.register(OpenCodeUsageCollector(
-            checkpoint_path=config.state_dir / "opencode-usage-counters.json"
+            checkpoint_path=config.state_dir / "opencode-usage-counters.json",
+            executable_finder=lambda: discover_opencode(config.integrations.opencode_executable),
+            desktop_database_finder=lambda: discover_opencode_desktop_database(config.integrations.opencode_database),
         ))
-        collector_registry.register(CodexUsageCollector(checkpoint_path=config.state_dir / "codex-usage-day.json"))
+        collector_registry.register(CodexUsageCollector(
+            checkpoint_path=config.state_dir / "codex-usage-day.json",
+            database_finder=lambda: discover_codex_state_database(config.integrations.codex_database),
+        ))
+        system_collector = SystemResourceCollector()
+        collector_registry.register(system_collector)
         facility_monitor = FacilityMonitor(logger)
         facility_monitor.start()
         upstream_monitor = UpstreamStatusMonitor(logger)
@@ -780,6 +835,7 @@ def main() -> int:
                         session_meter,
                         metric_store,
                         collector_registry,
+                        system_collector,
                         facility_monitor,
                         upstream_monitor,
                         logger,

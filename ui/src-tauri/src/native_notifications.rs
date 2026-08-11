@@ -51,6 +51,10 @@ fn notification_event(projection: &Value) -> Option<NotificationEvent> {
     let level = event.get("level").and_then(Value::as_str).unwrap_or("warning");
     let scope = event.get("scope").and_then(Value::as_str);
     let title = match (scope, event_type, level) {
+        (Some("system_resources"), "recovered", _) => "本机系统已恢复".to_owned(),
+        (Some("system_resources"), "deescalated", _) => "本机系统状态改善".to_owned(),
+        (Some("system_resources"), _, "critical") => "本机系统严重压力".to_owned(),
+        (Some("system_resources"), _, _) => "本机系统需关注".to_owned(),
         (Some("upstream_status"), "recovered", _) => format!("{label} 已恢复"),
         (Some("upstream_status"), "deescalated", _) => format!("{label} 状态改善"),
         (Some("upstream_status"), _, "critical") => format!("{label} 严重服务异常"),
@@ -60,7 +64,7 @@ fn notification_event(projection: &Value) -> Option<NotificationEvent> {
         (_, _, "critical") => format!("{label} 严重告警"),
         _ => format!("{label} 流量告警"),
     };
-    let body = if scope == Some("upstream_status") {
+    let body = if scope == Some("upstream_status") || scope == Some("system_resources") {
         event
             .get("description")
             .and_then(Value::as_str)
@@ -153,5 +157,15 @@ mod tests {
         .expect("notification event");
         assert_eq!(event.title, "Claude 服务异常");
         assert_eq!(event.body, "Elevated API errors");
+    }
+
+    #[test]
+    fn system_alerts_use_host_pressure_language() {
+        let event = notification_event(&json!({
+            "last_event": {"id": "event-3", "type": "alert", "level": "critical", "scope": "system_resources", "alert_group": "本机系统", "description": "内存压力严重"}
+        }))
+        .expect("notification event");
+        assert_eq!(event.title, "本机系统严重压力");
+        assert_eq!(event.body, "内存压力严重");
     }
 }

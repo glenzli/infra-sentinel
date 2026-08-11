@@ -19,6 +19,7 @@ Infra Sentinel 已从单一流量工具迁移为个人 AI Infra 可观测面板�
 | Infra Core | 已完成 | MetricPoint、Collector、Source、Resource、Policy 与 Projection 合同 |
 | 本地时序存储 | 已完成最小闭环 | SQLite WAL、幂等写入、旧网络回填、受限聚合查询 |
 | Tauri 桌面壳 | 已完成 | macOS App、菜单栏健康状态、设置、通知与受限 Rust bridge |
+| 跨平台基础 | 进行中 | 平台无关 Host 合同、macOS/Linux/Windows backend、跨平台单实例锁与可覆盖本地集成路径；正式 Release 仍仅 macOS |
 | AI 用量 | 已完成首批来源 | OpenCode 与 Codex 今日/历史/模型/活动观测 |
 | 本地设施观测 | 已完成 | Infra Discovery 自动发现、PCP / Infer Runtime 独立协议 adapter 与 Console 深链 |
 | 跨资源洞察 | 尚未开始 | 等待足够稳定、可比较的长期样本 |
@@ -46,6 +47,7 @@ Versioned UI projections ── Notifications
 - **Policies**：网络突增、VPS 每日用量和事件状态机；
 - **Projections**：将事实转换为菜单栏、概览、资源详情和通知；
 - **Native App**：窗口、导航、本地化和交互，不承担业务计量。
+- **Platform adapters**：系统资源、进程锁、通知、URL 打开、本地应用发现与打包；不把平台分支带入指标、策略或 UI 语义。
 - **Infra Discovery**：只负责验证注册、租约以及具体协议版本与 binding 的精确匹配；
 - **Facility adapters**：分别拥有 PCP 与 Infer Runtime 应用 wire 的读取和私有 Projection 归一化；专属诊断留在设施 Console。
 
@@ -58,6 +60,13 @@ Versioned UI projections ── Notifications
 3. 观测可信度：每个总量都能追溯到来源、窗口、方法和覆盖范围；
 4. 分析一致性：Network 与 AI 详情共享时间范围、总量、组成和速率的交互结构；
 5. 发布质量：匿名截图、准确 README、构建验证、最低系统版本和未公证说明同步更新。
+
+## 跨平台迁移顺序
+
+1. **已完成基础边界**：HostReading + capability 合同；macOS、Linux、Windows 系统 backend；Agent 单实例锁；SSH/OpenCode/Codex 路径覆盖；UI 按能力展示。
+2. **Linux 桌面闭环**：Mihomo TCP/Unix Controller 的本机安全合同、桌面通知、Infra Protocol Unix Socket 实机互通、AppImage/deb 打包与休眠验证。
+3. **Windows 桌面闭环**：回环 Mihomo Controller 与 Secret、Infra Protocol Named Pipe adapter、原生通知、OpenSSH/便携数据库路径验证、MSI/NSIS 打包。
+4. **发布矩阵**：三平台独立 CI 构建和测试；每个平台只声明经过实机验证的 capability，不追求虚假的功能对称。
 
 退出标准：
 

@@ -7,7 +7,10 @@ This directory owns the cross-platform desktop shell only.
   versioned Projection and command results, and write only allowlisted Agent
   command documents.
 - Python `infra_agent.py` remains the owner of collectors, SQLite, policies,
-  notifications, state, and the Projection contract.
+  event state, and the Projection contract.
+- Rust/Tauri owns desktop lifecycle, URL opening, menu-bar behavior, and native
+  notifications. Platform branches stay in this native shell rather than the
+  WebView or resource projections.
 
 Tauri owns the lifetime of a packaged Agent sidecar. On first launch it creates
 the local `config.toml` from the bundled example, starts the Agent, and restarts
@@ -25,3 +28,7 @@ permissions. It exposes only `read_projection` plus the public
 `configuration.update` Agent commands. Configuration writes are validated by
 the Python configuration owner; on success, the Agent exits cleanly so its
 supervisor can restart it with the new runtime configuration.
+
+The UI is capability-driven. A system backend may publish only the metrics its
+platform can verify; unsupported fields are omitted from the view instead of
+being rendered as zero, healthy, or inferred equivalents.

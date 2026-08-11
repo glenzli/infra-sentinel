@@ -6,6 +6,7 @@ Infra Sentinel is a local-first observability dashboard for personal AI infrastr
 
 - **Network**: local Mihomo traffic, domain and proxy-route attribution, Linux VPS billable traffic, and Xray per-user logical traffic;
 - **AI usage**: local Token records from OpenCode and Codex, model composition, consumption rate, and Agent activity;
+- **Local system**: host CPU, memory pressure and swap, disk capacity, physical disk throughput and IOPS, and thermal pressure;
 - **Upstream services**: low-frequency, read-only observation of the official OpenAI, Claude, and DeepSeek API status feeds;
 - **Local facilities**: automatically discovered, protocol-bounded health projections for compatible runtimes and services.
 
@@ -35,6 +36,7 @@ Infra Sentinel does not force bytes, Tokens, and alerts into a synthetic “scor
 - Is a data source unavailable, or is its observation window incomplete?
 - Is the local failure accompanied by a confirmed upstream API incident?
 - Which local infrastructure facilities are healthy or degraded, and where is their native Console?
+- Is an Agent swarm pushing the Mac into memory, disk-capacity, I/O, or thermal pressure?
 
 When data cannot be obtained reliably, the interface reports it as unknown, hides the unavailable module, or marks the source unhealthy. It does not present an inferred value as a bill.
 
@@ -84,6 +86,14 @@ The AI module reads only aggregate metadata already stored by local clients. Eve
 
 OpenCode calendar-day totals and Codex local-baseline windows may differ. The interface shows the observation coverage for every source directly. AI summaries are local trend measurements, not account billing for ChatGPT, Codex, or any API Provider.
 
+## Local system module
+
+The system collector consumes a platform-neutral capability contract rather than assuming every host exposes the same counters. The verified macOS backend observes aggregate CPU utilization, native memory-pressure state, compressed memory and swap, disk free space, physical disk bytes and operations, conservative disk-health evidence, and thermal state. Current throughput values refresh with the normal Agent sample; historical gauges and interval counters are persisted every five minutes, while supported disk-health checks run once at startup and then every six hours.
+
+Initial Linux and Windows backends establish the cross-platform boundary: Linux uses aggregate procfs/sysfs counters; Windows uses stable Win32 CPU, memory, and disk-capacity APIs. A backend explicitly declares its capabilities, and the UI omits unavailable measurements instead of rendering them as zero or healthy. macOS remains the only packaged and release-verified desktop target for now.
+
+Warnings are limited to reliable pressure signals: macOS memory pressure, disk capacity below 10% or 5%, and serious or critical thermal state. High CPU or disk activity is graphed but is not treated as an incident without a sustained-pressure contract. The module is host-wide in this release; per-Agent process attribution is deliberately deferred.
+
 ## Upstream service status
 
 Infra Sentinel reads the public official status summaries for OpenAI, Claude, and DeepSeek every five minutes. It shows relevant API components, active incidents, official update time, and a link to the provider's native status page. No API key or synthetic model request is used.
@@ -92,7 +102,7 @@ Official status is diagnostic context rather than a guarantee for a particular a
 
 ## Analysis views
 
-Network and AI usage share the same observation structure:
+Network, AI usage, and local system resources share the same observation structure:
 
 - Fixed summary: today’s observation, historical or billable total, and collection coverage;
 - Time ranges: Today, 7 days, 30 days, and All history;
@@ -122,7 +132,7 @@ compatible. See [facility discovery](docs/facility-discovery.md).
 ## Architecture
 
 ```text
-Mihomo / VPS / Xray / OpenCode / Codex → Collectors → SQLite metrics ┐
+Mihomo / VPS / Xray / OpenCode / Codex / platform host backends → Collectors → SQLite metrics ┐
 Official provider status feeds → low-frequency status observer ───────┤
 Local facilities → Infra Protocol discovery → provider adapters ──────┤
                                                                       ↓
@@ -137,6 +147,8 @@ Local facilities → Infra Protocol discovery → provider adapters ────
 - The Rust bridge exposes no arbitrary file, shell, or SQL access;
 - Collector failures are isolated so one unavailable source cannot block other resources;
 - Facility discovery and provider-protocol I/O have their own lifecycle and never block resource sampling.
+
+Platform-specific behavior is kept behind narrow adapters: host resource backends, the Agent single-instance lock, native notifications, URL opening, and local application discovery. The Projection, metric store, policies, and Web UI remain platform-neutral and render only declared capabilities.
 
 Projection and discovery contracts use date-versioned schemas and require an exact compatible
 version. Metric queries support minute, 5-minute, hourly, and daily aggregation, with bounded time
@@ -153,6 +165,7 @@ Officially supported:
 - Optional Xray StatsService per-user statistics;
 - The OpenCode Desktop local session database or compatible CLI;
 - The Codex local state database;
+- Public macOS host, VM, IOKit disk, filesystem capacity, and thermal APIs;
 - Public official status feeds for OpenAI, Claude, and DeepSeek;
 - Local facilities publishing compatible Infra Protocol discovery offers for the supported
   [PCP](https://github.com/glenzli/paged-context-protocol) or
@@ -165,6 +178,7 @@ Not currently supported:
 - Per-user server statistics from services other than Xray;
 - ChatGPT/Codex subscription limits or generic API account balances;
 - Screen time, prompt analysis, or full-disk file scanning.
+- Packaged Windows or Linux desktop releases. Initial host backends are present, but native notifications, Mihomo controller transport, facility named-pipe transport, installers, and target-platform validation still need to be completed.
 
 Accidental interface compatibility does not imply official support.
 
@@ -205,6 +219,8 @@ The first launch creates a default configuration. Alerts and remote hosts are th
 
 Local Mihomo discovery requires no address configuration. For a remote host, enter only a Host alias already defined in `~/.ssh/config`. The app does not store private keys, passwords, or real host addresses.
 
+The **Local integrations** settings section normally stays empty. It provides absolute-path overrides for SSH, the OpenCode executable, the OpenCode Desktop database, and the Codex database when a portable or non-standard installation cannot be discovered—particularly useful for Windows installations whose location is user-selected. Empty fields always mean platform auto-discovery; these paths are never treated as executable arguments or scanned recursively.
+
 ```sshconfig
 Host edge-a
   HostName vps.example.com
@@ -230,7 +246,8 @@ This includes the SQLite metric store, counter checkpoints, health state, bounde
 - URL paths, query parameters, request headers, or network payloads;
 - Project paths, file contents, Git metadata, or task titles;
 - SSH private keys, passwords, API keys, or authentication credentials;
-- Packet captures.
+- Packet captures;
+- File names, filesystem paths, process arguments, window titles, or per-file I/O activity.
 
 All collection, storage, and analysis happen locally by default. Upstream status observation makes anonymous, read-only HTTPS requests only to the providers' public status feeds.
 

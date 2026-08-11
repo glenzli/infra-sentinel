@@ -4,6 +4,7 @@ import { tr } from "./i18n";
 import { NetworkAnalysisSnapshot, networkPathTotals } from "./network_analysis";
 import { renderFacilityCards } from "./facility_view";
 import { renderUpstreamStatusCard } from "./upstream_status_view";
+import { renderSystemResourceCard } from "./system_resource_view";
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" })[char] ?? char);
@@ -14,6 +15,7 @@ function resourceLabel(resource: ResourceProjection): string {
     network: tr("Network", "网络"),
     ai_usage: tr("AI usage", "AI 用量"),
     upstream_status: tr("Upstream services", "上游服务状态"),
+    system: tr("This Mac", "本机系统"),
   };
   return labels[resource.id] ?? resource.id;
 }
@@ -84,23 +86,38 @@ function resourceCard(resource: ResourceProjection): string {
 export function renderOverview(projection: AgentProjection, networkAnalysis: NetworkAnalysisSnapshot): string {
   const { infra, session } = projection;
   const resources = infra.resources.filter((resource) => resource.enabled);
-  const diagnosticResources = resources.filter((resource) => resource.id === "upstream_status");
-  const primaryResources = resources.filter((resource) => resource.id !== "upstream_status");
-  const orderedResources = [...primaryResources, ...diagnosticResources];
+  const categoryOrder: Record<string, number> = { usage: 0, runtime: 1, dependency: 2 };
+  const orderedResources = [...resources].sort((left, right) =>
+    (categoryOrder[left.category] ?? 99) - (categoryOrder[right.category] ?? 99));
   const activeAlerts = infra.overall.active_alerts;
   const onlineSources = orderedResources.reduce((total, resource) => total + resource.online_source_count, 0);
   const configuredSources = orderedResources.reduce((total, resource) => total + resource.source_count, 0);
   const facilities = infra.facilities;
   const renderResourceCard = (resource: ResourceProjection) => resource.id === "network"
     ? networkCard(projection, resource, networkAnalysis)
+    : resource.id === "system"
+      ? renderSystemResourceCard(resource, projection.infra.system)
     : resource.id === "ai_usage"
       ? aiUsageCard(projection, resource)
       : resource.id === "upstream_status"
         ? renderUpstreamStatusCard(resource, projection.infra.upstream_status)
         : resourceCard(resource);
-  const primaryResourceCards = primaryResources.map(renderResourceCard).join("");
-  const diagnosticResourceCards = diagnosticResources.map(renderResourceCard).join("");
   const facilityCards = renderFacilityCards(facilities);
   const moduleCount = resources.length + (facilities?.total ?? 0);
-  return `<section class="overview-toolbar"><div class="overview-toolbar__session"><span>${tr("Session", "当前统计周期")}</span><strong>${formatDuration(session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button></div></section><section class="summary-grid summary-grid--compact" aria-label="${tr("Overview", "概览")}"><article class="summary-card summary-card--status"><p>${tr("Overall health", "整体健康")}</p><strong class="status-value status-value--${escapeHtml(infra.overall.status)}">${escapeHtml(statusLabel(infra.overall.status))}</strong><small>${activeAlerts ? tr(`${activeAlerts} active alert${activeAlerts === 1 ? "" : "s"}`, `当前 ${activeAlerts} 个活动告警`) : tr("No active alerts", "暂无活动告警")}</small></article><article class="summary-card"><p>${tr("Enabled resources", "已启用资源")}</p><strong>${orderedResources.length}</strong><small>${orderedResources.map(resourceLabel).join(" · ") || tr("None", "无")}</small></article><article class="summary-card"><p>${tr("Data sources", "数据源")}</p><strong>${onlineSources}<em> / ${configuredSources}</em></strong><small>${tr("online", "在线")}</small></article><article class="summary-card"><p>${tr("Facilities", "运行设施")}</p><strong>${facilities?.healthy ?? 0}<em> / ${facilities?.total ?? 0}</em></strong><small>${facilities?.attention ? tr(`${facilities.attention} need attention`, `${facilities.attention} 个需关注`) : tr("discovered locally", "本机自动发现")}</small></article></section><section class="module-section module-section--overview"><div class="section-heading"><div><p class="eyebrow">${tr("INFRASTRUCTURE", "基础设施")}</p><h2>${tr("Infrastructure", "基础设施")}</h2></div><span class="section-heading__meta">${moduleCount} ${tr("modules", "个模块")}</span></div><div class="resource-grid resource-grid--compact">${primaryResourceCards}${facilityCards}${diagnosticResourceCards}${moduleCount ? "" : `<p class="empty">${tr("No infrastructure module is available.", "尚无可用基础设施模块。")}</p>`}</div></section>`;
+  const resourceCards = (category: string) => orderedResources
+    .filter((resource) => resource.category === category)
+    .map(renderResourceCard)
+    .join("");
+  const knownCategories = new Set(Object.keys(categoryOrder));
+  const otherResources = orderedResources.filter((resource) => !knownCategories.has(resource.category));
+  const group = (category: string, eyebrow: string, title: string, cards: string, count: number) => count
+    ? `<section class="overview-group overview-group--${category}"><div class="overview-group__heading"><div><p>${eyebrow}</p><h3>${title}</h3></div><span>${count} ${tr("modules", "个模块")}</span></div><div class="resource-grid resource-grid--compact">${cards}</div></section>`
+    : "";
+  const groupedModules = [
+    group("usage", tr("USAGE & COST", "用量与开销"), tr("Resource consumption", "资源消耗"), resourceCards("usage"), orderedResources.filter((resource) => resource.category === "usage").length),
+    group("runtime", tr("LOCAL RUNTIME", "本机运行"), tr("Local runtime", "本机运行"), `${resourceCards("runtime")}${facilityCards}`, orderedResources.filter((resource) => resource.category === "runtime").length + (facilities?.total ?? 0)),
+    group("dependency", tr("EXTERNAL", "外部服务"), tr("External dependencies", "外部依赖"), resourceCards("dependency"), orderedResources.filter((resource) => resource.category === "dependency").length),
+    group("other", tr("OTHER", "其他"), tr("Other infrastructure", "其他基础设施"), otherResources.map(renderResourceCard).join(""), otherResources.length),
+  ].join("");
+  return `<section class="overview-toolbar"><div class="overview-toolbar__session"><span>${tr("Session", "当前统计周期")}</span><strong>${formatDuration(session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button></div></section><section class="summary-grid summary-grid--compact" aria-label="${tr("Overview", "概览")}"><article class="summary-card summary-card--status"><p>${tr("Overall health", "整体健康")}</p><strong class="status-value status-value--${escapeHtml(infra.overall.status)}">${escapeHtml(statusLabel(infra.overall.status))}</strong><small>${activeAlerts ? tr(`${activeAlerts} active alert${activeAlerts === 1 ? "" : "s"}`, `当前 ${activeAlerts} 个活动告警`) : tr("No active alerts", "暂无活动告警")}</small></article><article class="summary-card"><p>${tr("Enabled resources", "已启用资源")}</p><strong>${orderedResources.length}</strong><small>${orderedResources.map(resourceLabel).join(" · ") || tr("None", "无")}</small></article><article class="summary-card"><p>${tr("Data sources", "数据源")}</p><strong>${onlineSources}<em> / ${configuredSources}</em></strong><small>${tr("online", "在线")}</small></article><article class="summary-card"><p>${tr("Facilities", "运行设施")}</p><strong>${facilities?.healthy ?? 0}<em> / ${facilities?.total ?? 0}</em></strong><small>${facilities?.attention ? tr(`${facilities.attention} need attention`, `${facilities.attention} 个需关注`) : tr("discovered locally", "本机自动发现")}</small></article></section><section class="module-section module-section--overview"><div class="section-heading"><div><p class="eyebrow">${tr("INFRASTRUCTURE", "基础设施")}</p><h2>${tr("Infrastructure", "基础设施")}</h2></div><span class="section-heading__meta">${moduleCount} ${tr("modules", "个模块")}</span></div><div class="overview-groups">${groupedModules || `<p class="empty">${tr("No infrastructure module is available.", "尚无可用基础设施模块。")}</p>`}</div></section>`;
 }

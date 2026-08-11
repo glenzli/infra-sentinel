@@ -60,6 +60,7 @@ class VpsConfig:
     server_id: str = "default"
     label: str = "VPS"
     billing_mode: str = "both"
+    ssh_executable: str | None = None
 
 
 def iso_now(epoch: float | None = None) -> str:
@@ -81,6 +82,7 @@ def read_vps_counters(config: VpsConfig) -> dict[str, Any]:
             config.ssh_host,
             REMOTE_COUNTER_SCRIPT,
             (config.interface,),
+            ssh_executable=config.ssh_executable,
         )
     except (ValueError, RuntimeError) as exc:
         raise type(exc)(f"[vps] {exc}") from exc

@@ -27,8 +27,8 @@ from xray_stats import XrayStatsConfig
 
 
 STATE_DIRECTORY_ENV = "INFRA_SENTINEL_STATE_DIR"
-CONFIG_SCHEMA = "20260808.4"
-PREVIOUS_CONFIG_SCHEMA = "20260808.3"
+CONFIG_SCHEMA = "20260811.1"
+PREVIOUS_CONFIG_SCHEMA = "20260808.4"
 SETTINGS_SCHEMA = CONFIG_SCHEMA
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG = PROJECT_ROOT / "config.toml"
@@ -43,8 +43,11 @@ XRAY_BINARY_PATH = "/usr/local/bin/xray"
 MAX_LOG_BYTES = 10 * 1024 * 1024
 LOG_BACKUPS = 5
 
-CONTRACT_TOP_LEVEL_KEYS = {"app", "policies", "sources"}
+CONTRACT_TOP_LEVEL_KEYS = {"app", "integrations", "policies", "sources"}
 APP_KEYS = {"menu_bar_mode"}
+INTEGRATION_KEYS = {
+    "ssh_executable", "opencode_executable", "opencode_database", "codex_database",
+}
 POLICY_KEYS = {
     "id", "kind", "resource_id", "warning_window_minutes", "warning_mib",
     "critical_window_minutes", "critical_mib",
@@ -91,6 +94,7 @@ class Config:
     state: StateConfig
     remote_servers: tuple[RemoteServerConfig, ...]
     remote_billing_policies: tuple[BillingBudgetPolicy, ...]
+    integrations: "LocalIntegrationPaths"
     state_dir: Path
 
 
@@ -101,10 +105,27 @@ class UserSettings:
     critical_window_minutes: int
     critical_mib: int
     remote_servers: tuple[dict[str, Any], ...]
+    integrations: "LocalIntegrationPaths"
+
+
+@dataclass(frozen=True)
+class LocalIntegrationPaths:
+    ssh_executable: Path | None = None
+    opencode_executable: Path | None = None
+    opencode_database: Path | None = None
+    codex_database: Path | None = None
+
+    def as_payload(self) -> dict[str, str]:
+        return {
+            "ssh_executable": str(self.ssh_executable or ""),
+            "opencode_executable": str(self.opencode_executable or ""),
+            "opencode_database": str(self.opencode_database or ""),
+            "codex_database": str(self.codex_database or ""),
+        }
 
 
 def default_user_settings() -> UserSettings:
-    return UserSettings(5, 250, 10, 1024, ())
+    return UserSettings(5, 250, 10, 1024, (), LocalIntegrationPaths())
 
 
 def _require_exact_keys(raw: dict[str, Any], expected: set[str], context: str) -> None:
@@ -139,6 +160,27 @@ def _boolean(raw: dict[str, Any], key: str) -> bool:
     if isinstance(value, int) and value in (0, 1):
         return bool(value)
     raise ValueError(f"{key} 必须是 true 或 false")
+
+
+def _optional_path(raw: dict[str, Any], key: str) -> Path | None:
+    value = raw.get(key)
+    if not isinstance(value, str):
+        raise ValueError(f"{key} 必须是字符串")
+    text = value.strip()
+    if not text:
+        return None
+    path = Path(text).expanduser()
+    if not path.is_absolute() or "\n" in text or "\r" in text:
+        raise ValueError(f"{key} 必须为空或绝对路径")
+    return path
+
+
+def _integration_paths(raw: dict[str, Any]) -> LocalIntegrationPaths:
+    _require_exact_keys(raw, INTEGRATION_KEYS, "[integrations]")
+    return LocalIntegrationPaths(**{
+        key: _optional_path(raw, key)
+        for key in INTEGRATION_KEYS
+    })
 
 
 def _parse_remote_sources(raw_sources: list[Any]) -> tuple[dict[str, Any], ...]:
@@ -209,6 +251,7 @@ def _settings_from_contract(
     _require_exact_keys(app, APP_KEYS, "[app]")
     if app.get("menu_bar_mode") != "health":
         raise ValueError("menu_bar_mode 只能是 health")
+    integrations = _integration_paths(_require_table(body, "integrations"))
     policies = body.get("policies")
     sources = body.get("sources")
     if not isinstance(policies, list) or not isinstance(sources, list):
@@ -225,6 +268,7 @@ def _settings_from_contract(
         critical_window_minutes=_integer(traffic, "critical_window_minutes", 1, 240),
         critical_mib=_integer(traffic, "critical_mib", 1, 1_048_576),
         remote_servers=_parse_remote_sources(sources),
+        integrations=integrations,
     )
     servers = {server["id"]: server for server in settings.remote_servers}
     for policy in policies:
@@ -277,6 +321,7 @@ def settings_payload(settings: UserSettings) -> dict[str, Any]:
     return {
         "schema": SETTINGS_SCHEMA,
         "app": {"menu_bar_mode": "health"},
+        "integrations": settings.integrations.as_payload(),
         "policies": policies,
         "sources": sources,
     }
@@ -288,6 +333,12 @@ def serialize_settings(settings: UserSettings) -> str:
         "# Local Mihomo discovery and sampling frequency are fixed product behavior.",
         f'schema_version = "{CONFIG_SCHEMA}"', "",
         "[app]", 'menu_bar_mode = "health"', "",
+        "[integrations]",
+        *(
+            f"{key} = {json.dumps(value, ensure_ascii=False)}"
+            for key, value in settings.integrations.as_payload().items()
+        ),
+        "",
         "[[policies]]", 'id = "network-traffic-alerts"', 'kind = "traffic.threshold"', 'resource_id = "network"',
         f"warning_window_minutes = {settings.warning_window_minutes}", f"warning_mib = {settings.warning_mib}",
         f"critical_window_minutes = {settings.critical_window_minutes}", f"critical_mib = {settings.critical_mib}", "",
@@ -332,6 +383,7 @@ def _legacy_settings(raw: dict[str, Any]) -> UserSettings:
         sources.append({"kind": "network.linux-xray", **{key: value for key, value in server.items() if key != "billing_cycle_start_day"}})
     return _settings_from_contract({
         "schema": CONFIG_SCHEMA, "app": {"menu_bar_mode": "health"},
+        "integrations": LocalIntegrationPaths().as_payload(),
         "policies": [{"id": "network-traffic-alerts", "kind": "traffic.threshold", "resource_id": "network", **monitor}],
         "sources": sources,
     }, "schema")
@@ -354,17 +406,10 @@ def _migrate_legacy_config(path: Path, raw: dict[str, Any]) -> UserSettings:
 
 
 def _migrate_previous_config(path: Path, raw: dict[str, Any]) -> UserSettings:
-    """One-time migration from the former billing-cycle guardrail to daily usage."""
+    """One-time migration that adds optional local integration path overrides."""
     document = json.loads(json.dumps(raw))
     document["schema_version"] = CONFIG_SCHEMA
-    for source in document.get("sources", []):
-        if isinstance(source, dict) and source.get("kind") == "network.linux-xray":
-            source.pop("billing_cycle_start_day", None)
-    for policy in document.get("policies", []):
-        if isinstance(policy, dict) and policy.get("kind") == "network.billing.budget":
-            source_id = str(policy.get("source_id", ""))
-            policy["kind"] = "network.daily.usage"
-            policy["id"] = f"{source_id}-daily-usage"
+    document["integrations"] = LocalIntegrationPaths().as_payload()
     settings = _settings_from_contract(document, "schema_version")
     backup = path.with_name(f"{path.stem}.pre-{CONFIG_SCHEMA}{path.suffix}")
     if not backup.exists():
@@ -394,11 +439,14 @@ def runtime_config(settings: UserSettings, state_dir: Path) -> Config:
                             settings.critical_window_minutes * 60, settings.critical_mib * 1024 * 1024)
     remotes = []
     for server in settings.remote_servers:
+        ssh_executable = str(settings.integrations.ssh_executable) if settings.integrations.ssh_executable else None
         vps = VpsConfig(server_id=server["id"], label=server["label"], enabled=server["enabled"], ssh_host=server["ssh_host"],
-                        interface=VPS_INTERFACE, poll_seconds=REMOTE_POLL_SECONDS, billing_mode=server["billing_mode"])
+                        interface=VPS_INTERFACE, poll_seconds=REMOTE_POLL_SECONDS, billing_mode=server["billing_mode"],
+                        ssh_executable=ssh_executable)
         xray = XrayStatsConfig(server_id=server["id"], label=server["label"], enabled=server["enabled"] and server["xray_stats_enabled"],
                                ssh_host=server["ssh_host"], api_server=XRAY_API_SERVER, binary_path=XRAY_BINARY_PATH,
-                               poll_seconds=REMOTE_POLL_SECONDS, expected_users=(), flagged_users=())
+                               poll_seconds=REMOTE_POLL_SECONDS, expected_users=(), flagged_users=(),
+                               ssh_executable=ssh_executable)
         remotes.append(RemoteServerConfig(server["id"], server["label"], vps, xray, TrafficEstimationConfig(server["billing_mode"])))
     billing_policies = tuple(
         BillingBudgetPolicy(
@@ -411,7 +459,7 @@ def runtime_config(settings: UserSettings, state_dir: Path) -> Config:
         for server in settings.remote_servers
         if server["usage_alert_enabled"]
     )
-    return Config(monitor, StateConfig(), tuple(remotes), billing_policies, state_dir)
+    return Config(monitor, StateConfig(), tuple(remotes), billing_policies, settings.integrations, state_dir)
 
 
 def default_config_path() -> Path:

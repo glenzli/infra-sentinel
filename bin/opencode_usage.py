@@ -14,6 +14,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -65,10 +66,11 @@ class OpenCodeDailyUsage:
     models: tuple[dict[str, Any], ...]
 
 
-def discover_opencode() -> str | None:
+def discover_opencode(preferred: Path | None = None) -> str | None:
     """Find only executable CLI locations; no OpenCode data directories are read."""
     discovered = shutil.which("opencode")
     candidates = [
+        str(preferred) if preferred else None,
         discovered,
         str(Path.home() / ".local" / "bin" / "opencode"),
         str(Path.home() / ".opencode" / "bin" / "opencode"),
@@ -81,16 +83,19 @@ def discover_opencode() -> str | None:
     return None
 
 
-def discover_opencode_desktop_database() -> Path | None:
+def discover_opencode_desktop_database(preferred: Path | None = None) -> Path | None:
     """Locate OpenCode Desktop's session database, never its auth store."""
-    candidate = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
-    return candidate if candidate.is_file() else None
+    candidates = [preferred, Path.home() / ".local" / "share" / "opencode" / "opencode.db"]
+    for variable in ("LOCALAPPDATA", "APPDATA"):
+        if root := os.environ.get(variable):
+            candidates.append(Path(root) / "OpenCode" / "opencode.db")
+    return next((candidate for candidate in candidates if candidate and candidate.is_file()), None)
 
 
 def os_access_executable(path: str) -> bool:
     # Kept tiny and injectable-adjacent so the discovery contract stays
     # explicit in tests without importing any OpenCode-owned local files.
-    return Path(path).exists() and bool(Path(path).stat().st_mode & 0o111)
+    return Path(path).exists() and os.access(path, os.X_OK)
 
 
 def _table_text(line: str) -> str:

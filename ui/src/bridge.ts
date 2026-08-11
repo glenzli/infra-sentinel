@@ -14,6 +14,7 @@ export interface SourceProjection {
 
 export interface ResourceProjection {
   id: string;
+  category: string;
   status: OverallStatus;
   enabled: boolean;
   primary_metric: string;
@@ -122,6 +123,52 @@ export interface InfraProjection {
   ai_usage?: Record<string, unknown>;
   facilities?: FacilitiesProjection;
   upstream_status?: UpstreamStatusProjection;
+  system?: SystemResourceProjection;
+}
+
+export interface SystemResourceProjection {
+  schema: string;
+  available: boolean;
+  platform: string;
+  capabilities: string[];
+  status: OverallStatus;
+  quality: string;
+  reasons: string[];
+  observed_at: string;
+  cpu: { percent: number };
+  memory: {
+    pressure: string;
+    pressure_exact: boolean;
+    total_bytes: number;
+    available_bytes: number;
+    compressed_bytes: number;
+    swap_used_bytes: number;
+    swapin_bytes_per_second: number;
+    swapout_bytes_per_second: number;
+  };
+  disk: {
+    total_bytes: number;
+    free_bytes: number;
+    used_percent: number;
+    read_bytes_per_second: number;
+    write_bytes_per_second: number;
+    read_iops: number;
+    write_iops: number;
+    physical_io_available: boolean;
+    health?: {
+      state: string;
+      observed_at: string;
+      reason_codes: string[];
+      read_errors: number | null;
+      write_errors: number | null;
+      read_retries: number | null;
+      write_retries: number | null;
+      interval_seconds: number;
+    };
+  };
+  thermal: { state: string };
+  persistence: { interval_seconds: number };
+  privacy: string;
 }
 
 export interface AgentProjection {

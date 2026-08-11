@@ -12,8 +12,10 @@ import { renderOverview } from "./overview_view";
 import { loadSettings, renderSettings } from "./settings_view";
 import { renderFacilityDetailPage } from "./facility_view";
 import { renderUpstreamStatusResourcePage } from "./upstream_status_view";
+import { renderSystemResourcePage } from "./system_resource_view";
+import { SystemResourceAnalysisController, SystemTimeRange } from "./system_resource_analysis";
 
-type AppView = "overview" | "network" | "ai_usage" | "upstream_status" | "facility" | "settings";
+type AppView = "overview" | "system" | "network" | "ai_usage" | "upstream_status" | "facility" | "settings";
 
 function appRoot(): HTMLDivElement {
   const root = document.querySelector<HTMLDivElement>("#app");
@@ -28,6 +30,7 @@ let latestProjection: AgentProjection | undefined;
 const networkAnalysis = new NetworkAnalysisController();
 const networkOverviewAnalysis = new NetworkAnalysisController("attribution", "today");
 const aiAnalysis = new AiAnalysisController();
+const systemAnalysis = new SystemResourceAnalysisController();
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" })[char] ?? char);
@@ -64,6 +67,7 @@ function footer(projection: AgentProjection): string {
 function renderProjection(projection: AgentProjection): void {
   latestProjection = projection;
   const network = projection.infra.resources.find((resource) => resource.enabled && resource.id === "network");
+  const system = projection.infra.resources.find((resource) => resource.enabled && resource.id === "system");
   const aiUsage = projection.infra.resources.find((resource) => resource.enabled && resource.id === "ai_usage");
   const upstreamStatus = projection.infra.resources.find((resource) => resource.enabled && resource.id === "upstream_status");
   const sources = network ? projection.infra.sources.filter((source) => source.resource_id === network.id) : [];
@@ -73,6 +77,8 @@ function renderProjection(projection: AgentProjection): void {
   const selectedFacility = projection.infra.facilities?.items.find((facility) => facility.id === selectedFacilityId);
   const content = activeView === "network" && network
     ? `<section class="dashboard-actions"><div><p class="eyebrow">${tr("CURRENT SESSION", "当前统计周期")}</p><strong>${formatDuration(projection.session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button><button class="button button--danger" id="reset"><span>${tr("Reset totals", "重置统计")}</span></button></div></section>${renderNetworkResourcePage(projection, network, sources, networkAnalysis.snapshot())}`
+    : activeView === "system" && system
+      ? `${controls}${renderSystemResourcePage(system, projection.infra.system, systemAnalysis.snapshot())}`
     : activeView === "ai_usage" && aiUsage
       ? `${controls}${renderAiUsageResourcePage(projection, aiUsage, aiSources, aiAnalysis.snapshot())}`
     : activeView === "upstream_status" && upstreamStatus
@@ -86,7 +92,7 @@ function renderProjection(projection: AgentProjection): void {
   root.querySelector<HTMLButtonElement>("#reset")?.addEventListener("click", () => void requestReset());
   root.querySelector<HTMLButtonElement>("#back")?.addEventListener("click", () => { activeView = "overview"; selectedFacilityId = undefined; renderProjection(projection); });
   root.querySelectorAll<HTMLButtonElement>("[data-resource-id]").forEach((button) => button.addEventListener("click", () => {
-    if (button.dataset.resourceId === "network" || button.dataset.resourceId === "ai_usage" || button.dataset.resourceId === "upstream_status") { activeView = button.dataset.resourceId; renderProjection(projection); }
+    if (button.dataset.resourceId === "system" || button.dataset.resourceId === "network" || button.dataset.resourceId === "ai_usage" || button.dataset.resourceId === "upstream_status") { activeView = button.dataset.resourceId; renderProjection(projection); }
   }));
   root.querySelectorAll<HTMLElement>("[data-facility-id]").forEach((card) => {
     const openDetails = () => {
@@ -145,6 +151,13 @@ function renderProjection(projection: AgentProjection): void {
       if (latestProjection) renderProjection(latestProjection);
     }
   }));
+  root.querySelectorAll<HTMLButtonElement>("[data-system-range]").forEach((button) => button.addEventListener("click", () => {
+    const range = button.dataset.systemRange as SystemTimeRange;
+    if (range === "1h" || range === "24h" || range === "7d" || range === "30d") {
+      systemAnalysis.selectRange(range);
+      if (latestProjection) renderProjection(latestProjection);
+    }
+  }));
   bindChrome();
   if (activeView === "network") void networkAnalysis.hydrate(() => {
     if (activeView === "network" && latestProjection) renderProjection(latestProjection);
@@ -154,6 +167,9 @@ function renderProjection(projection: AgentProjection): void {
   });
   if (activeView === "ai_usage") void aiAnalysis.hydrate(() => {
     if (activeView === "ai_usage" && latestProjection) renderProjection(latestProjection);
+  });
+  if (activeView === "system") void systemAnalysis.hydrate(() => {
+    if (activeView === "system" && latestProjection) renderProjection(latestProjection);
   });
 }
 

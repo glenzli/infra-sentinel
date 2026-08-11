@@ -25,6 +25,10 @@ def payload(*, billing_mode: str = "both") -> dict[str, object]:
     return {
         "schema": SETTINGS_SCHEMA,
         "app": {"menu_bar_mode": "health"},
+        "integrations": {
+            "ssh_executable": "", "opencode_executable": "",
+            "opencode_database": "", "codex_database": "",
+        },
         "policies": [{
             "id": "network-traffic-alerts", "kind": "traffic.threshold", "resource_id": "network",
             "warning_window_minutes": 7, "warning_mib": 320,
@@ -42,7 +46,7 @@ def payload(*, billing_mode: str = "both") -> dict[str, object]:
 class ConfigurationTests(unittest.TestCase):
     def test_example_is_the_complete_date_versioned_contract(self) -> None:
         settings = read_user_settings(PROJECT_ROOT / "config.example.toml")
-        self.assertEqual(CONFIG_SCHEMA, "20260808.4")
+        self.assertEqual(CONFIG_SCHEMA, "20260811.1")
         self.assertEqual(settings.warning_window_minutes, 5)
         self.assertEqual(settings.warning_mib, 250)
         self.assertEqual(settings.remote_servers, ())
@@ -53,7 +57,7 @@ class ConfigurationTests(unittest.TestCase):
             saved = write_user_settings(path, payload(billing_mode="outbound"))
             self.assertEqual(settings_payload(read_user_settings(path)), settings_payload(saved))
             document = path.read_text(encoding="utf-8")
-            self.assertIn('schema_version = "20260808.4"', document)
+            self.assertIn('schema_version = "20260811.1"', document)
             self.assertIn('kind = "network.linux-xray"', document)
             runtime = read_config(path)
             self.assertEqual(runtime.monitor.warning_window_seconds, 7 * 60)
@@ -63,6 +67,30 @@ class ConfigurationTests(unittest.TestCase):
             self.assertEqual(runtime.remote_servers[0].vps.ssh_host, "my-vps")
             self.assertTrue(runtime.remote_servers[0].xray.enabled)
             self.assertEqual(runtime.remote_servers[0].estimation.vps_billing_legs, 1.0)
+
+    def test_absolute_local_integration_paths_are_mapped_without_guessing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            data = payload()
+            data["integrations"] = {
+                "ssh_executable": str(root / "ssh.exe"),
+                "opencode_executable": str(root / "opencode.exe"),
+                "opencode_database": str(root / "opencode.db"),
+                "codex_database": str(root / "codex.sqlite"),
+            }
+            path = root / "config.toml"
+            write_user_settings(path, data)
+            runtime = read_config(path)
+            self.assertEqual(runtime.integrations.as_payload(), data["integrations"])
+            self.assertEqual(runtime.remote_servers[0].vps.ssh_executable, str(root / "ssh.exe"))
+            self.assertEqual(runtime.remote_servers[0].xray.ssh_executable, str(root / "ssh.exe"))
+
+    def test_relative_local_integration_path_is_rejected(self) -> None:
+        data = payload()
+        data["integrations"]["opencode_database"] = "portable/opencode.db"
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(ValueError, "绝对路径"):
+                write_user_settings(Path(temporary) / "config.toml", data)
 
     def test_multiple_remote_sources_keep_independent_identity_and_billing(self) -> None:
         data = payload()
@@ -104,18 +132,20 @@ class ConfigurationTests(unittest.TestCase):
                 "warning_gib": 600, "critical_gib": 800,
             })
             write_user_settings(path, data)
-            previous = path.read_text(encoding="utf-8").replace('schema_version = "20260808.4"', 'schema_version = "20260808.3"')
-            previous = previous.replace('xray_stats_enabled = true', 'xray_stats_enabled = true\nbilling_cycle_start_day = 9')
-            previous = previous.replace('primary-daily-usage', 'primary-billing-budget').replace('network.daily.usage', 'network.billing.budget')
+            previous = path.read_text(encoding="utf-8").replace('schema_version = "20260811.1"', 'schema_version = "20260808.4"')
+            start = previous.index("[integrations]")
+            end = previous.index("[[policies]]", start)
+            previous = previous[:start] + previous[end:]
             path.write_text(previous, encoding="utf-8")
             settings = read_user_settings(path)
             self.assertEqual(settings.remote_servers[0]["id"], "primary")
             self.assertTrue(settings.remote_servers[0]["usage_alert_enabled"])
-            self.assertTrue((Path(temporary) / "config.pre-20260808.4.toml").exists())
+            self.assertEqual(settings.integrations.as_payload()["ssh_executable"], "")
+            self.assertTrue((Path(temporary) / "config.pre-20260811.1.toml").exists())
             migrated = path.read_text(encoding="utf-8")
-            self.assertIn('schema_version = "20260808.4"', migrated)
+            self.assertIn('schema_version = "20260811.1"', migrated)
             self.assertIn('kind = "network.daily.usage"', migrated)
-            self.assertNotIn("billing_cycle_start_day", migrated)
+            self.assertIn("[integrations]", migrated)
 
     def test_legacy_config_migrates_once_with_a_backup(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -126,8 +156,8 @@ class ConfigurationTests(unittest.TestCase):
             )
             settings = read_user_settings(path)
             self.assertEqual(settings.remote_servers, ())
-            self.assertTrue((Path(temporary) / "config.pre-20260808.4.toml").exists())
-            self.assertIn('schema_version = "20260808.4"', path.read_text(encoding="utf-8"))
+            self.assertTrue((Path(temporary) / "config.pre-20260811.1.toml").exists())
+            self.assertIn('schema_version = "20260811.1"', path.read_text(encoding="utf-8"))
 
     def test_unknown_configuration_fields_are_rejected(self) -> None:
         data = payload()
