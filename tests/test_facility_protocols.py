@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import socket
@@ -47,10 +47,6 @@ def registration(
         kind=kind,
         instance_id="local",
         generation=generation,
-        renewed_at=NOW.isoformat(),
-        expires_at=(NOW + timedelta(seconds=45)).isoformat(),
-        renewed=NOW,
-        expires=NOW + timedelta(seconds=45),
         offers=(DiscoveryOffer(
             protocol,
             (protocol_version,),

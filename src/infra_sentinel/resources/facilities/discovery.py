@@ -1,14 +1,13 @@
 """Infra Discovery registration parsing and local binding resolution.
 
 This module owns discovery only: runtime-root resolution, owner-only manifest
-validation, bounded leases, exact offer matching, and safe endpoint resolution.
+validation, exact offer matching, and safe endpoint resolution.
 Application requests and responses belong to provider-specific adapters.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
@@ -20,7 +19,7 @@ from typing import Any, Iterable
 
 
 DISCOVERY_SCHEMA = "infra.discovery.registration"
-DISCOVERY_VERSION = "20260810.1"
+DISCOVERY_VERSION = "20260812.1"
 RUNTIME_DIRECTORY_ENV = "INFRA_PROTOCOL_RUNTIME_DIR"
 UNIX_SOCKET_BINDING = "infra.local.unix-socket"
 WINDOWS_PIPE_BINDING = "infra.local.windows-named-pipe"
@@ -30,18 +29,14 @@ _SERVICE_KIND = re.compile(r"^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$")
 _FILE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _CONTRACT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+/@%-]*$")
 _CONTRACT_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+-]*$")
-_UNIX_ENDPOINT = re.compile(r"^sockets/[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.sock$")
+_UNIX_ENDPOINT = re.compile(r"^sockets/[A-Za-z0-9][A-Za-z0-9._-]{0,15}\.sock$")
 _WINDOWS_ENDPOINT = re.compile(
     r"^\\\\\.\\pipe\\infra-protocol\\[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
 )
 
 
 class DiscoveryError(ValueError):
-    """A runtime root, registration, lease, or endpoint is invalid."""
-
-
-class LeaseExpired(DiscoveryError):
-    """A structurally valid registration is no longer live."""
+    """A runtime root, registration, or endpoint is invalid."""
 
 
 def _strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -76,18 +71,6 @@ def _text(value: Any, name: str, maximum: int, pattern: re.Pattern[str]) -> str:
     if not isinstance(value, str) or not 1 <= len(value) <= maximum or not pattern.fullmatch(value):
         raise DiscoveryError(f"{name} is invalid")
     return value
-
-
-def _time(value: Any, name: str) -> datetime:
-    if not isinstance(value, str) or not value or len(value) > 40:
-        raise DiscoveryError(f"{name} is invalid")
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as error:
-        raise DiscoveryError(f"{name} is invalid") from error
-    if parsed.tzinfo is None:
-        raise DiscoveryError(f"{name} requires an offset")
-    return parsed
 
 
 def _darwin_user_temp_dir() -> Path:
@@ -250,10 +233,6 @@ class Registration:
     kind: str
     instance_id: str
     generation: str
-    renewed_at: str
-    expires_at: str
-    renewed: datetime
-    expires: datetime
     offers: tuple[DiscoveryOffer, ...]
 
     @property
@@ -280,20 +259,12 @@ class Registration:
         return [(offer, version) for _, offer, version in matches]
 
 
-def read_registration(
-    path: Path,
-    *,
-    now: datetime | None = None,
-    require_live: bool = True,
-) -> Registration:
-    current = datetime.now(timezone.utc) if now is None else now
-    if current.tzinfo is None:
-        raise DiscoveryError("validation time requires an offset")
+def read_registration(path: Path) -> Registration:
     root = _load_manifest(path)
     _exact_keys(
         root,
-        allowed={"schema", "schema_version", "service", "lease", "offers"},
-        required={"schema", "schema_version", "service", "lease", "offers"},
+        allowed={"schema", "schema_version", "service", "offers"},
+        required={"schema", "schema_version", "service", "offers"},
         name="registration",
     )
     if root.get("schema") != DISCOVERY_SCHEMA or root.get("schema_version") != DISCOVERY_VERSION:
@@ -310,26 +281,6 @@ def read_registration(
     generation = _text(service["generation"], "service.generation", 96, _FILE_TOKEN)
     if path.name != f"{kind}--{instance_id}.json":
         raise DiscoveryError("registration filename does not match stable identity")
-
-    lease = _object(root["lease"], "lease")
-    _exact_keys(
-        lease,
-        allowed={"renewed_at", "expires_at"},
-        required={"renewed_at", "expires_at"},
-        name="lease",
-    )
-    renewed = _time(lease["renewed_at"], "lease.renewed_at")
-    expires = _time(lease["expires_at"], "lease.expires_at")
-    if expires <= renewed:
-        raise DiscoveryError("lease expiration must follow renewal")
-    if expires - renewed > timedelta(seconds=120):
-        raise DiscoveryError("lease exceeds 120 seconds")
-    if renewed > current + timedelta(seconds=15):
-        raise DiscoveryError("lease renewal is too far in the future")
-    if expires > current + timedelta(seconds=120):
-        raise DiscoveryError("lease expiration is too far in the future")
-    if require_live and expires <= current:
-        raise LeaseExpired("registration lease is expired")
 
     raw_offers = root["offers"]
     if not isinstance(raw_offers, list) or not 1 <= len(raw_offers) <= 64:
@@ -367,10 +318,6 @@ def read_registration(
         kind=kind,
         instance_id=instance_id,
         generation=generation,
-        renewed_at=lease["renewed_at"],
-        expires_at=lease["expires_at"],
-        renewed=renewed,
-        expires=expires,
         offers=tuple(offers),
     )
 
@@ -383,6 +330,12 @@ def resolve_unix_socket(paths: DiscoveryPaths, offer: DiscoveryOffer) -> Path:
         endpoint.relative_to(paths.sockets)
     except ValueError as error:
         raise DiscoveryError("Unix endpoint escapes the sockets directory") from error
+    capacity = 104 if sys.platform == "darwin" else 108
+    required = len(os.fsencode(str(endpoint))) + 1
+    if required > capacity:
+        raise DiscoveryError(
+            f"Unix socket path requires {required} bytes; maximum is {capacity}"
+        )
     return endpoint
 
 

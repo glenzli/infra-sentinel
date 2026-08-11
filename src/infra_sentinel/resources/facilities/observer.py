@@ -8,7 +8,6 @@ projection emitted here is private to Infra Sentinel.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
 import logging
 from pathlib import Path
 import threading
@@ -27,7 +26,6 @@ from infra_sentinel.resources.facilities.discovery import (
     DISCOVERY_VERSION,
     DiscoveryError,
     DiscoveryPaths,
-    LeaseExpired,
     Registration,
     discovery_paths,
     read_registration,
@@ -37,7 +35,6 @@ from infra_sentinel.resources.facilities.discovery import (
 
 POLL_SECONDS = 15.0
 RECONCILE_SECONDS = 5.0
-RETAIN_STALE_SECONDS = 300.0
 
 
 @dataclass
@@ -64,7 +61,6 @@ class _ObservedFacility:
             "label": observation.label if observation else self.selection.adapter.label,
             "status": self.status,
             "observed_at": observation.observed_at if observation else None,
-            "lease_expires_at": self.registration.expires_at,
             "protocol": self.selection.adapter.protocol,
             "protocol_version": self.selection.protocol_version,
             "binding": self.selection.offer.binding,
@@ -79,7 +75,7 @@ class _ObservedFacility:
 
 
 class FacilityMonitor:
-    """Reconcile discovery leases and poll selected protocols off the hot path."""
+    """Reconcile candidate registrations and poll selected protocols off the hot path."""
 
     def __init__(
         self,
@@ -119,14 +115,14 @@ class FacilityMonitor:
                 self.logger.exception("facility reconciliation failed")
             self._stop.wait(RECONCILE_SECONDS)
 
-    def _registrations(self, now: datetime) -> dict[str, Registration]:
+    def _registrations(self) -> dict[str, Registration]:
         if not self.paths.root.exists():
             return {}
         validate_runtime_paths(self.paths)
         registrations: dict[str, Registration] = {}
         for path in sorted(self.paths.registrations.glob("*.json")):
             try:
-                registration = read_registration(path, now=now, require_live=False)
+                registration = read_registration(path)
             except DiscoveryError as error:
                 self.logger.warning(
                     "ignored Infra Discovery registration path=%s error=%s",
@@ -161,9 +157,8 @@ class FacilityMonitor:
         self,
         registration: Registration,
         selection: AdapterSelection,
-        now: datetime,
     ) -> Registration:
-        current = read_registration(registration.path, now=now, require_live=True)
+        current = read_registration(registration.path)
         if current.generation != registration.generation:
             raise FacilityProtocolError("provider generation changed during observation")
         current_selection = select_adapter(current, self.adapters)
@@ -173,9 +168,8 @@ class FacilityMonitor:
 
     def refresh_once(self, now: float | None = None) -> None:
         current_epoch = time.time() if now is None else now
-        current_time = datetime.fromtimestamp(current_epoch, timezone.utc)
         try:
-            registrations = self._registrations(current_time)
+            registrations = self._registrations()
             discovery_error = None
         except (OSError, DiscoveryError) as error:
             registrations = {}
@@ -190,13 +184,6 @@ class FacilityMonitor:
             selection = select_adapter(registration, self.adapters)
             if selection is None:
                 continue
-            if registration.expires.timestamp() <= current_epoch:
-                if prior and self._same_selection(prior, registration, selection):
-                    prior.registration = registration
-                    prior.status = "stale"
-                    prior.error_kind = LeaseExpired.__name__
-                    updated[facility_id] = prior
-                continue
             same_selection = prior is not None and self._same_selection(prior, registration, selection)
             if same_selection and current_epoch < prior.next_poll_epoch:
                 prior.registration = registration
@@ -204,7 +191,7 @@ class FacilityMonitor:
                 continue
             try:
                 observation = selection.adapter.observe(self.paths, registration, selection)
-                registration = self._confirm_current(registration, selection, current_time)
+                registration = self._confirm_current(registration, selection)
                 if (
                     prior is not None
                     and self._same_protocol_generation(prior, registration, selection)
@@ -240,13 +227,6 @@ class FacilityMonitor:
                 )
             updated[facility_id] = record
 
-        for facility_id, prior in previous.items():
-            if facility_id in updated:
-                continue
-            if current_epoch <= prior.registration.expires.timestamp() + RETAIN_STALE_SECONDS:
-                prior.status = "stale"
-                prior.error_kind = "RegistrationMissing"
-                updated[facility_id] = prior
         with self._lock:
             self._records = updated
             self._discovery_error = discovery_error

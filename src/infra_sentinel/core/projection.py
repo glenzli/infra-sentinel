@@ -237,7 +237,8 @@ def build_infra_projection(
 
     timestamp = str(sample.get("timestamp") or "")
     facility_state = facilities if isinstance(facilities, dict) else {
-        "schema": "20260810.1", "status": "disabled", "total": 0, "healthy": 0, "attention": 0, "items": [],
+        "schema": "infra.discovery.registration@20260812.1",
+        "status": "disabled", "total": 0, "healthy": 0, "attention": 0, "items": [],
     }
     upstream_state = upstream_status if isinstance(upstream_status, dict) else {
         "schema": "20260811.1", "status": "degraded", "total": 0, "healthy": 0,

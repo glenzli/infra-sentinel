@@ -13,7 +13,6 @@ function statusLabel(status: string): string {
     degraded: tr("Degraded", "降级"),
     unavailable: tr("Unavailable", "不可用"),
     unreachable: tr("Unreachable", "无法连接"),
-    stale: tr("Registration stale", "注册已过期"),
     stopping: tr("Stopping", "正在停止"),
   };
   return labels[status] ?? status;
@@ -177,7 +176,6 @@ export function renderFacilityDetailPage(facility?: FacilityProjection): string 
       <span><small>${tr("Snapshot sequence", "快照序列")}</small><strong>${escapeHtml(facility.snapshot?.sequence ?? "—")}</strong></span>
       <span><small>${tr("Binding", "连接方式")}</small><strong>${escapeHtml(facility.binding)}</strong></span>
       <span><small>${tr("Generation", "运行代次")}</small><strong title="${escapeHtml(facility.generation)}">${escapeHtml(facility.generation)}</strong></span>
-      <span><small>${tr("Lease expires", "注册到期")}</small><strong>${new Date(facility.lease_expires_at).toLocaleString()}</strong></span>
       <span><small>${tr("Observation schema", "观测协议")}</small><strong>${escapeHtml(facility.snapshot?.schema_version ?? facility.protocol_version)}</strong></span>
     </div>
     <div class="facility-detail__columns"><section><h3>${tr("Read-only metrics", "只读指标")}</h3><ul>${metricRows || `<li class="facility-detail__empty">${tr("Waiting for metrics", "等待指标")}</li>`}</ul></section><section><h3>${tr("Issues", "问题")}</h3><ul>${issueRows || `<li class="facility-detail__empty">${tr("No reported issues", "没有已报告问题")}</li>`}</ul></section></div>

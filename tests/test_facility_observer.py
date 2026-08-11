@@ -18,6 +18,7 @@ from infra_sentinel.resources.facilities.protocols import (  # noqa: E402
     DEV_MESH_OBSERVER_ADAPTER,
     DEV_MESH_OBSERVER_PROTOCOL_VERSION,
     FacilityObservation,
+    FacilityProtocolError,
     PCP_ADAPTER,
 )
 
@@ -31,7 +32,6 @@ def timestamp(offset: int) -> str:
 
 def registration(
     *,
-    expires: int = 45,
     protocol: str = "pcp.runtime.observer",
     protocol_version: str = "20260810.1",
     kind: str = "pcp",
@@ -39,9 +39,8 @@ def registration(
 ) -> dict[str, object]:
     return {
         "schema": "infra.discovery.registration",
-        "schema_version": "20260810.1",
+        "schema_version": "20260812.1",
         "service": {"kind": kind, "instance_id": "local", "generation": "gen-1"},
-        "lease": {"renewed_at": timestamp(min(expires - 45, 0)), "expires_at": timestamp(expires)},
         "offers": [{
             "protocol": protocol,
             "protocol_versions": [protocol_version],
@@ -186,6 +185,34 @@ class FacilityMonitorTests(unittest.TestCase):
             self.assertEqual(facility["status"], "unreachable")
             self.assertEqual(facility["error_kind"], "FacilityProtocolError")
 
+    def test_generation_change_bypasses_prior_poll_backoff(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = private_runtime(temporary)
+            path = write_registration(root, registration())
+            monitor = FacilityMonitor(logging.getLogger("facility-test"), root, [PCP_ADAPTER])
+            first = observation()
+            with patch.object(type(PCP_ADAPTER), "observe", return_value=first) as observe:
+                monitor.refresh_once(NOW.timestamp())
+                self.assertEqual(observe.call_count, 1)
+
+            replacement = registration(endpoint_token="new-gen")
+            replacement["service"]["generation"] = "gen-2"  # type: ignore[index]
+            path.write_text(json.dumps(replacement), encoding="utf-8")
+            path.chmod(0o600)
+            second = observation()
+            second = FacilityObservation(
+                label=second.label,
+                status=second.status,
+                observed_at=second.observed_at,
+                sequence=1,
+                snapshot=second.snapshot,
+                console_url=second.console_url,
+            )
+            with patch.object(type(PCP_ADAPTER), "observe", return_value=second) as observe:
+                monitor.refresh_once(NOW.timestamp() + 1)
+                self.assertEqual(observe.call_count, 1)
+            self.assertEqual(monitor.snapshot()["items"][0]["generation"], "gen-2")
+
     def test_unknown_application_protocol_is_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = private_runtime(temporary)
@@ -197,7 +224,7 @@ class FacilityMonitorTests(unittest.TestCase):
             self.assertEqual(monitor.snapshot()["status"], "disabled")
             self.assertEqual(monitor.snapshot()["items"], [])
 
-    def test_expired_registration_retains_only_a_previously_observed_generation(self) -> None:
+    def test_missing_registration_is_removed_without_stale_retention(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = private_runtime(temporary)
             path = write_registration(root, registration())
@@ -205,15 +232,32 @@ class FacilityMonitorTests(unittest.TestCase):
             with patch.object(type(PCP_ADAPTER), "observe", return_value=observation()):
                 monitor.refresh_once(NOW.timestamp())
 
-            expired = registration(expires=-1)
-            expired["lease"] = {"renewed_at": timestamp(-46), "expires_at": timestamp(-1)}
-            path.write_text(json.dumps(expired), encoding="utf-8")
-            path.chmod(0o600)
+            path.unlink()
             monitor.refresh_once(NOW.timestamp())
 
-            facility = monitor.snapshot()["items"][0]
-            self.assertEqual(facility["status"], "stale")
-            self.assertEqual(facility["error_kind"], "LeaseExpired")
+            state = monitor.snapshot()
+            self.assertEqual(state["status"], "disabled")
+            self.assertEqual(state["items"], [])
+
+    def test_failed_candidate_is_rescanned_then_retried_after_product_poll_backoff(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = private_runtime(temporary)
+            write_registration(root, registration())
+            monitor = FacilityMonitor(logging.getLogger("facility-test"), root, [PCP_ADAPTER])
+
+            with patch.object(
+                type(PCP_ADAPTER),
+                "observe",
+                side_effect=[FacilityProtocolError("wire down"), observation()],
+            ) as observe:
+                monitor.refresh_once(NOW.timestamp())
+                self.assertEqual(monitor.snapshot()["items"][0]["status"], "unreachable")
+                monitor.refresh_once(NOW.timestamp() + 5)
+                self.assertEqual(observe.call_count, 1)
+                monitor.refresh_once(NOW.timestamp() + 16)
+                self.assertEqual(observe.call_count, 2)
+
+            self.assertEqual(monitor.snapshot()["status"], "healthy")
 
     def test_missing_runtime_root_means_no_discovered_facilities_not_global_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

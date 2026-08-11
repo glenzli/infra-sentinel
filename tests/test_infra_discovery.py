@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import sys
@@ -13,7 +12,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from infra_sentinel.resources.facilities.discovery import (  # noqa: E402
     DiscoveryError,
-    LeaseExpired,
+    DiscoveryOffer,
     discovery_paths,
     read_registration,
     resolve_unix_socket,
@@ -22,23 +21,16 @@ from infra_sentinel.resources.facilities.discovery import (  # noqa: E402
 )
 
 
-NOW = datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)
-
-
-def manifest(*, protocol: str = "pcp.runtime.observer", expires: int = 45) -> dict[str, object]:
+def manifest(*, protocol: str = "pcp.runtime.observer") -> dict[str, object]:
     return {
         "schema": "infra.discovery.registration",
-        "schema_version": "20260810.1",
+        "schema_version": "20260812.1",
         "service": {"kind": "pcp", "instance_id": "local", "generation": "gen-1"},
-        "lease": {
-            "renewed_at": NOW.isoformat(),
-            "expires_at": (NOW + timedelta(seconds=expires)).isoformat(),
-        },
         "offers": [{
             "protocol": protocol,
             "protocol_versions": ["20260810.1", "v2"],
             "binding": "infra.local.unix-socket",
-            "endpoint": "sockets/pcp-gen-1.sock",
+            "endpoint": "sockets/pcp-gen1.sock",
         }],
     }
 
@@ -75,7 +67,7 @@ class InfraDiscoveryTests(unittest.TestCase):
             (root / "sockets").mkdir(mode=0o700)
             path = write_manifest(root, manifest())
 
-            registration = read_registration(path, now=NOW)
+            registration = read_registration(path)
 
             matches = registration.compatible_offers(
                 "pcp.runtime.observer",
@@ -85,7 +77,7 @@ class InfraDiscoveryTests(unittest.TestCase):
             self.assertEqual(matches[0][1], "v2")
             self.assertEqual(
                 resolve_unix_socket(discovery_paths(root), matches[0][0]),
-                root / "sockets" / "pcp-gen-1.sock",
+                root / "sockets" / "pcp-gen1.sock",
             )
 
     def test_unknown_protocol_is_structurally_valid_but_not_compatible(self) -> None:
@@ -96,7 +88,6 @@ class InfraDiscoveryTests(unittest.TestCase):
             (root / "sockets").mkdir(mode=0o700)
             registration = read_registration(
                 write_manifest(root, manifest(protocol="vendor.future/status")),
-                now=NOW,
             )
             self.assertEqual(
                 registration.compatible_offers(
@@ -107,18 +98,20 @@ class InfraDiscoveryTests(unittest.TestCase):
                 [],
             )
 
-    def test_expired_lease_is_available_only_for_stale_retention(self) -> None:
+    def test_lease_field_is_rejected_in_the_canonical_registration(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             root.chmod(0o700)
             (root / "registrations").mkdir(mode=0o700)
             (root / "sockets").mkdir(mode=0o700)
-            value = manifest(expires=45)
+            value = manifest()
+            value["lease"] = {
+                "renewed_at": "2026-08-12T08:00:00Z",
+                "expires_at": "2026-08-12T08:00:45Z",
+            }
             path = write_manifest(root, value)
-            later = NOW + timedelta(seconds=60)
-            with self.assertRaises(LeaseExpired):
-                read_registration(path, now=later)
-            self.assertEqual(read_registration(path, now=later, require_live=False).generation, "gen-1")
+            with self.assertRaisesRegex(DiscoveryError, "unsupported fields"):
+                read_registration(path)
 
     def test_permissions_and_filename_are_part_of_discovery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -130,7 +123,28 @@ class InfraDiscoveryTests(unittest.TestCase):
             path = write_manifest(root, manifest())
             path.chmod(0o644)
             with self.assertRaises(DiscoveryError):
-                read_registration(path, now=NOW)
+                read_registration(path)
+
+    def test_unix_endpoint_uses_short_opaque_and_final_path_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            root.chmod(0o700)
+            (root / "registrations").mkdir(mode=0o700)
+            (root / "sockets").mkdir(mode=0o700)
+            value = manifest()
+            value["offers"][0]["endpoint"] = "sockets/opaque-name-is-too-long.sock"  # type: ignore[index]
+            with self.assertRaisesRegex(DiscoveryError, "Unix endpoint"):
+                read_registration(write_manifest(root, value))
+
+        long_root = Path("/" + "x" * 110)
+        offer = DiscoveryOffer(
+            "pcp.runtime.observer",
+            ("20260810.1",),
+            "infra.local.unix-socket",
+            "sockets/short.sock",
+        )
+        with self.assertRaisesRegex(DiscoveryError, "requires"):
+            resolve_unix_socket(discovery_paths(long_root), offer)
 
 
 if __name__ == "__main__":

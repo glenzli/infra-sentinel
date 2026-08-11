@@ -1,15 +1,16 @@
 # Facility discovery and provider adapters
 
-Infra Sentinel uses `infra.discovery.registration@20260810.1` only to discover local services and
+Infra Sentinel uses `infra.discovery.registration@20260812.1` only to discover local services and
 select an exact `(protocol, version, binding)` offer. Discovery does not define a common facility
 snapshot. The canonical contract is maintained by the separate Infra Protocol project; Sentinel
 vendors an exact schema copy as an auditable conformance fixture while its packaged runtime uses a
 dependency-free strict parser for the same fields and bounds.
 
-The packaged app resolves the Infra Protocol runtime root, validates owner-only registration files
-and bounded leases, selects a supported offer, validates the owner-only endpoint, and then hands the
-connection to the selected provider adapter. Unknown protocols remain valid declarations but are
-ignored by Sentinel.
+The packaged app resolves the Infra Protocol runtime root, validates owner-only registration files,
+selects a supported offer, validates the owner-only endpoint, and then hands the connection to the
+selected provider adapter. A manifest is only a candidate entry declaration: the connection and
+application response determine current availability. Unknown protocols remain valid declarations
+but are ignored by Sentinel.
 
 Current adapters are deliberately independent:
 
@@ -40,12 +41,19 @@ handoffs, conflicts, transactions, and branches are not facility failures.
 
 There is no additional discovery handshake. The complete sequence is:
 
-1. validate a live registration;
+1. validate a registration candidate;
 2. intersect exact protocol versions and supported bindings;
 3. connect to the selected endpoint;
 4. let the binding enforce its peer-user rule;
 5. exchange one provider-owned application request and response; and
 6. reject the result if the registration generation or selected offer changed during the request.
+
+The registration has no lease, expiry, heartbeat, or liveness timestamp. Sentinel rescans the
+stable manifest during each reconciliation pass, applies product polling/backoff only to an exact
+identity/generation/offer, and retries immediately when the generation or selected offer changes.
+If a registration disappears, its facility projection disappears too; Sentinel does not retain a
+lease-derived stale copy. After each successful observation it rereads the registration and confirms
+that the generation and selected offer are still identical.
 
 `INFRA_PROTOCOL_RUNTIME_DIR` may set the final shared runtime root in managed deployments. Without
 an override, Sentinel follows the platform paths in the canonical Infra Discovery specification.

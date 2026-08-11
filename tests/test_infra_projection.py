@@ -194,7 +194,7 @@ class InfraProjectionTests(unittest.TestCase):
 
     def test_facility_health_is_separate_from_resources_and_contributes_to_overall_status(self) -> None:
         facilities = {
-            "schema": "20260810.1",
+            "schema": "infra.discovery.registration@20260812.1",
             "status": "degraded",
             "total": 2,
             "healthy": 1,
@@ -218,6 +218,17 @@ class InfraProjectionTests(unittest.TestCase):
         self.assertEqual(projection["facilities"], facilities)
         self.assertEqual(projection["overall"]["status"], "degraded")
         self.assertEqual(projection["overall"]["active_alerts"], 1)
+
+    def test_disabled_facilities_use_the_canonical_discovery_document_id(self) -> None:
+        projection = build_infra_projection(
+            sample(), {"kernel": {}, "vps": {}},
+            {"enabled": False, "status": "disabled", "servers": []}, "none",
+        )
+
+        self.assertEqual(
+            projection["facilities"]["schema"],
+            "infra.discovery.registration@20260812.1",
+        )
 
     def test_upstream_status_is_an_independent_resource_and_only_confirmed_incidents_affect_health(self) -> None:
         upstream = {

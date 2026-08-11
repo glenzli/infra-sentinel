@@ -1,14 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:infra:discovery:registration:20260810.1",
+  "$id": "urn:infra:discovery:registration:20260812.1",
   "title": "Infra Discovery Registration",
-  "description": "A leased declaration of protocol offers from one local service process.",
+  "description": "A declaration of protocol offers from one local service process.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "schema_version", "service", "lease", "offers"],
+  "required": ["schema", "schema_version", "service", "offers"],
   "properties": {
     "schema": { "const": "infra.discovery.registration" },
-    "schema_version": { "const": "20260810.1" },
+    "schema_version": { "const": "20260812.1" },
     "service": {
       "type": "object",
       "additionalProperties": false,
@@ -17,15 +17,6 @@
         "kind": { "$ref": "#/$defs/service_kind" },
         "instance_id": { "$ref": "#/$defs/file_token" },
         "generation": { "$ref": "#/$defs/file_token" }
-      }
-    },
-    "lease": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["renewed_at", "expires_at"],
-      "properties": {
-        "renewed_at": { "type": "string", "format": "date-time", "maxLength": 40 },
-        "expires_at": { "type": "string", "format": "date-time", "maxLength": 40 }
       }
     },
     "offers": {
@@ -85,7 +76,7 @@
           "then": {
             "properties": {
               "endpoint": {
-                "pattern": "^sockets/[A-Za-z0-9][A-Za-z0-9._-]{0,63}\\.sock$"
+                "pattern": "^sockets/[A-Za-z0-9][A-Za-z0-9._-]{0,15}\\.sock$"
               }
             }
           }

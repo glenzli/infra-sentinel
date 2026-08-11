@@ -54,7 +54,6 @@ export interface FacilityProjection {
   label: string;
   status: string;
   observed_at?: string;
-  lease_expires_at: string;
   console_url?: string;
   protocol: string;
   protocol_version: string;
