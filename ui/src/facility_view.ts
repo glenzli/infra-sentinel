@@ -64,11 +64,51 @@ function metricLabel(id: string): string {
     "resource.pressure": tr("Pressure", "资源压力"),
     "resource.free_memory_percent": tr("Free memory", "可用内存"),
     "budget.remaining_ratio": tr("Budget remaining", "预算剩余"),
+    "dev_mesh.workspaces.registered": tr("Registered workspaces", "已登记工作区"),
+    "dev_mesh.workspaces.available": tr("Available workspaces", "可用工作区"),
+    "dev_mesh.workspaces.unavailable": tr("Unavailable workspaces", "不可用工作区"),
+    "dev_mesh.collection.pending_events": tr("Pending events", "待采集事件"),
+    "dev_mesh.collection.last_success_age": tr("Last successful collection", "距上次采集成功"),
+    "dev_mesh.collection.running": tr("Collection running", "采集正在运行"),
+    "dev_mesh.integrity.issues": tr("Integrity issues", "完整性问题"),
+    "dev_mesh.events.mirrored": tr("Mirrored events", "已镜像事件"),
+    "dev_mesh.contentions.active": tr("Active contentions", "活跃竞争"),
+    "dev_mesh.contentions.stalled": tr("Stalled contentions", "阻塞竞争"),
   };
   return labels[id] ?? id.split(".").slice(-2).join(" · ");
 }
 
+function issueLabel(code: string): string {
+  const labels: Record<string, string> = {
+    "dev_mesh.collection.failed": tr("Collection failed", "采集失败"),
+    "dev_mesh.collection.stale": tr("Collection is stale", "采集已过期"),
+    "dev_mesh.workspace.unavailable": tr("Workspace unavailable", "工作区不可用"),
+    "dev_mesh.workspace.none_registered": tr("No workspace registered", "尚未登记工作区"),
+    "dev_mesh.integrity.issue": tr("Integrity issue detected", "发现完整性问题"),
+    "dev_mesh.contention.stalled": tr("Contention is stalled", "协作竞争已阻塞"),
+    "dev_mesh.collection.backlog": tr("Collection backlog", "采集事件积压"),
+  };
+  return labels[code] ?? code;
+}
+
+function severityLabel(severity: string): string {
+  const labels: Record<string, string> = {
+    info: tr("Info", "提示"),
+    warning: tr("Warning", "需关注"),
+    critical: tr("Critical", "严重"),
+  };
+  return labels[severity] ?? severity;
+}
+
+function facilityKindLabel(kind: string): string {
+  if (kind === "dev-mesh-observer") return tr("Shared-workspace coordination", "共享工作区协作");
+  return kind;
+}
+
 function metricValue(metric: FacilityMetric): string {
+  if (metric.id === "dev_mesh.collection.running" && typeof metric.value === "boolean") {
+    return metric.value ? tr("Yes", "是") : tr("No", "否");
+  }
   const numeric = typeof metric.value === "number" ? metric.value : Number(metric.value);
   if (metric.unit === "bytes" && Number.isFinite(numeric)) return formatBytes(numeric);
   if (metric.unit === "seconds" && Number.isFinite(numeric)) return formatDuration(numeric);
@@ -100,7 +140,7 @@ function facilityCard(facility: FacilityProjection): string {
     .join("");
   return `<article class="facility-card facility-card--interactive facility-card--${escapeHtml(facility.status)}" data-facility-id="${escapeHtml(facility.id)}" role="button" tabindex="0" aria-label="${escapeHtml(tr(`Open ${facility.label} details`, `打开 ${facility.label} 详情`))}">
     <div class="facility-card__heading"><span><i class="source-state source-state--${escapeHtml(facility.status)}"></i><b>${escapeHtml(facility.label)}</b></span><em>${escapeHtml(statusLabel(facility.status))}</em></div>
-    <div class="facility-card__meta"><span>${escapeHtml(facility.kind)} · ${escapeHtml(facility.instance_id)}</span><span>${escapeHtml(facility.protocol_version)}</span></div>
+    <div class="facility-card__meta"><span>${escapeHtml(facilityKindLabel(facility.kind))} · ${escapeHtml(facility.instance_id)}</span><span>${escapeHtml(facility.protocol_version)}</span></div>
     <div class="facility-card__metrics">${metrics || `<small>${tr("Waiting for the first observation", "等待首次观测")}</small>`}</div>
     <div class="facility-card__footer"><span>${facility.observed_at ? new Date(facility.observed_at).toLocaleTimeString() : "—"}</span><div class="facility-card__actions">${consoleControl(facility, true)}<span class="facility-details-link">${tr("Details", "详情")} →</span></div></div>
   </article>`;
@@ -118,12 +158,18 @@ export function renderFacilityDetailPage(facility?: FacilityProjection): string 
   const metrics = facility.snapshot?.metrics ?? [];
   const issues = facility.snapshot?.issues ?? [];
   const metricRows = metrics.map((metric) => `<li><span>${escapeHtml(metricLabel(metric.id))}<small>${escapeHtml(metric.id)}</small></span><strong>${escapeHtml(metricValue(metric))}</strong></li>`).join("");
-  const issueRows = issues.map((issue) => `<li class="facility-issue facility-issue--${escapeHtml(issue.severity)}"><span>${escapeHtml(issue.code)}${issue.subject_id ? `<small>${escapeHtml(issue.subject_id)}</small>` : ""}</span><strong>${escapeHtml(issue.severity)}</strong></li>`).join("");
+  const issueRows = issues.map((issue) => {
+    const isDevMesh = issue.code.startsWith("dev_mesh.");
+    const subject = issue.subject_id && (!isDevMesh || issue.subject_id !== "observer") ? ` · ${issue.subject_id}` : "";
+    const label = isDevMesh ? issueLabel(issue.code) : issue.code;
+    const severity = isDevMesh ? severityLabel(issue.severity) : issue.severity;
+    return `<li class="facility-issue facility-issue--${escapeHtml(issue.severity)}"><span>${escapeHtml(label)}<small>${escapeHtml(`${issue.code}${subject}`)}</small></span><strong>${escapeHtml(severity)}</strong></li>`;
+  }).join("");
   const headline = headlineMetrics(facility).map((metric) => `<span><small>${escapeHtml(metricLabel(metric.id))}</small><strong>${escapeHtml(metricValue(metric))}</strong></span>`).join("");
   const capturedAt = facility.snapshot?.captured_at ?? facility.observed_at;
 
   return `<section class="resource-section resource-section--detail facility-instance-page">
-    <header class="facility-instance-header"><div><p class="eyebrow">${escapeHtml(facility.kind)} · ${escapeHtml(facility.instance_id)}</p><span class="facility-detail__identity"><i class="source-state source-state--${escapeHtml(facility.status)}"></i><h2>${escapeHtml(facility.label)}</h2></span><p>${escapeHtml(facility.protocol)} · ${escapeHtml(facility.protocol_version)}</p></div><div><span class="pill pill--${escapeHtml(facility.status)}">${escapeHtml(statusLabel(facility.status))}</span>${consoleControl(facility)}</div></header>
+    <header class="facility-instance-header"><div><p class="eyebrow">${escapeHtml(facilityKindLabel(facility.kind))} · ${escapeHtml(facility.instance_id)}</p><span class="facility-detail__identity"><i class="source-state source-state--${escapeHtml(facility.status)}"></i><h2>${escapeHtml(facility.label)}</h2></span><p>${escapeHtml(facility.protocol)} · ${escapeHtml(facility.protocol_version)}</p></div><div><span class="pill pill--${escapeHtml(facility.status)}">${escapeHtml(statusLabel(facility.status))}</span>${consoleControl(facility)}</div></header>
     ${headline ? `<div class="facility-instance-headlines">${headline}</div>` : ""}
     ${facility.error_kind ? `<p class="facility-page-note facility-page-note--warning">${tr("Observation error", "观测异常")} · ${escapeHtml(facility.error_kind)}</p>` : ""}
     <div class="facility-detail__facts">

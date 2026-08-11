@@ -27,6 +27,7 @@ from infra_sentinel.resources.facilities.discovery import (
 
 
 PROTOCOL_VERSION = "20260810.1"
+DEV_MESH_OBSERVER_PROTOCOL_VERSION = "20260812.1"
 NORMALIZED_SNAPSHOT_SCHEMA = "infra-sentinel.facility-observation"
 NORMALIZED_SNAPSHOT_VERSION = "20260810.1"
 MAX_U64 = (1 << 64) - 1
@@ -146,9 +147,9 @@ def _read_response_frame(
     return line
 
 
-def _request(schema: str) -> bytes:
+def _request(schema: str, schema_version: str = PROTOCOL_VERSION) -> bytes:
     return json.dumps(
-        {"schema": schema, "schema_version": PROTOCOL_VERSION, "operation": "snapshot"},
+        {"schema": schema, "schema_version": schema_version, "operation": "snapshot"},
         separators=(",", ":"),
     ).encode("utf-8") + b"\n"
 
@@ -173,6 +174,7 @@ class AdapterSelection:
 @dataclass(frozen=True)
 class FacilityProtocolAdapter:
     protocol: str
+    protocol_version: str
     request_schema: str
     snapshot_schema: str
     error_schema: str
@@ -184,11 +186,17 @@ class FacilityProtocolAdapter:
     error_codes: frozenset[str]
     extension_key: str
     required_redactions: frozenset[str]
+    allowed_reason_codes: frozenset[str] | None = None
+    allowed_metric_ids: frozenset[str] | None = None
+    required_headline_metrics: tuple[str, ...] | None = None
+    allowed_issue_codes: frozenset[str] | None = None
+    required_issue_subject_id: str | None = None
+    require_scalar_metric_values: bool = False
 
     def select(self, registration: Registration) -> AdapterSelection | None:
         matches = registration.compatible_offers(
             self.protocol,
-            [PROTOCOL_VERSION],
+            [self.protocol_version],
             [UNIX_SOCKET_BINDING],
         )
         if not matches:
@@ -205,7 +213,7 @@ class FacilityProtocolAdapter:
         endpoint = resolve_unix_socket(paths, selection.offer)
         raw = _exchange_line(
             endpoint,
-            _request(self.request_schema),
+            _request(self.request_schema, selection.protocol_version),
             response_limit=self.response_limit,
             timeout=self.timeout_seconds,
             require_eof=self.require_eof,
@@ -262,6 +270,11 @@ class FacilityProtocolAdapter:
             isinstance(reason, str) and 0 < len(reason) <= 128 for reason in reasons
         ):
             raise FacilityProtocolError("provider reason codes are invalid")
+        normalized_reasons = [
+            reason
+            for reason in reasons
+            if self.allowed_reason_codes is None or reason in self.allowed_reason_codes
+        ]
 
         raw_metrics = raw.get("metrics")
         if not isinstance(raw_metrics, list):
@@ -275,15 +288,19 @@ class FacilityProtocolAdapter:
                 raise FacilityProtocolError("provider metric ID is invalid")
             if metric_id in metric_ids:
                 raise FacilityProtocolError("provider metric IDs must be unique")
+            metric_ids.add(metric_id)
+            if self.allowed_metric_ids is not None and metric_id not in self.allowed_metric_ids:
+                continue
             if metric.get("kind") not in {"gauge", "counter", "state"}:
                 raise FacilityProtocolError("provider metric kind is invalid")
             value = metric.get("value")
             if value is None:
                 raise FacilityProtocolError("provider metric value is invalid")
             if not isinstance(value, (str, int, float, bool)):
+                if self.require_scalar_metric_values:
+                    raise FacilityProtocolError("provider metric value must be scalar")
                 # Provider protocols permit non-null structured JSON values.
                 # The private Sentinel projection keeps only displayable scalars.
-                metric_ids.add(metric_id)
                 continue
             unit = metric.get("unit")
             if unit is not None and (not isinstance(unit, str) or not 1 <= len(unit) <= 64):
@@ -319,7 +336,6 @@ class FacilityProtocolAdapter:
             if dimensions is not None:
                 normalized["dimensions"] = dimensions
             metrics.append(normalized)
-            metric_ids.add(metric_id)
 
         headline = raw.get("headline_metrics")
         if (
@@ -330,6 +346,11 @@ class FacilityProtocolAdapter:
             or not all(metric_id in metric_ids for metric_id in headline)
         ):
             raise FacilityProtocolError("provider headline metrics are invalid")
+        if (
+            self.required_headline_metrics is not None
+            and tuple(headline) != self.required_headline_metrics
+        ):
+            raise FacilityProtocolError("provider headline metrics do not match its contract")
         display_metrics = metrics[:512]
         display_metric_ids = {str(metric["id"]) for metric in display_metrics}
         normalized_headline = [metric_id for metric_id in headline if metric_id in display_metric_ids]
@@ -340,16 +361,22 @@ class FacilityProtocolAdapter:
         for raw_issue in raw_issues[:64]:
             issue = _object(raw_issue, "snapshot issue")
             code = issue.get("code")
-            severity = issue.get("severity")
-            observed = issue.get("observed_at")
             if not isinstance(code, str) or not 1 <= len(code) <= 128:
                 raise FacilityProtocolError("provider issue code is invalid")
+            if self.allowed_issue_codes is not None and code not in self.allowed_issue_codes:
+                continue
+            severity = issue.get("severity")
+            observed = issue.get("observed_at")
             if severity not in {"info", "warning", "critical"}:
                 raise FacilityProtocolError("provider issue severity is invalid")
             _timestamp(observed, "snapshot issue observed_at")
             normalized_issue = {"code": code, "severity": severity, "observed_at": observed}
             subject = issue.get("subject_id")
-            if subject is not None:
+            if self.required_issue_subject_id is not None:
+                if subject != self.required_issue_subject_id:
+                    raise FacilityProtocolError("provider issue subject does not match its contract")
+                normalized_issue["subject_id"] = subject
+            elif subject is not None:
                 if not isinstance(subject, str) or not 1 <= len(subject) <= 128:
                     raise FacilityProtocolError("provider issue subject is invalid")
                 normalized_issue["subject_id"] = subject
@@ -377,7 +404,7 @@ class FacilityProtocolAdapter:
             "schema_version": NORMALIZED_SNAPSHOT_VERSION,
             "captured_at": observed_at,
             "sequence": sequence,
-            "status": {"state": state, "reason_codes": list(reasons)},
+            "status": {"state": state, "reason_codes": normalized_reasons},
             "headline_metrics": normalized_headline,
             "metrics": display_metrics,
             "issues": issues,
@@ -394,6 +421,7 @@ class FacilityProtocolAdapter:
 
 PCP_ADAPTER = FacilityProtocolAdapter(
     protocol="pcp.runtime.observer",
+    protocol_version=PROTOCOL_VERSION,
     request_schema="pcp.runtime.observer.request",
     snapshot_schema="pcp.runtime.observer.snapshot",
     error_schema="pcp.runtime.observer.error",
@@ -411,6 +439,7 @@ PCP_ADAPTER = FacilityProtocolAdapter(
 
 INFER_RUNTIME_ADAPTER = FacilityProtocolAdapter(
     protocol="infer-runtime.status",
+    protocol_version=PROTOCOL_VERSION,
     request_schema="infer-runtime.status.request",
     snapshot_schema="infer-runtime.status.snapshot",
     error_schema="infer-runtime.status.error",
@@ -427,9 +456,62 @@ INFER_RUNTIME_ADAPTER = FacilityProtocolAdapter(
     }),
 )
 
+DEV_MESH_OBSERVER_ADAPTER = FacilityProtocolAdapter(
+    protocol="dev-mesh.observer.status",
+    protocol_version=DEV_MESH_OBSERVER_PROTOCOL_VERSION,
+    request_schema="dev-mesh.observer.status.request",
+    snapshot_schema="dev-mesh.observer.status.snapshot",
+    error_schema="dev-mesh.observer.status.error",
+    label="Dev Mesh Observer",
+    response_limit=256 * 1024,
+    timeout_seconds=2.0,
+    require_eof=True,
+    nested_error=True,
+    error_codes=frozenset({"invalid_request", "snapshot_unavailable"}),
+    extension_key="dev-mesh-observer",
+    required_redactions=frozenset({
+        "coordination_owner_ids", "workspace_paths", "git_revisions",
+        "branch_names", "event_payloads", "raw_errors", "database_paths",
+        "claim_scopes",
+    }),
+    allowed_reason_codes=frozenset({
+        "collection_failed", "collection_stale", "workspace_unavailable",
+        "integrity_issue", "contention_stalled", "no_workspaces_registered",
+    }),
+    allowed_metric_ids=frozenset({
+        "dev_mesh.workspaces.registered",
+        "dev_mesh.workspaces.available",
+        "dev_mesh.workspaces.unavailable",
+        "dev_mesh.collection.pending_events",
+        "dev_mesh.collection.last_success_age",
+        "dev_mesh.collection.running",
+        "dev_mesh.integrity.issues",
+        "dev_mesh.events.mirrored",
+        "dev_mesh.contentions.active",
+        "dev_mesh.contentions.stalled",
+    }),
+    required_headline_metrics=(
+        "dev_mesh.workspaces.available",
+        "dev_mesh.collection.pending_events",
+        "dev_mesh.contentions.stalled",
+    ),
+    allowed_issue_codes=frozenset({
+        "dev_mesh.collection.failed",
+        "dev_mesh.collection.stale",
+        "dev_mesh.workspace.unavailable",
+        "dev_mesh.workspace.none_registered",
+        "dev_mesh.integrity.issue",
+        "dev_mesh.contention.stalled",
+        "dev_mesh.collection.backlog",
+    }),
+    required_issue_subject_id="observer",
+    require_scalar_metric_values=True,
+)
+
 DEFAULT_ADAPTERS: tuple[FacilityProtocolAdapter, ...] = (
     PCP_ADAPTER,
     INFER_RUNTIME_ADAPTER,
+    DEV_MESH_OBSERVER_ADAPTER,
 )
 
 

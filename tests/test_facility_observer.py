@@ -15,6 +15,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from infra_sentinel.resources.facilities.observer import FacilityMonitor  # noqa: E402
 from infra_sentinel.resources.facilities.protocols import (  # noqa: E402
+    DEV_MESH_OBSERVER_ADAPTER,
+    DEV_MESH_OBSERVER_PROTOCOL_VERSION,
     FacilityObservation,
     PCP_ADAPTER,
 )
@@ -27,25 +29,36 @@ def timestamp(offset: int) -> str:
     return (NOW + timedelta(seconds=offset)).isoformat()
 
 
-def registration(*, expires: int = 45, protocol: str = "pcp.runtime.observer") -> dict[str, object]:
+def registration(
+    *,
+    expires: int = 45,
+    protocol: str = "pcp.runtime.observer",
+    protocol_version: str = "20260810.1",
+    kind: str = "pcp",
+    endpoint_token: str = "test-gen-1",
+) -> dict[str, object]:
     return {
         "schema": "infra.discovery.registration",
         "schema_version": "20260810.1",
-        "service": {"kind": "pcp", "instance_id": "local", "generation": "gen-1"},
+        "service": {"kind": kind, "instance_id": "local", "generation": "gen-1"},
         "lease": {"renewed_at": timestamp(min(expires - 45, 0)), "expires_at": timestamp(expires)},
         "offers": [{
             "protocol": protocol,
-            "protocol_versions": ["20260810.1"],
+            "protocol_versions": [protocol_version],
             "binding": "infra.local.unix-socket",
-            "endpoint": "sockets/pcp-gen-1.sock",
+            "endpoint": f"sockets/{endpoint_token}.sock",
         }],
     }
 
 
-def observation() -> FacilityObservation:
+def observation(
+    *,
+    label: str = "PCP",
+    metric_id: str = "pcp.pages.current",
+) -> FacilityObservation:
     captured = timestamp(0)
     return FacilityObservation(
-        label="PCP",
+        label=label,
         status="healthy",
         observed_at=captured,
         sequence=1,
@@ -55,8 +68,8 @@ def observation() -> FacilityObservation:
             "captured_at": captured,
             "sequence": 1,
             "status": {"state": "healthy", "reason_codes": []},
-            "headline_metrics": ["pcp.pages.current"],
-            "metrics": [{"id": "pcp.pages.current", "kind": "gauge", "value": 2}],
+            "headline_metrics": [metric_id],
+            "metrics": [{"id": metric_id, "kind": "gauge", "value": 2}],
             "issues": [],
         },
         console_url="http://127.0.0.1:4318/",
@@ -72,7 +85,10 @@ def private_runtime(temporary: str) -> Path:
 
 
 def write_registration(root: Path, value: dict[str, object]) -> Path:
-    path = root / "registrations" / "pcp--local.json"
+    service = value["service"]
+    if not isinstance(service, dict):
+        raise AssertionError("test registration service must be an object")
+    path = root / "registrations" / f"{service['kind']}--{service['instance_id']}.json"
     path.write_text(json.dumps(value), encoding="utf-8")
     path.chmod(0o600)
     return path
@@ -96,6 +112,44 @@ class FacilityMonitorTests(unittest.TestCase):
             self.assertEqual(facility["generation"], "gen-1")
             self.assertEqual(facility["console_url"], "http://127.0.0.1:4318/")
             self.assertEqual(facility["snapshot"]["metrics"][0]["value"], 2)
+
+    def test_monitor_discovers_and_projects_dev_mesh_observer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = private_runtime(temporary)
+            write_registration(root, registration(
+                protocol="dev-mesh.observer.status",
+                protocol_version=DEV_MESH_OBSERVER_PROTOCOL_VERSION,
+                kind="dev-mesh-observer",
+                endpoint_token="dm-gen-1",
+            ))
+            monitor = FacilityMonitor(
+                logging.getLogger("facility-test"),
+                root,
+                [DEV_MESH_OBSERVER_ADAPTER],
+            )
+            observed = observation(
+                label="Dev Mesh Observer",
+                metric_id="dev_mesh.workspaces.available",
+            )
+
+            with patch.object(
+                type(DEV_MESH_OBSERVER_ADAPTER),
+                "observe",
+                return_value=observed,
+            ):
+                monitor.refresh_once(NOW.timestamp())
+            state = monitor.snapshot()
+
+            self.assertEqual(state["status"], "healthy")
+            facility = state["items"][0]
+            self.assertEqual(facility["label"], "Dev Mesh Observer")
+            self.assertEqual(facility["protocol"], "dev-mesh.observer.status")
+            self.assertEqual(facility["protocol_version"], "20260812.1")
+            self.assertEqual(facility["console_url"], "http://127.0.0.1:4318/")
+            self.assertEqual(
+                facility["snapshot"]["headline_metrics"],
+                ["dev_mesh.workspaces.available"],
+            )
 
     def test_sequence_must_advance_within_one_generation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
