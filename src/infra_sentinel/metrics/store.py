@@ -9,15 +9,25 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
+import threading
+import time
 from typing import Any
 
 from infra_sentinel.core.model import MetricPoint
+from infra_sentinel.metrics.aggregation import MetricAccumulator, MetricBucket, bucket_start
 from infra_sentinel.resources.network.metrics import local_sample_metrics, vps_sample_metrics, xray_sample_metrics
 
 
-STORE_SCHEMA = "20260808.2"
+STORE_SCHEMA = "20260812.1"
 STORE_FILENAME = "infra.sqlite3"
 LEGACY_NETWORK_IMPORT = "legacy-network-jsonl-20260808.2"
+MAINTENANCE_EPOCH = "metric-maintenance-20260812.1"
+HOT_RESOLUTION_SECONDS = 15 * 60
+HOURLY_RESOLUTION_SECONDS = 60 * 60
+DAILY_RESOLUTION_SECONDS = 24 * 60 * 60
+HOT_RETENTION_SECONDS = 7 * DAILY_RESOLUTION_SECONDS
+HOURLY_RETENTION_SECONDS = 90 * DAILY_RESOLUTION_SECONDS
+MAINTENANCE_INTERVAL_SECONDS = DAILY_RESOLUTION_SECONDS
 
 
 class MetricStore:
@@ -27,18 +37,24 @@ class MetricStore:
         self.state_dir = state_dir
         self.path = state_dir / STORE_FILENAME
         self._initialized = False
+        self._point_count = 0
+        self._legacy_imported = False
+        self._lock = threading.RLock()
 
-    def _connect(self) -> sqlite3.Connection:
+    def _connect(self, *, write: bool = False) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path)
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA journal_mode = WAL")
-        connection.execute("PRAGMA synchronous = FULL")
+        if write:
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA synchronous = FULL")
+        else:
+            connection.execute("PRAGMA query_only = ON")
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
 
     @contextmanager
-    def _transaction(self) -> Iterable[sqlite3.Connection]:
-        connection = self._connect()
+    def _transaction(self, *, write: bool = False) -> Iterable[sqlite3.Connection]:
+        connection = self._connect(write=write)
         try:
             yield connection
         except Exception:
@@ -50,11 +66,12 @@ class MetricStore:
             connection.close()
 
     def initialize(self) -> None:
-        if self._initialized:
-            return
-        self.state_dir.mkdir(parents=True, exist_ok=True)
-        with self._transaction() as connection:
-            connection.executescript("""
+        with self._lock:
+            if self._initialized:
+                return
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+            with self._transaction(write=True) as connection:
+                connection.executescript("""
                 CREATE TABLE IF NOT EXISTS schema_migrations (
                     version TEXT PRIMARY KEY,
                     applied_at TEXT NOT NULL
@@ -76,13 +93,41 @@ class MetricStore:
                     dimensions_json TEXT NOT NULL,
                     attribution_method TEXT NOT NULL,
                     confidence TEXT NOT NULL,
-                    estimated INTEGER NOT NULL CHECK (estimated IN (0, 1))
+                    estimated INTEGER NOT NULL CHECK (estimated IN (0, 1)),
+                    sample_count INTEGER NOT NULL DEFAULT 1,
+                    minimum_value REAL,
+                    maximum_value REAL,
+                    last_value REAL,
+                    last_epoch REAL,
+                    resolution_seconds INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE INDEX IF NOT EXISTS metric_points_time ON metric_points(observed_epoch);
                 CREATE INDEX IF NOT EXISTS metric_points_metric_source ON metric_points(metric, source_id, observed_epoch);
             """)
-            connection.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, datetime('now'))", (STORE_SCHEMA,))
-        self._initialized = True
+                columns = {str(row["name"]) for row in connection.execute("PRAGMA table_info(metric_points)")}
+                additions = {
+                    "sample_count": "INTEGER NOT NULL DEFAULT 1",
+                    "minimum_value": "REAL",
+                    "maximum_value": "REAL",
+                    "last_value": "REAL",
+                    "last_epoch": "REAL",
+                    "resolution_seconds": "INTEGER NOT NULL DEFAULT 0",
+                }
+                for name, declaration in additions.items():
+                    if name not in columns:
+                        connection.execute(f"ALTER TABLE metric_points ADD COLUMN {name} {declaration}")
+                connection.executescript("""
+                    CREATE INDEX IF NOT EXISTS metric_points_resource_instrument_time
+                    ON metric_points(resource_id, instrument, observed_epoch);
+                    CREATE INDEX IF NOT EXISTS metric_points_resolution_time
+                    ON metric_points(resolution_seconds, observed_epoch);
+                """)
+                connection.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, datetime('now'))", (STORE_SCHEMA,))
+                self._point_count = int(connection.execute("SELECT COUNT(*) FROM metric_points").fetchone()[0])
+                self._legacy_imported = connection.execute(
+                    "SELECT 1 FROM store_metadata WHERE key = ?", (LEGACY_NETWORK_IMPORT,)
+                ).fetchone() is not None
+            self._initialized = True
 
     @staticmethod
     def _epoch(point: MetricPoint) -> float:
@@ -91,7 +136,7 @@ class MetricStore:
         return datetime.fromisoformat(point.observed_at).timestamp()
 
     @staticmethod
-    def _canonical_dimensions(point: MetricPoint) -> str:
+    def _canonical_dimensions(point: MetricPoint | MetricBucket) -> str:
         return json.dumps(point.dimensions, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
     @classmethod
@@ -110,26 +155,100 @@ class MetricStore:
 
     @classmethod
     def _row(cls, point: MetricPoint) -> tuple[Any, ...]:
+        value = float(point.value)
         return (
             cls._identity(point), point.observed_at, cls._epoch(point), point.metric, point.instrument,
-            float(point.value), point.unit, point.source_id, point.resource_id, cls._canonical_dimensions(point),
-            point.attribution_method, point.confidence, int(point.estimated),
+            value, point.unit, point.source_id, point.resource_id, cls._canonical_dimensions(point),
+            point.attribution_method, point.confidence, int(point.estimated), 1, value, value, value,
+            cls._epoch(point), 0,
         )
+
+    @classmethod
+    def _bucket_identity(cls, bucket: MetricBucket) -> str:
+        payload = {
+            "observed_at": bucket.observed_at,
+            "metric": bucket.metric,
+            "instrument": bucket.instrument,
+            "unit": bucket.unit,
+            "source_id": bucket.source_id,
+            "resource_id": bucket.resource_id,
+            "dimensions": bucket.dimensions,
+            "resolution_seconds": bucket.resolution_seconds,
+        }
+        canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def _bucket_row(cls, bucket: MetricBucket) -> tuple[Any, ...]:
+        return (
+            cls._bucket_identity(bucket), bucket.observed_at, bucket.observed_epoch,
+            bucket.metric, bucket.instrument, bucket.value, bucket.unit, bucket.source_id,
+            bucket.resource_id, cls._canonical_dimensions(bucket), bucket.attribution_method,
+            bucket.confidence, int(bucket.estimated), bucket.sample_count, bucket.minimum_value,
+            bucket.maximum_value, bucket.last_value, bucket.last_epoch, bucket.resolution_seconds,
+        )
+
+    @staticmethod
+    def _insert_columns() -> str:
+        return """
+            identity, observed_at, observed_epoch, metric, instrument, value, unit,
+            source_id, resource_id, dimensions_json, attribution_method, confidence, estimated,
+            sample_count, minimum_value, maximum_value, last_value, last_epoch, resolution_seconds
+        """
+
+    @classmethod
+    def _write_buckets_on(cls, connection: sqlite3.Connection, buckets: Iterable[MetricBucket]) -> int:
+        rows = [cls._bucket_row(bucket) for bucket in buckets]
+        if not rows:
+            return 0
+        before = connection.total_changes
+        connection.executemany(f"""
+            INSERT INTO metric_points({cls._insert_columns()})
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(identity) DO UPDATE SET
+                value = CASE
+                    WHEN metric_points.instrument = 'counter' THEN metric_points.value + excluded.value
+                    WHEN metric_points.instrument = 'gauge' THEN
+                        ((metric_points.value * metric_points.sample_count) + (excluded.value * excluded.sample_count))
+                        / MAX(1, metric_points.sample_count + excluded.sample_count)
+                    ELSE excluded.value
+                END,
+                sample_count = metric_points.sample_count + excluded.sample_count,
+                minimum_value = MIN(COALESCE(metric_points.minimum_value, metric_points.value), excluded.minimum_value),
+                maximum_value = MAX(COALESCE(metric_points.maximum_value, metric_points.value), excluded.maximum_value),
+                last_value = CASE WHEN excluded.last_epoch >= COALESCE(metric_points.last_epoch, metric_points.observed_epoch)
+                                  THEN excluded.last_value ELSE COALESCE(metric_points.last_value, metric_points.value) END,
+                last_epoch = MAX(COALESCE(metric_points.last_epoch, metric_points.observed_epoch), excluded.last_epoch),
+                resolution_seconds = MAX(metric_points.resolution_seconds, excluded.resolution_seconds),
+                estimated = MAX(metric_points.estimated, excluded.estimated)
+        """, rows)
+        return connection.total_changes - before
 
     def write(self, points: Iterable[MetricPoint]) -> int:
         rows = [self._row(point) for point in points]
         if not rows:
             return 0
         self.initialize()
-        with self._transaction() as connection:
+        with self._lock, self._transaction(write=True) as connection:
             before = connection.total_changes
-            connection.executemany("""
-                INSERT OR IGNORE INTO metric_points(
-                    identity, observed_at, observed_epoch, metric, instrument, value, unit,
-                    source_id, resource_id, dimensions_json, attribution_method, confidence, estimated
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            connection.executemany(f"""
+                INSERT OR IGNORE INTO metric_points({self._insert_columns()})
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, rows)
-            return connection.total_changes - before
+            inserted = connection.total_changes - before
+            self._point_count += inserted
+            return inserted
+
+    def write_buckets(self, buckets: Iterable[MetricBucket]) -> int:
+        """Durably merge completed in-memory buckets in one transaction."""
+        materialized = tuple(buckets)
+        if not materialized:
+            return 0
+        self.initialize()
+        with self._lock, self._transaction(write=True) as connection:
+            changed = self._write_buckets_on(connection, materialized)
+            self._point_count = int(connection.execute("SELECT COUNT(*) FROM metric_points").fetchone()[0])
+            return changed
 
     @staticmethod
     def _iter_jsonl(path: Path) -> Iterable[dict[str, Any]]:
@@ -148,8 +267,7 @@ class MetricStore:
 
     def _legacy_import_complete(self) -> bool:
         self.initialize()
-        with self._transaction() as connection:
-            return connection.execute("SELECT 1 FROM store_metadata WHERE key = ?", (LEGACY_NETWORK_IMPORT,)).fetchone() is not None
+        return self._legacy_imported
 
     def import_legacy_network(self) -> int:
         """Import prior diagnostics once; retry safely if interrupted before commit."""
@@ -171,31 +289,159 @@ class MetricStore:
                 for sample in self._iter_jsonl(path):
                     points.extend(xray_sample_metrics(remote_dir.name, sample))
         self.initialize()
-        with self._transaction() as connection:
+        with self._lock, self._transaction(write=True) as connection:
             before = connection.total_changes
-            connection.executemany("""
-                INSERT OR IGNORE INTO metric_points(
-                    identity, observed_at, observed_epoch, metric, instrument, value, unit,
-                    source_id, resource_id, dimensions_json, attribution_method, confidence, estimated
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            connection.executemany(f"""
+                INSERT OR IGNORE INTO metric_points({self._insert_columns()})
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, [self._row(point) for point in points])
             inserted = connection.total_changes - before
             connection.execute("INSERT OR REPLACE INTO store_metadata(key, value) VALUES (?, ?)",
                                (LEGACY_NETWORK_IMPORT, json.dumps({"inserted": inserted, "schema": STORE_SCHEMA})))
+            self._point_count = int(connection.execute("SELECT COUNT(*) FROM metric_points").fetchone()[0])
+            self._legacy_imported = True
             return inserted
 
     def summary(self) -> dict[str, Any]:
         self.initialize()
-        with self._transaction() as connection:
-            count = int(connection.execute("SELECT COUNT(*) FROM metric_points").fetchone()[0])
-            imported = connection.execute("SELECT value FROM store_metadata WHERE key = ?", (LEGACY_NETWORK_IMPORT,)).fetchone()
         return {
             "schema": STORE_SCHEMA,
             "kind": "sqlite",
             "status": "ok",
-            "metric_points": count,
-            "legacy_import_complete": imported is not None,
+            "metric_points": self._point_count,
+            "legacy_import_complete": self._legacy_imported,
         }
+
+    @staticmethod
+    def _bucket_from_row(row: sqlite3.Row) -> MetricBucket:
+        try:
+            dimensions = json.loads(row["dimensions_json"])
+        except (TypeError, json.JSONDecodeError):
+            dimensions = {}
+        value = float(row["value"])
+        samples = max(1, int(row["sample_count"] or 1))
+        instrument = str(row["instrument"])
+        return MetricBucket(
+            observed_epoch=float(row["observed_epoch"]),
+            resolution_seconds=int(row["resolution_seconds"] or 0),
+            metric=str(row["metric"]),
+            instrument=instrument,
+            value_sum=value * samples if instrument == "gauge" else value,
+            sample_count=samples,
+            minimum_value=float(row["minimum_value"] if row["minimum_value"] is not None else value),
+            maximum_value=float(row["maximum_value"] if row["maximum_value"] is not None else value),
+            last_value=float(row["last_value"] if row["last_value"] is not None else value),
+            last_epoch=float(row["last_epoch"] if row["last_epoch"] is not None else row["observed_epoch"]),
+            unit=str(row["unit"]),
+            source_id=str(row["source_id"]),
+            resource_id=str(row["resource_id"]),
+            dimensions=dimensions if isinstance(dimensions, dict) else {},
+            attribution_method=str(row["attribution_method"]),
+            confidence=str(row["confidence"]),
+            estimated=bool(row["estimated"]),
+        )
+
+    def _compact_resolution(
+        self,
+        source_resolution: int,
+        target_resolution: int,
+        before_epoch: float,
+        *,
+        offset_seconds: int = 0,
+    ) -> dict[str, int]:
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT MIN(observed_epoch) FROM metric_points WHERE resolution_seconds = ? AND observed_epoch < ?",
+                (source_resolution, before_epoch),
+            ).fetchone()
+        if row is None or row[0] is None:
+            return {"source_points": 0, "target_points": 0}
+        chunk_seconds = max(target_resolution, min(DAILY_RESOLUTION_SECONDS, target_resolution * 96))
+        start = bucket_start(float(row[0]), target_resolution, offset_seconds)
+        source_points = 0
+        target_points = 0
+        while start < before_epoch:
+            end = min(before_epoch, start + chunk_seconds)
+            with self._transaction(write=True) as connection:
+                rows = connection.execute("""
+                    SELECT observed_epoch, metric, instrument, value, unit, source_id, resource_id,
+                           dimensions_json, attribution_method, confidence, estimated, sample_count,
+                           minimum_value, maximum_value, last_value, last_epoch, resolution_seconds
+                    FROM metric_points
+                    WHERE resolution_seconds = ? AND observed_epoch >= ? AND observed_epoch < ?
+                    ORDER BY observed_epoch, metric, source_id, dimensions_json
+                """, (source_resolution, start, end)).fetchall()
+                if rows:
+                    accumulator = MetricAccumulator(target_resolution, offset_seconds=offset_seconds)
+                    for candidate in rows:
+                        accumulator.add_bucket(self._bucket_from_row(candidate))
+                    buckets = accumulator.buckets()
+                    self._write_buckets_on(connection, buckets)
+                    deleted = connection.execute(
+                        "DELETE FROM metric_points WHERE resolution_seconds = ? AND observed_epoch >= ? AND observed_epoch < ?",
+                        (source_resolution, start, end),
+                    ).rowcount
+                    source_points += max(0, int(deleted))
+                    target_points += len(buckets)
+            start = end
+        return {"source_points": source_points, "target_points": target_points}
+
+    def maintain_history(self, now_epoch: float | None = None, *, force: bool = False) -> dict[str, Any]:
+        """Compact completed history into 15-minute, hourly, and daily tiers."""
+        self.initialize()
+        now = time.time() if now_epoch is None else float(now_epoch)
+        with self._lock:
+            with self._transaction() as connection:
+                row = connection.execute("SELECT value FROM store_metadata WHERE key = ?", (MAINTENANCE_EPOCH,)).fetchone()
+            previous = float(row[0]) if row is not None else 0.0
+            if not force and now - previous < MAINTENANCE_INTERVAL_SECONDS:
+                return {"status": "current", "last_epoch": previous}
+
+            hot_cutoff = bucket_start(now, HOT_RESOLUTION_SECONDS)
+            hourly_cutoff = bucket_start(now - HOT_RETENTION_SECONDS, HOURLY_RESOLUTION_SECONDS)
+            local_midnight = datetime.fromtimestamp(now).astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+            daily_offset = int(local_midnight.timestamp()) % DAILY_RESOLUTION_SECONDS
+            daily_cutoff = bucket_start(
+                now - HOURLY_RETENTION_SECONDS,
+                DAILY_RESOLUTION_SECONDS,
+                daily_offset,
+            )
+            raw = self._compact_resolution(0, HOT_RESOLUTION_SECONDS, hot_cutoff)
+            hourly = self._compact_resolution(HOT_RESOLUTION_SECONDS, HOURLY_RESOLUTION_SECONDS, hourly_cutoff)
+            daily = self._compact_resolution(
+                HOURLY_RESOLUTION_SECONDS,
+                DAILY_RESOLUTION_SECONDS,
+                daily_cutoff,
+                offset_seconds=daily_offset,
+            )
+            with self._transaction(write=True) as connection:
+                connection.execute(
+                    "INSERT OR REPLACE INTO store_metadata(key, value) VALUES (?, ?)",
+                    (MAINTENANCE_EPOCH, str(now)),
+                )
+                self._point_count = int(connection.execute("SELECT COUNT(*) FROM metric_points").fetchone()[0])
+            return {
+                "status": "compacted",
+                "at_epoch": now,
+                "raw_to_15m": raw,
+                "15m_to_hour": hourly,
+                "hour_to_day": daily,
+                "metric_points": self._point_count,
+            }
+
+    def vacuum(self) -> dict[str, int]:
+        """Reclaim pages after an explicit offline history migration."""
+        self.initialize()
+        before = self.path.stat().st_size if self.path.exists() else 0
+        with self._lock:
+            connection = self._connect(write=True)
+            try:
+                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                connection.execute("VACUUM")
+            finally:
+                connection.close()
+        after = self.path.stat().st_size if self.path.exists() else 0
+        return {"before_bytes": before, "after_bytes": after, "reclaimed_bytes": max(0, before - after)}
 
     def query_points(
         self,
@@ -234,19 +480,33 @@ class MetricStore:
                 rows = connection.execute(f"""
                     SELECT observed_epoch, observed_at, metric, instrument, value, unit,
                            source_id, resource_id, dimensions_json, attribution_method,
-                           confidence, estimated
+                           confidence, estimated, sample_count,
+                           COALESCE(minimum_value, value) AS minimum_value,
+                           COALESCE(maximum_value, value) AS maximum_value,
+                           COALESCE(last_value, value) AS last_value,
+                           COALESCE(last_epoch, observed_epoch) AS last_epoch,
+                           resolution_seconds
                     FROM metric_points
                     WHERE {where}
                     ORDER BY observed_epoch, metric, source_id, dimensions_json
                     LIMIT ?
                 """, (*parameters, limit)).fetchall()
             else:
-                aggregation = "AVG(value)" if instrument == "gauge" else "SUM(value)"
+                aggregation = (
+                    "SUM(value * sample_count) / MAX(1, SUM(sample_count))"
+                    if instrument == "gauge" else "SUM(value)"
+                )
                 rows = connection.execute(f"""
                     SELECT CAST((observed_epoch - ?) / ? AS INTEGER) * ? + ? AS bucket_epoch,
                            metric, instrument, {aggregation} AS value, unit,
                            source_id, resource_id, dimensions_json, attribution_method,
-                           confidence, estimated
+                           confidence, MAX(estimated) AS estimated,
+                           SUM(sample_count) AS sample_count,
+                           MIN(COALESCE(minimum_value, value)) AS minimum_value,
+                           MAX(COALESCE(maximum_value, value)) AS maximum_value,
+                           MAX(COALESCE(last_value, value)) AS last_value,
+                           MAX(COALESCE(last_epoch, observed_epoch)) AS last_epoch,
+                           MAX(resolution_seconds) AS resolution_seconds
                     FROM metric_points
                     WHERE {where}
                     GROUP BY bucket_epoch, metric, instrument, unit, source_id, resource_id,
@@ -275,6 +535,12 @@ class MetricStore:
                 "attribution_method": row["attribution_method"],
                 "confidence": row["confidence"],
                 "estimated": bool(row["estimated"]),
+                "sample_count": int(row["sample_count"]),
+                "minimum_value": row["minimum_value"],
+                "maximum_value": row["maximum_value"],
+                "last_value": row["last_value"],
+                "last_epoch": row["last_epoch"],
+                "resolution_seconds": int(row["resolution_seconds"]),
             }
             if bucket_seconds is None:
                 point["observed_at"] = row["observed_at"]

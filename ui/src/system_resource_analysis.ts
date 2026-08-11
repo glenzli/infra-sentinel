@@ -23,7 +23,7 @@ type CacheEntry = { fetchedAt: number; data: SystemAnalysisData };
 function windowFor(range: SystemTimeRange): Omit<SystemAnalysisData, "gaugePoints" | "counterPoints"> & { bucketOffsetSeconds: number } {
   const untilEpoch = Date.now() / 1_000;
   const seconds = range === "1h" ? 3_600 : range === "24h" ? 86_400 : range === "7d" ? 7 * 86_400 : 30 * 86_400;
-  const bucketSeconds = range === "1h" || range === "24h" ? 300 : range === "7d" ? 3_600 : 86_400;
+  const bucketSeconds = range === "1h" || range === "24h" ? 900 : range === "7d" ? 3_600 : 86_400;
   const localMidnight = new Date();
   localMidnight.setHours(0, 0, 0, 0);
   const dayStartEpoch = localMidnight.getTime() / 1_000;
@@ -59,7 +59,7 @@ export class SystemResourceAnalysisController {
   snapshot(): SystemAnalysisSnapshot {
     return {
       range: this.range,
-      data: this.cache.get(this.range)?.data ?? { gaugePoints: [], counterPoints: [], sinceEpoch: 0, untilEpoch: 0, bucketSeconds: 300 },
+      data: this.cache.get(this.range)?.data ?? { gaugePoints: [], counterPoints: [], sinceEpoch: 0, untilEpoch: 0, bucketSeconds: 900 },
       ready: this.cache.has(this.range),
       loading: this.loading.has(this.range),
       error: this.errors.get(this.range),

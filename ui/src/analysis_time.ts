@@ -3,7 +3,7 @@ export type AnalysisTimeRange = "today" | "7d" | "30d" | "recorded";
 export type AnalysisTimeWindow = {
   sinceEpoch: number;
   untilEpoch: number;
-  bucketSeconds: 300 | 86_400;
+  bucketSeconds: 900 | 86_400;
   bucketOffsetSeconds: number;
 };
 
@@ -22,7 +22,7 @@ function shiftLocalDays(date: Date, days: number): Date {
 /** Owns the calendar meaning shared by network and AI analysis queries. */
 export function analysisTimeWindow(
   range: AnalysisTimeRange,
-  todayBucketSeconds: 300 | 86_400 = 300,
+  todayBucketSeconds: 900 | 86_400 = 900,
   now = new Date(),
 ): AnalysisTimeWindow {
   const midnight = localMidnight(now);

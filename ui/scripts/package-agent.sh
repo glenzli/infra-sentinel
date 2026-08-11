@@ -33,6 +33,9 @@ mkdir -p "$build_dir" "$output_dir"
   --specpath "$build_dir/spec" \
   --paths "$root_dir/src" \
   --hidden-import infra_sentinel.cli.snapshot \
+  --hidden-import infra_sentinel.resources.system.backends.macos \
+  --hidden-import infra_sentinel.resources.system.backends.linux \
+  --hidden-import infra_sentinel.resources.system.backends.windows \
   "$root_dir/bin/infra_agent.py"
 
 cp "$build_dir/dist/$agent_name" "$output_dir/infra-agent-$target_triple"

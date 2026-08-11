@@ -88,7 +88,7 @@ OpenCode calendar-day totals and Codex local-baseline windows may differ. The in
 
 ## Local system module
 
-The system collector consumes a platform-neutral capability contract rather than assuming every host exposes the same counters. The verified macOS backend observes aggregate CPU utilization, native memory-pressure state, compressed memory and swap, disk free space, physical disk bytes and operations, conservative disk-health evidence, and thermal state. Current throughput values refresh with the normal Agent sample; historical gauges and interval counters are persisted every five minutes, while supported disk-health checks run once at startup and then every six hours.
+The system collector consumes a platform-neutral capability contract rather than assuming every host exposes the same counters. The verified macOS backend observes aggregate CPU utilization, native memory-pressure state, compressed memory and swap, disk free space, physical disk bytes and operations, conservative disk-health evidence, and thermal state. Current values refresh with the normal Agent sample but stay in memory inside the active 15-minute bucket. Completed buckets are persisted in one transaction; supported disk-health checks run once at startup and then every six hours.
 
 Initial Linux and Windows backends establish the cross-platform boundary: Linux uses aggregate procfs/sysfs counters; Windows uses stable Win32 CPU, memory, and disk-capacity APIs. A backend explicitly declares its capabilities, and the UI omits unavailable measurements instead of rendering them as zero or healthy. macOS remains the only packaged and release-verified desktop target for now.
 
@@ -246,7 +246,7 @@ Runtime data is stored under:
 ~/Library/Application Support/Infra Sentinel/state/
 ```
 
-This includes the SQLite metric store, counter checkpoints, health state, bounded command results, rolling logs, and necessary legacy network JSONL. State may contain aggregate domains, Xray client labels, model names, and user-defined display names, but does not store:
+This includes the SQLite metric store, low-frequency counter checkpoints, health state, transient command results, rolling logs, and bounded legacy network JSONL. Recent metrics retain 15-minute resolution for 7 days, then compact to hourly resolution through day 90 and daily resolution afterward. Counter totals remain additive; gauges retain their weighted mean, minimum, maximum, and latest value. Valid command results are deleted after the desktop consumes them, and abandoned results expire automatically. State may contain aggregate domains, Xray client labels, model names, and user-defined display names, but does not store:
 
 - Prompts, responses, message bodies, or command content;
 - URL paths, query parameters, request headers, or network payloads;

@@ -137,7 +137,7 @@ export class NetworkAnalysisController {
   }
 
   private async fetch(mode: NetworkViewMode, range: NetworkTimeRange): Promise<NetworkAnalysisData> {
-    const window = analysisTimeWindow(range, mode === "attribution" ? 300 : 86_400);
+    const window = analysisTimeWindow(range, mode === "attribution" ? 900 : 86_400);
     const query = (metric: string, sourceId?: string) => requestAgentCommand("metrics.query", {
       since_epoch: window.sinceEpoch,
       until_epoch: window.untilEpoch,

@@ -21,7 +21,13 @@ from typing import Any
 import uuid
 
 from infra_sentinel.resources.network.billing_policy import BillingBudgetEngine, BillingBudgetTransition
-from infra_sentinel.app.protocol import PROJECTION_SCHEMA, complete_command, consume_commands, write_projection
+from infra_sentinel.app.protocol import (
+    PROJECTION_SCHEMA,
+    cleanup_command_results,
+    complete_command,
+    consume_commands,
+    write_projection,
+)
 from infra_sentinel.app.configuration import (
     Config,
     StateConfig,
@@ -35,7 +41,15 @@ from infra_sentinel.core.collectors import CollectorContext, CollectorRegistry, 
 from infra_sentinel.platform.process_lock import acquire_process_lock
 from infra_sentinel.resources.facilities.observer import FacilityMonitor
 from infra_sentinel.core.projection import build_infra_projection
-from infra_sentinel.metrics.query import BUCKET_SECONDS, MAX_RANGE_SECONDS, QUERY_SCHEMA, MetricQuery, execute_metric_query
+from infra_sentinel.metrics.pipeline import MetricPipeline
+from infra_sentinel.metrics.query import (
+    BUCKET_SECONDS,
+    MAX_RANGE_SECONDS,
+    QUERY_SCHEMA,
+    MetricQuery,
+    MetricQuerySource,
+    execute_metric_query,
+)
 from infra_sentinel.metrics.store import MetricStore
 from infra_sentinel.resources.network.mihomo import (
     MIHOMO_SAMPLE_SCHEMA,
@@ -60,8 +74,10 @@ from infra_sentinel.resources.system.collector import SystemResourceCollector
 PARENT_PROCESS_ENV = "INFRA_SENTINEL_PARENT_PID"
 APP_NOTIFICATIONS_ENV = "INFRA_SENTINEL_APP_NOTIFICATIONS"
 READ_ONLY_COMMAND_INTERVAL_SECONDS = 0.1
+METRIC_MAINTENANCE_CHECK_SECONDS = 60 * 60
 SAMPLE_SCHEMA = 5
 AGENT_RUNTIME_SCHEMA = PROJECTION_SCHEMA
+ALERT_WINDOW_FILENAME = "alert-window.json"
 
 
 @dataclass(frozen=True)
@@ -88,6 +104,7 @@ def format_bytes(value: int) -> str:
 
 def ensure_state_dir(config: Config) -> None:
     (config.state_dir / "snapshots").mkdir(parents=True, exist_ok=True)
+    cleanup_command_results(config.state_dir)
 
 
 def acquire_watch_lock(config: Config) -> Any | None:
@@ -175,13 +192,28 @@ def latest_delta_event(path: Path) -> dict[str, Any] | None:
 
 def load_recent_samples(config: Config, now: float) -> deque[dict[str, Any]]:
     cutoff = now - config.monitor.critical_window_seconds
+    records: list[dict[str, Any]] = []
+    try:
+        checkpoint = json.loads((config.state_dir / ALERT_WINDOW_FILENAME).read_text(encoding="utf-8"))
+        raw_records = checkpoint.get("samples", []) if isinstance(checkpoint, dict) else []
+        records = [record for record in raw_records if isinstance(record, dict)]
+    except (OSError, json.JSONDecodeError):
+        records = list(iter_jsonl(config.state_dir / "samples.jsonl"))
     return deque(
-        record
-        for record in iter_jsonl(config.state_dir / "samples.jsonl")
+        record for record in records
         if record.get("schema") == SAMPLE_SCHEMA
         and isinstance(record.get("epoch"), (int, float))
         and record["epoch"] >= cutoff
     )
+
+
+def save_recent_samples(state_dir: Path, history: Iterable[dict[str, Any]]) -> None:
+    """Checkpoint the bounded alert window without appending every sample."""
+    payload = {"schema": 1, "updated_at": iso_now(), "samples": list(history)}
+    target = state_dir / ALERT_WINDOW_FILENAME
+    temporary = state_dir / f".{ALERT_WINDOW_FILENAME}.tmp"
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    temporary.replace(target)
 
 
 def totals_for_window(
@@ -538,7 +570,7 @@ def configure_logger(config: Config) -> logging.Logger:
 def process_read_only_commands(
     config_path: Path,
     state_dir: Path,
-    metric_store: MetricStore,
+    metric_source: MetricQuerySource,
     logger: logging.Logger,
 ) -> int:
     """Serve local reads independently from the five-second sampler.
@@ -560,7 +592,7 @@ def process_read_only_commands(
         else:
             try:
                 query = MetricQuery.from_payload(command.payload)
-                complete_command(command, status="ok", payload=execute_metric_query(metric_store, query))
+                complete_command(command, status="ok", payload=execute_metric_query(metric_source, query))
             except (ValueError, TypeError) as exc:
                 complete_command(command, status="rejected", message=str(exc))
         completed += 1
@@ -570,14 +602,28 @@ def process_read_only_commands(
 def run_read_only_command_service(
     config_path: Path,
     state_dir: Path,
-    metric_store: MetricStore,
+    metric_source: MetricQuerySource,
     logger: logging.Logger,
     stop_event: threading.Event,
 ) -> None:
     """Serve read-only desktop commands while the sampler is busy."""
     while not stop_event.is_set():
-        process_read_only_commands(config_path, state_dir, metric_store, logger)
+        process_read_only_commands(config_path, state_dir, metric_source, logger)
         stop_event.wait(READ_ONLY_COMMAND_INTERVAL_SECONDS)
+
+
+def run_metric_maintenance_service(
+    metric_store: MetricStore,
+    logger: logging.Logger,
+    stop_event: threading.Event,
+) -> None:
+    """Apply the age-based tiers daily while a long-running App stays open."""
+    while not stop_event.is_set():
+        try:
+            logger.info("metric history maintenance=%s", metric_store.maintain_history())
+        except Exception:
+            logger.exception("metric history maintenance failed")
+        stop_event.wait(METRIC_MAINTENANCE_CHECK_SECONDS)
 
 
 def apply_agent_commands(
@@ -631,6 +677,7 @@ def handle_sample(
     remote_monitor: RemoteFleetMonitor,
     session_meter: SessionMeter,
     metric_store: MetricStore,
+    metric_pipeline: MetricPipeline,
     collector_registry: CollectorRegistry,
     system_collector: SystemResourceCollector,
     facility_monitor: FacilityMonitor,
@@ -640,13 +687,10 @@ def handle_sample(
     sample = collect_interval(client, tracker, config.monitor.sample_seconds)
     sample["schema"] = SAMPLE_SCHEMA
     annotate_sample_timing(sample, config.monitor.sample_seconds)
-    save_tracker(config.state_dir / "mihomo-baseline.json", tracker)
     history.append(sample)
     cutoff = sample["epoch"] - config.monitor.critical_window_seconds
     while history and float(history[0].get("epoch", 0)) < cutoff:
         history.popleft()
-    append_jsonl(config.state_dir / "samples.jsonl", sample, config.state)
-
     warning = totals_for_window(
         history,
         float(sample["epoch"]),
@@ -689,7 +733,7 @@ def handle_sample(
         session_meter.set_vps_baseline(remote_state)
     else:
         remote_state = remote_monitor.maybe_poll(sample["epoch"])
-        session_meter.record(sample, remote_state)
+        session_meter.record(sample, remote_state, persist=False)
 
     session_snapshot = session_meter.snapshot(
         remote_state,
@@ -707,7 +751,11 @@ def handle_sample(
     for run in collector_runs:
         if run.status == "error":
             logger.warning("metric collector failed id=%s kind=%s", run.capability.id, run.error_kind)
-    metric_store.write(collected_points(collector_runs))
+    metric_result = metric_pipeline.ingest(collected_points(collector_runs), float(sample["epoch"]))
+    if metric_result.flushed_buckets:
+        session_meter.checkpoint()
+        save_tracker(config.state_dir / "mihomo-baseline.json", tracker)
+        save_recent_samples(config.state_dir, history)
     for system_transition in system_collector.drain_transitions():
         event = build_system_event(system_transition)
         append_jsonl(config.state_dir / "events.jsonl", event, config.state)
@@ -762,11 +810,26 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--once", action="store_true", help="显示当前 Mihomo 累计与活跃域名")
     mode.add_argument("--watch", action="store_true", help="持续采样并发布本地 Projection")
+    mode.add_argument("--maintain", action="store_true", help="离线整理历史指标与临时查询结果")
     args = parser.parse_args()
     try:
         config_path = args.config or default_config_path()
         config = read_config(config_path)
         ensure_state_dir(config)
+        if args.maintain:
+            metric_store = MetricStore(config.state_dir)
+            imported = metric_store.import_legacy_network()
+            maintenance = metric_store.maintain_history(force=True)
+            vacuum = metric_store.vacuum()
+            transient = cleanup_command_results(config.state_dir, older_than_seconds=0)
+            print(json.dumps({
+                "status": "ok",
+                "legacy_imported": imported,
+                "maintenance": maintenance,
+                "vacuum": vacuum,
+                "transient_results": transient,
+            }, ensure_ascii=False))
+            return 0
         client = MihomoApiClient()
         if args.once:
             print_current(client)
@@ -807,6 +870,15 @@ def main() -> int:
         imported = metric_store.import_legacy_network()
         if imported:
             logger.info("imported legacy network metric points=%s", imported)
+        metric_pipeline = MetricPipeline(metric_store)
+        maintenance_stop = threading.Event()
+        maintenance_thread = threading.Thread(
+            target=run_metric_maintenance_service,
+            args=(metric_store, logger, maintenance_stop),
+            name="infra-metric-history-maintenance",
+            daemon=True,
+        )
+        maintenance_thread.start()
         logger.info(
             "agent started local=%ss remote_servers=%s",
             config.monitor.sample_seconds,
@@ -815,7 +887,7 @@ def main() -> int:
         read_only_command_stop = threading.Event()
         read_only_command_thread = threading.Thread(
             target=run_read_only_command_service,
-            args=(config_path, config.state_dir, metric_store, logger, read_only_command_stop),
+            args=(config_path, config.state_dir, metric_pipeline, logger, read_only_command_stop),
             name="infra-read-only-command-service",
             daemon=True,
         )
@@ -834,6 +906,7 @@ def main() -> int:
                         remote_monitor,
                         session_meter,
                         metric_store,
+                        metric_pipeline,
                         collector_registry,
                         system_collector,
                         facility_monitor,
@@ -850,6 +923,12 @@ def main() -> int:
         finally:
             read_only_command_stop.set()
             read_only_command_thread.join(timeout=1)
+            maintenance_stop.set()
+            maintenance_thread.join(timeout=1)
+            metric_pipeline.flush_all()
+            session_meter.checkpoint()
+            save_tracker(config.state_dir / "mihomo-baseline.json", tracker)
+            save_recent_samples(config.state_dir, history)
             facility_monitor.stop()
             upstream_monitor.stop()
             lock.close()

@@ -259,7 +259,17 @@ class SessionMeter:
         target["up_bytes"] += max(0, int(source.get("up_bytes", 0)))
         target["down_bytes"] += max(0, int(source.get("down_bytes", 0)))
 
-    def record(self, sample: dict[str, Any], remote_state: dict[str, Any]) -> None:
+    def checkpoint(self) -> None:
+        """Persist the current cumulative session outside the hot sample loop."""
+        self._save()
+
+    def record(
+        self,
+        sample: dict[str, Any],
+        remote_state: dict[str, Any],
+        *,
+        persist: bool = True,
+    ) -> None:
         if self.started_epoch is None:
             self.reset(float(sample["epoch"]), "automatic")
             self.set_vps_baseline(remote_state)
@@ -353,7 +363,8 @@ class SessionMeter:
             for point in self.history[-HISTORY_LIMIT:]
             if float(point.get("epoch", 0)) >= cutoff
         ]
-        self._save()
+        if persist:
+            self._save()
 
     def snapshot(
         self,

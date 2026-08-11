@@ -6,17 +6,19 @@ from dataclasses import dataclass
 import math
 import re
 import time
-from typing import Any
-
-from infra_sentinel.metrics.store import MetricStore
+from typing import Any, Protocol
 
 
 QUERY_SCHEMA = "20260811.1"
 MAX_RANGE_SECONDS = 90 * 24 * 60 * 60
 MAX_DAILY_RANGE_SECONDS = 730 * 24 * 60 * 60
 MAX_POINTS = 10_000
-BUCKET_SECONDS = {60, 300, 3_600, 86_400}
+BUCKET_SECONDS = {60, 300, 900, 3_600, 86_400}
 IDENTIFIER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+
+
+class MetricQuerySource(Protocol):
+    def query_points(self, **kwargs: Any) -> list[dict[str, Any]]: ...
 
 
 @dataclass(frozen=True)
@@ -46,7 +48,7 @@ class MetricQuery:
             raise ValueError("until_epoch must not precede since_epoch")
         bucket = payload.get("bucket_seconds", 60)
         if isinstance(bucket, bool) or not isinstance(bucket, int) or bucket not in BUCKET_SECONDS:
-            raise ValueError("bucket_seconds must be one of 60, 300, 3600, 86400")
+            raise ValueError("bucket_seconds must be one of 60, 300, 900, 3600, 86400")
         offset = payload.get("bucket_offset_seconds", 0)
         if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset < bucket:
             raise ValueError("bucket_offset_seconds must be an integer within the bucket")
@@ -96,7 +98,7 @@ class MetricQuery:
         return payload
 
 
-def execute_metric_query(store: MetricStore, query: MetricQuery) -> dict[str, Any]:
+def execute_metric_query(store: MetricQuerySource, query: MetricQuery) -> dict[str, Any]:
     """Return a bounded aggregated view without exposing SQL to protocol clients."""
     rows = store.query_points(
         since_epoch=query.since_epoch,

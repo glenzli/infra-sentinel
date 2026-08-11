@@ -86,7 +86,7 @@ fn decode_projection(document: &str) -> Result<Value, String> {
 #[tauri::command]
 pub fn read_projection() -> Result<Option<Value>, String> {
     let path = state_dir()?.join("projection.json");
-    let document = match fs::read_to_string(path) {
+    let document = match fs::read_to_string(&path) {
         Ok(document) => document,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(format!("cannot read Agent Projection: {error}")),
@@ -102,7 +102,11 @@ pub fn read_agent_command_result(command_id: String) -> Result<Option<Value>, St
     let path = state_dir()?
         .join("commands")
         .join(format!("{command_id}.result.json"));
-    let document = match fs::read_to_string(path) {
+    decode_and_consume_result(&path, &command_id)
+}
+
+fn decode_and_consume_result(path: &Path, command_id: &str) -> Result<Option<Value>, String> {
+    let document = match fs::read_to_string(&path) {
         Ok(document) => document,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(format!("cannot read Agent command result: {error}")),
@@ -110,10 +114,12 @@ pub fn read_agent_command_result(command_id: String) -> Result<Option<Value>, St
     let result: Value = serde_json::from_str(&document)
         .map_err(|error| format!("Agent command result is not valid JSON: {error}"))?;
     if result.get("schema").and_then(Value::as_str) != Some(PROTOCOL_SCHEMA)
-        || result.get("id").and_then(Value::as_str) != Some(command_id.as_str())
+        || result.get("id").and_then(Value::as_str) != Some(command_id)
     {
         return Err("Agent command result protocol is invalid".to_owned());
     }
+    fs::remove_file(path)
+        .map_err(|error| format!("cannot consume Agent command result: {error}"))?;
     Ok(Some(result))
 }
 
@@ -153,8 +159,13 @@ fn validated_external_status_url(value: &str) -> Result<url::Url, String> {
     if parsed.scheme() != "https" || !parsed.username().is_empty() || parsed.password().is_some() {
         return Err("Status URL must use public HTTPS".to_owned());
     }
-    let host = parsed.host_str().ok_or_else(|| "Status URL has no host".to_owned())?;
-    if !matches!(host, "status.openai.com" | "status.claude.com" | "status.deepseek.com") {
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "Status URL has no host".to_owned())?;
+    if !matches!(
+        host,
+        "status.openai.com" | "status.claude.com" | "status.deepseek.com"
+    ) {
         return Err("Status URL host is not allowlisted".to_owned());
     }
     Ok(parsed)
@@ -196,8 +207,8 @@ pub fn open_external_status(url: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_allowed, decode_projection, publish_command, validated_console_url,
-        validated_external_status_url, PROTOCOL_SCHEMA,
+        command_allowed, decode_and_consume_result, decode_projection, publish_command,
+        validated_console_url, validated_external_status_url, PROTOCOL_SCHEMA,
     };
     use serde_json::{json, Map, Value};
     use std::fs;
@@ -238,6 +249,32 @@ mod tests {
     }
 
     #[test]
+    fn command_results_are_removed_after_a_validated_read() {
+        let directory =
+            std::env::temp_dir().join(format!("infra-sentinel-result-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("create result directory");
+        let command_id = uuid::Uuid::new_v4().to_string();
+        let path = directory.join(format!("{command_id}.result.json"));
+        fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "schema": PROTOCOL_SCHEMA,
+                "id": command_id,
+                "type": "metrics.query",
+                "status": "ok"
+            }))
+            .expect("encode result"),
+        )
+        .expect("write result");
+
+        let result = decode_and_consume_result(&path, &command_id).expect("consume result");
+
+        assert!(result.is_some());
+        assert!(!path.exists());
+        fs::remove_dir_all(directory).expect("remove result directory");
+    }
+
+    #[test]
     fn console_links_are_limited_to_literal_loopback_urls() {
         assert!(validated_console_url("http://127.0.0.1:4318/#health").is_ok());
         assert!(validated_console_url("http://[::1]:8790/").is_ok());
@@ -249,7 +286,9 @@ mod tests {
     #[test]
     fn external_status_links_are_https_and_provider_allowlisted() {
         assert!(validated_external_status_url("https://status.openai.com/").is_ok());
-        assert!(validated_external_status_url("https://status.claude.com/incidents/example").is_ok());
+        assert!(
+            validated_external_status_url("https://status.claude.com/incidents/example").is_ok()
+        );
         assert!(validated_external_status_url("https://status.deepseek.com/").is_ok());
         assert!(validated_external_status_url("http://status.openai.com/").is_err());
         assert!(validated_external_status_url("https://example.com/").is_err());

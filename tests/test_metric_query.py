@@ -122,5 +122,14 @@ class MetricQueryTests(unittest.TestCase):
                 "bucket_seconds": 60, "bucket_offset_seconds": 60,
             })
 
+    def test_fifteen_minute_bucket_is_supported(self) -> None:
+        query = MetricQuery.from_payload({
+            "since_epoch": 0,
+            "until_epoch": 900,
+            "bucket_seconds": 900,
+        })
+
+        self.assertEqual(query.bucket_seconds, 900)
+
 if __name__ == "__main__":
     unittest.main()

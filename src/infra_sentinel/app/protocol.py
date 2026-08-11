@@ -13,6 +13,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 import re
+import time
 from typing import Any, Iterable
 
 
@@ -157,3 +158,32 @@ def complete_command(
         result["payload"] = payload
     _atomic_json(_result_path(command.processing_path.parent, command.id), result)
     command.processing_path.unlink(missing_ok=True)
+
+
+def cleanup_command_results(state_dir: Path, *, older_than_seconds: float = 3_600) -> dict[str, int]:
+    """Remove expired transient replies that were not consumed by a UI.
+
+    Results are transport envelopes, not product history.  A one-hour grace
+    period keeps a temporarily disconnected desktop able to finish a pending
+    request without letting large analysis replies accumulate indefinitely.
+    """
+    commands_dir = state_dir / COMMANDS_DIRECTORY
+    if not commands_dir.is_dir():
+        return {"files": 0, "bytes": 0}
+    cutoff = time.time() - max(0.0, float(older_than_seconds))
+    removed_files = 0
+    removed_bytes = 0
+    for path in (*commands_dir.glob("*.result.json"), *commands_dir.glob(".*.tmp")):
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        if stat.st_mtime >= cutoff:
+            continue
+        try:
+            path.unlink()
+        except OSError:
+            continue
+        removed_files += 1
+        removed_bytes += int(stat.st_size)
+    return {"files": removed_files, "bytes": removed_bytes}

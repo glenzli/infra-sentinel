@@ -11,7 +11,7 @@ import uuid
 from typing import Any
 
 from infra_sentinel.app.configuration import Config, read_config
-from infra_sentinel.app.agent import ensure_state_dir, iso_now, latest_jsonl
+from infra_sentinel.app.agent import ALERT_WINDOW_FILENAME, ensure_state_dir, iso_now, latest_jsonl
 
 
 def create_snapshot(config: Config, event: dict[str, Any]) -> Path:
@@ -50,9 +50,18 @@ def create_snapshot(config: Config, event: dict[str, Any]) -> Path:
 
 
 def manual_event(config: Config) -> dict[str, Any]:
-    sample = latest_jsonl(config.state_dir / "samples.jsonl")
+    sample = None
+    try:
+        checkpoint = json.loads((config.state_dir / ALERT_WINDOW_FILENAME).read_text(encoding="utf-8"))
+        samples = checkpoint.get("samples", []) if isinstance(checkpoint, dict) else []
+        if isinstance(samples, list) and samples:
+            sample = samples[-1]
+    except (OSError, json.JSONDecodeError):
+        pass
+    if not isinstance(sample, dict):
+        sample = latest_jsonl(config.state_dir / "samples.jsonl")
     if sample is None:
-        raise RuntimeError("尚无 samples.jsonl；请先打开 Traffic Sentinel App")
+        raise RuntimeError("尚无本地采样；请先打开 Infra Sentinel App")
     return {
         "id": f"manual-{uuid.uuid4().hex}",
         "type": "manual",
