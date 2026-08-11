@@ -7,9 +7,9 @@ import unittest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "bin"))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from instance_lock import acquire_process_lock  # noqa: E402
+from infra_sentinel.platform.process_lock import acquire_process_lock  # noqa: E402
 
 
 class InstanceLockTests(unittest.TestCase):

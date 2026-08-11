@@ -11,9 +11,9 @@ from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "bin"))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from mihomo_traffic import (  # noqa: E402
+from infra_sentinel.resources.network.mihomo import (  # noqa: E402
     MihomoApiClient,
     MihomoTrafficTracker,
     _is_trusted_mihomo_socket,
@@ -108,7 +108,7 @@ class MihomoApiClientTests(unittest.TestCase):
         )
         with (
             patch.object(Path, "lstat", return_value=socket_stat),
-            patch("mihomo_traffic.os.geteuid", return_value=501),
+            patch("infra_sentinel.resources.network.mihomo.os.geteuid", return_value=501),
         ):
             self.assertFalse(
                 _is_trusted_mihomo_socket(Path("/tmp/other-user-mihomo.sock"))
@@ -122,7 +122,7 @@ class MihomoApiClientTests(unittest.TestCase):
         )
         with (
             patch.object(Path, "lstat", return_value=socket_stat),
-            patch("mihomo_traffic.os.geteuid", return_value=501),
+            patch("infra_sentinel.resources.network.mihomo.os.geteuid", return_value=501),
         ):
             self.assertTrue(
                 _is_trusted_mihomo_socket(Path("/tmp/current-user-mihomo.sock"))
@@ -146,9 +146,9 @@ class MihomoApiClientTests(unittest.TestCase):
 
         with (
             patch.object(Path, "lstat", autospec=True, side_effect=fake_lstat),
-            patch("mihomo_traffic.os.geteuid", return_value=501),
-            patch("mihomo_traffic.os.getegid", return_value=20),
-            patch("mihomo_traffic.os.getgroups", return_value=[20]),
+            patch("infra_sentinel.resources.network.mihomo.os.geteuid", return_value=501),
+            patch("infra_sentinel.resources.network.mihomo.os.getegid", return_value=20),
+            patch("infra_sentinel.resources.network.mihomo.os.getgroups", return_value=[20]),
         ):
             self.assertTrue(_is_trusted_mihomo_socket(candidate))
 
@@ -160,7 +160,7 @@ class MihomoApiClientTests(unittest.TestCase):
         )
         with (
             patch.object(Path, "lstat", return_value=socket_stat),
-            patch("mihomo_traffic.os.geteuid", return_value=501),
+            patch("infra_sentinel.resources.network.mihomo.os.geteuid", return_value=501),
         ):
             self.assertFalse(
                 _is_trusted_mihomo_socket(Path("/tmp/untrusted-mihomo.sock"))
@@ -184,9 +184,9 @@ class MihomoApiClientTests(unittest.TestCase):
 
         with (
             patch.object(Path, "lstat", autospec=True, side_effect=fake_lstat),
-            patch("mihomo_traffic.os.geteuid", return_value=501),
-            patch("mihomo_traffic.os.getegid", return_value=20),
-            patch("mihomo_traffic.os.getgroups", return_value=[20]),
+            patch("infra_sentinel.resources.network.mihomo.os.geteuid", return_value=501),
+            patch("infra_sentinel.resources.network.mihomo.os.getegid", return_value=20),
+            patch("infra_sentinel.resources.network.mihomo.os.getgroups", return_value=[20]),
         ):
             self.assertFalse(_is_trusted_mihomo_socket(candidate))
 
@@ -197,8 +197,8 @@ class MihomoApiClientTests(unittest.TestCase):
             max_response_bytes=64,
         )
         with (
-            patch("mihomo_traffic._is_trusted_mihomo_socket", return_value=True),
-            patch("mihomo_traffic.socket.socket", return_value=fake_socket),
+            patch("infra_sentinel.resources.network.mihomo._is_trusted_mihomo_socket", return_value=True),
+            patch("infra_sentinel.resources.network.mihomo.socket.socket", return_value=fake_socket),
         ):
             with self.assertRaisesRegex(RuntimeError, "响应超过"):
                 client._request("/connections")
@@ -218,8 +218,8 @@ class MihomoApiClientTests(unittest.TestCase):
             max_response_bytes=1024,
         )
         with (
-            patch("mihomo_traffic._is_trusted_mihomo_socket", return_value=True),
-            patch("mihomo_traffic.socket.socket", return_value=fake_socket),
+            patch("infra_sentinel.resources.network.mihomo._is_trusted_mihomo_socket", return_value=True),
+            patch("infra_sentinel.resources.network.mihomo.socket.socket", return_value=fake_socket),
         ):
             self.assertEqual(client.connections()["connections"], [])
         self.assertTrue(fake_socket.closed)

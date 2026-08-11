@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::app_paths::state_dir;
 
-// Keep this in lockstep with bin/agent_protocol.py. The desktop bridge owns
+// Keep this in lockstep with src/infra_sentinel/app/protocol.py. The desktop bridge owns
 // command/projection validation, so a dated protocol revision must change on
 // both sides before a new Agent can be displayed.
 const PROTOCOL_SCHEMA: &str = "20260811.2";

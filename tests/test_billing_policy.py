@@ -6,9 +6,9 @@ import unittest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "bin"))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from billing_policy import BillingBudgetEngine, BillingBudgetPolicy, daily_usage_bytes  # noqa: E402
+from infra_sentinel.resources.network.billing_policy import BillingBudgetEngine, BillingBudgetPolicy, daily_usage_bytes  # noqa: E402
 
 
 def remote_state(incoming: int, outgoing: int, *, billing_mode: str = "both") -> dict[str, object]:

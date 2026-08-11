@@ -7,17 +7,17 @@ import unittest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "bin"))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from infra_collectors import (  # noqa: E402
+from infra_sentinel.core.collectors import (  # noqa: E402
     CallableCollector,
     CollectorCapability,
     CollectorContext,
     CollectorRegistry,
     collected_points,
 )
-from infra_model import MetricPoint  # noqa: E402
-from network_metrics import network_collector_registry, network_metrics  # noqa: E402
+from infra_sentinel.core.model import MetricPoint  # noqa: E402
+from infra_sentinel.resources.network.metrics import network_collector_registry, network_metrics  # noqa: E402
 
 
 def point_identity(point: MetricPoint) -> str:

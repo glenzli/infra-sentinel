@@ -143,6 +143,8 @@ Mihomo / VPS / Xray / OpenCode / Codex / 平台系统 backend → Collectors →
 
 平台专属行为被限制在窄 adapter 后面：系统资源 backend、Agent 单实例锁、原生通知、URL 打开和本地应用发现。Projection、指标存储、策略和 Web UI 保持平台无关，并且只展示 backend 明确声明的能力。
 
+Python 生产代码统一位于 `src/infra_sentinel` 包中，按应用生命周期、平台无关 Core、指标、平台 adapter 和资源族分组；`bin/` 只保留可执行入口与构建/发布脚本。所有权边界与目标平台验证规则见[架构说明](docs/architecture.zh-CN.md)。
+
 Projection 与发现合同使用日期化 schema，并要求精确的兼容版本。指标查询支持分钟、5 分钟、小时和天级聚合，查询范围和结果点数均有上限。
 
 ## 支持范围

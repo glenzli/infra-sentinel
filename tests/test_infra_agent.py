@@ -11,9 +11,9 @@ from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "bin"))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from configuration import (  # noqa: E402
+from infra_sentinel.app.configuration import (  # noqa: E402
     Config,
     LocalIntegrationPaths,
     MonitorConfig,
@@ -23,15 +23,15 @@ from configuration import (  # noqa: E402
     settings_payload,
     write_user_settings,
 )
-from billing_policy import BillingBudgetPolicy, BillingBudgetTransition  # noqa: E402
-from agent_protocol import (  # noqa: E402
+from infra_sentinel.resources.network.billing_policy import BillingBudgetPolicy, BillingBudgetTransition  # noqa: E402
+from infra_sentinel.app.protocol import (  # noqa: E402
     COMMAND_SCHEMA,
     PROJECTION_SCHEMA,
     complete_command,
     consume_commands,
 )
-from remote import RemoteServerConfig  # noqa: E402
-from infra_agent import (  # noqa: E402
+from infra_sentinel.resources.network.remote import RemoteServerConfig  # noqa: E402
+from infra_sentinel.app.agent import (  # noqa: E402
     AlertEngine,
     SAMPLE_SCHEMA,
     apply_agent_commands,
@@ -44,23 +44,23 @@ from infra_agent import (  # noqa: E402
     totals_for_window,
     write_projection_state,
 )
-from metric_store import MetricStore  # noqa: E402
-from infra_model import MetricPoint  # noqa: E402
-from sample_timing import (  # noqa: E402
+from infra_sentinel.metrics.store import MetricStore  # noqa: E402
+from infra_sentinel.core.model import MetricPoint  # noqa: E402
+from infra_sentinel.core.timing import (  # noqa: E402
     CATCH_UP_INTERVAL,
     REALTIME_INTERVAL,
     annotate_sample_timing,
     classify_interval,
 )
-from session import SessionMeter  # noqa: E402
-from snapshot import create_snapshot  # noqa: E402
-from traffic_estimation import (  # noqa: E402
+from infra_sentinel.resources.network.session import SessionMeter  # noqa: E402
+from infra_sentinel.cli.snapshot import create_snapshot  # noqa: E402
+from infra_sentinel.resources.network.traffic_estimation import (  # noqa: E402
     TrafficEstimationConfig,
     estimate_traffic,
     minute_rate_trend,
 )
-from vps import VPS_SAMPLE_SCHEMA, VpsConfig, VpsCounterTracker, VpsMonitor  # noqa: E402
-from xray_stats import XrayStatsConfig  # noqa: E402
+from infra_sentinel.resources.network.vps import VPS_SAMPLE_SCHEMA, VpsConfig, VpsCounterTracker, VpsMonitor  # noqa: E402
+from infra_sentinel.resources.network.xray import XrayStatsConfig  # noqa: E402
 
 
 def make_config(state_dir: Path) -> Config:
@@ -730,7 +730,7 @@ class SessionMeterTests(unittest.TestCase):
 
 class SnapshotAndEventTests(unittest.TestCase):
     def test_native_notifications_pass_chinese_as_osascript_arguments(self) -> None:
-        with patch("infra_agent.subprocess.run") as runner:
+        with patch("infra_sentinel.app.agent.subprocess.run") as runner:
             send_native_notification("流量告警", "5 分钟 ↑250 MiB")
         args, kwargs = runner.call_args
         self.assertEqual(args[0][:2], ["/usr/bin/osascript", "-e"])

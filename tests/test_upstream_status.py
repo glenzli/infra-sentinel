@@ -8,9 +8,9 @@ import unittest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "bin"))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from upstream_status import (  # noqa: E402
+from infra_sentinel.resources.upstream.status import (  # noqa: E402
     StatusProvider,
     UpstreamStatusMonitor,
     aggregate_snapshot,

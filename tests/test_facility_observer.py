@@ -11,10 +11,10 @@ from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "bin"))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from facility_observer import FacilityMonitor  # noqa: E402
-from facility_protocols import (  # noqa: E402
+from infra_sentinel.resources.facilities.observer import FacilityMonitor  # noqa: E402
+from infra_sentinel.resources.facilities.protocols import (  # noqa: E402
     FacilityObservation,
     PCP_ADAPTER,
 )

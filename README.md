@@ -150,6 +150,12 @@ Local facilities → Infra Protocol discovery → provider adapters ────
 
 Platform-specific behavior is kept behind narrow adapters: host resource backends, the Agent single-instance lock, native notifications, URL opening, and local application discovery. The Projection, metric store, policies, and Web UI remain platform-neutral and render only declared capabilities.
 
+Python production code lives in the `src/infra_sentinel` package, grouped by
+application lifecycle, portable core, metrics, platform adapters, and resource
+families. `bin/` contains executable wrappers and build/release scripts only.
+See the [architecture guide](docs/architecture.md) for ownership and target-
+platform validation rules.
+
 Projection and discovery contracts use date-versioned schemas and require an exact compatible
 version. Metric queries support minute, 5-minute, hourly, and daily aggregation, with bounded time
 ranges and result counts.

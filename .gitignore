@@ -13,6 +13,8 @@ venv/
 .ruff_cache/
 .coverage
 htmlcov/
+build/
+*.egg-info/
 
 Codex Traffic Sentinel.app/
 Traffic Sentinel.app/

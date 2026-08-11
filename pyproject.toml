@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "infra-sentinel-agent"
+version = "0.1.0"
+description = "Local-first resource observation sidecar for Infra Sentinel"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+infra-sentinel-agent = "infra_sentinel.app.agent:main"
+infra-sentinel-config = "infra_sentinel.app.configuration:main"
+infra-sentinel-report = "infra_sentinel.cli.report:main"
+infra-sentinel-snapshot = "infra_sentinel.cli.snapshot:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

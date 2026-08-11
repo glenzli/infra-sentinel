@@ -8,11 +8,11 @@ import unittest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "bin"))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from infra_model import MetricPoint  # noqa: E402
-from metric_store import MetricStore, STORE_SCHEMA  # noqa: E402
-from network_metrics import local_sample_metrics, remote_state_metrics  # noqa: E402
+from infra_sentinel.core.model import MetricPoint  # noqa: E402
+from infra_sentinel.metrics.store import MetricStore, STORE_SCHEMA  # noqa: E402
+from infra_sentinel.resources.network.metrics import local_sample_metrics, remote_state_metrics  # noqa: E402
 
 
 class MetricStoreTests(unittest.TestCase):

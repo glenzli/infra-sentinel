@@ -7,11 +7,11 @@ import unittest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "bin"))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from infra_model import MetricPoint  # noqa: E402
-from metric_query import MetricQuery, execute_metric_query  # noqa: E402
-from metric_store import MetricStore  # noqa: E402
+from infra_sentinel.core.model import MetricPoint  # noqa: E402
+from infra_sentinel.metrics.query import MetricQuery, execute_metric_query  # noqa: E402
+from infra_sentinel.metrics.store import MetricStore  # noqa: E402
 
 
 def point(epoch: float, value: int, *, source: str = "local-mihomo") -> MetricPoint:

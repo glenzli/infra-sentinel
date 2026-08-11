@@ -4,25 +4,28 @@ from pathlib import Path
 import os
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "bin"))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from infra_collectors import CollectorContext  # noqa: E402
-from disk_health import (  # noqa: E402
+from infra_sentinel.core.collectors import CollectorContext  # noqa: E402
+from infra_sentinel.resources.system.disk_health import (  # noqa: E402
     DiskHealthEvidence,
     DiskHealthMonitor,
     classify_disk_health,
 )
-from system_resources import HostReading, SystemResourceCollector  # noqa: E402
-from system_resources_contract import (  # noqa: E402
+from infra_sentinel.resources.system.collector import SystemResourceCollector  # noqa: E402
+from infra_sentinel.resources.system.contract import (  # noqa: E402
     CPU_UTILIZATION, DISK_CAPACITY, DISK_HEALTH, DISK_THROUGHPUT,
     MEMORY_CAPACITY, MEMORY_COMPRESSION, MEMORY_PRESSURE, MEMORY_SWAP,
-    THERMAL_PRESSURE,
+    THERMAL_PRESSURE, HostReading,
 )
-from system_resources_linux import LinuxSystemBackend  # noqa: E402
+from infra_sentinel.resources.system.backends.linux import LinuxSystemBackend  # noqa: E402
+from infra_sentinel.resources.system.backends import create_system_backend  # noqa: E402
 
 
 class FakeBackend:
@@ -42,6 +45,19 @@ class FakeBackend:
 class LimitedBackend(FakeBackend):
     platform = "windows"
     capabilities = (CPU_UTILIZATION, MEMORY_CAPACITY, DISK_CAPACITY)
+
+
+class SystemBackendSelectionTests(unittest.TestCase):
+    def test_loads_only_the_selected_platform_adapter(self) -> None:
+        backend = object()
+        module = SimpleNamespace(LinuxSystemBackend=lambda: backend)
+        with patch("infra_sentinel.resources.system.backends.import_module", return_value=module) as loader:
+            self.assertIs(create_system_backend("linux-custom"), backend)
+        loader.assert_called_once_with("infra_sentinel.resources.system.backends.linux")
+
+    def test_rejects_an_undeclared_platform(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "unsupported"):
+            create_system_backend("plan9")
 
 
 def reading(

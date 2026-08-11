@@ -10,9 +10,9 @@ import unittest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "bin"))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from facility_protocols import (  # noqa: E402
+from infra_sentinel.resources.facilities.protocols import (  # noqa: E402
     FacilityProtocolError,
     INFER_RUNTIME_ADAPTER,
     PCP_ADAPTER,
@@ -20,7 +20,7 @@ from facility_protocols import (  # noqa: E402
     _request,
     select_adapter,
 )
-from infra_discovery import DiscoveryOffer, Registration  # noqa: E402
+from infra_sentinel.resources.facilities.discovery import DiscoveryOffer, Registration  # noqa: E402
 
 
 NOW = datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)

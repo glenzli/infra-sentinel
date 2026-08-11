@@ -31,8 +31,8 @@ mkdir -p "$build_dir" "$output_dir"
   --distpath "$build_dir/dist" \
   --workpath "$build_dir/work" \
   --specpath "$build_dir/spec" \
-  --paths "$root_dir/bin" \
-  --hidden-import snapshot \
+  --paths "$root_dir/src" \
+  --hidden-import infra_sentinel.cli.snapshot \
   "$root_dir/bin/infra_agent.py"
 
 cp "$build_dir/dist/$agent_name" "$output_dir/infra-agent-$target_triple"

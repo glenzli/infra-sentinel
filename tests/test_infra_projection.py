@@ -6,11 +6,11 @@ import unittest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "bin"))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from infra_projection import build_infra_projection  # noqa: E402
-from infra_collectors import CollectorCapability, CollectorRun  # noqa: E402
-from ai_usage_contract import ai_usage_snapshot, localized, usage_window  # noqa: E402
+from infra_sentinel.core.projection import build_infra_projection  # noqa: E402
+from infra_sentinel.core.collectors import CollectorCapability, CollectorRun  # noqa: E402
+from infra_sentinel.resources.ai.contract import ai_usage_snapshot, localized, usage_window  # noqa: E402
 
 
 def sample() -> dict[str, object]:

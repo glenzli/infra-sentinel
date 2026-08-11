@@ -6,8 +6,9 @@ This directory owns the cross-platform desktop shell only.
 - `src-tauri/src/agent_bridge.rs` is the sole native bridge. It can read the
   versioned Projection and command results, and write only allowlisted Agent
   command documents.
-- Python `infra_agent.py` remains the owner of collectors, SQLite, policies,
-  event state, and the Projection contract.
+- Python `src/infra_sentinel/app/agent.py` remains the composition root for
+  collectors, SQLite, policies, event state, and the Projection contract;
+  `bin/infra_agent.py` is only the packaged executable wrapper.
 - Rust/Tauri owns desktop lifecycle, URL opening, menu-bar behavior, and native
   notifications. Platform branches stay in this native shell rather than the
   WebView or resource projections.

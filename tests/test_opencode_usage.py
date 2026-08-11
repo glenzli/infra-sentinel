@@ -12,10 +12,10 @@ import unittest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "bin"))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from infra_collectors import CollectorContext  # noqa: E402
-from opencode_usage import (  # noqa: E402
+from infra_sentinel.core.collectors import CollectorContext  # noqa: E402
+from infra_sentinel.resources.ai.opencode import (  # noqa: E402
     OPENCODE_COUNTER_SCHEMA, OpenCodeUsageCollector, discover_opencode,
     discover_opencode_desktop_database, parse_opencode_stats,
     read_opencode_desktop_daily_history, read_opencode_desktop_stats,
