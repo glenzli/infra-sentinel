@@ -34,6 +34,10 @@ function count(value: number | null | undefined): string {
   return value == null ? "—" : new Intl.NumberFormat().format(value);
 }
 
+function ratio(value: number | null | undefined): string {
+  return value == null || !Number.isFinite(value) ? "—" : percent(Math.max(0, Math.min(1, value)) * 100);
+}
+
 function combinedCount(left: number | null | undefined, right: number | null | undefined): string {
   return left == null && right == null ? "—" : count((left ?? 0) + (right ?? 0));
 }
@@ -49,10 +53,50 @@ function platformLabel(platform: string | undefined): string {
   return tr("This host", "本机系统");
 }
 
+function appLabel(id: string, label: string): string {
+  return id === "other-attributed" ? tr("Other attributed processes", "其他已归因进程") : label;
+}
+
+type AppIoTotal = { id: string; label: string; readBytes: number; writeBytes: number };
+
+function appIoTotals(
+  readPoints: Record<string, unknown>[],
+  writePoints: Record<string, unknown>[],
+  limit = 8,
+): AppIoTotal[] {
+  const totals = new Map<string, AppIoTotal>();
+  const add = (point: Record<string, unknown>, field: "readBytes" | "writeBytes") => {
+    const dimensions = point.dimensions && typeof point.dimensions === "object"
+      ? point.dimensions as Record<string, unknown>
+      : {};
+    const id = String(dimensions.app_id ?? "unknown");
+    const label = String(dimensions.app_label ?? id);
+    const current = totals.get(id) ?? { id, label, readBytes: 0, writeBytes: 0 };
+    current[field] += number(point.value);
+    totals.set(id, current);
+  };
+  readPoints.forEach((point) => add(point, "readBytes"));
+  writePoints.forEach((point) => add(point, "writeBytes"));
+  const ordered = [...totals.values()].sort((left, right) =>
+    (right.readBytes + right.writeBytes) - (left.readBytes + left.writeBytes)
+      || left.label.localeCompare(right.label));
+  if (ordered.length <= limit) return ordered;
+  const selected = ordered.slice(0, limit);
+  const remainder = ordered.slice(limit);
+  selected.push({
+    id: "other-attributed",
+    label: "Other attributed processes",
+    readBytes: remainder.reduce((total, item) => total + item.readBytes, 0),
+    writeBytes: remainder.reduce((total, item) => total + item.writeBytes, 0),
+  });
+  return selected;
+}
+
 export function renderSystemResourceCard(resource: ResourceProjection, snapshot?: SystemResourceProjection): string {
   const cpu = snapshot?.cpu?.percent ?? 0;
   const memory = snapshot?.memory;
   const disk = snapshot?.disk;
+  const dominantApp = disk?.attribution?.ready ? disk.attribution.apps[0] : undefined;
   const metrics = [
     supports(snapshot, "cpu.utilization") ? `<span><small>CPU</small><strong>${percent(cpu)}</strong></span>` : "",
     supports(snapshot, "memory.pressure")
@@ -65,6 +109,7 @@ export function renderSystemResourceCard(resource: ResourceProjection, snapshot?
   const footerFacts = [
     supports(snapshot, "thermal.pressure") ? `${tr("Thermal", "温度压力")} ${escapeHtml(thermal(snapshot?.thermal?.state ?? "unavailable"))}` : "",
     supports(snapshot, "disk.health") ? `${tr("Disk", "磁盘")} ${escapeHtml(diskHealth(disk?.health?.state ?? "unknown"))}` : "",
+    dominantApp ? `${tr("Top I/O", "主要 I/O")} ${escapeHtml(appLabel(dominantApp.id, dominantApp.label))}` : "",
   ].filter(Boolean).join(" · ") || tr("Platform capabilities detected", "已按平台能力检测");
   return `<button class="resource-card resource-card--system resource-card--${escapeHtml(resource.status)}" type="button" data-resource-id="system"><div class="resource-card__heading"><span class="resource-card__identity"><span class="resource-card__state source-state source-state--${escapeHtml(resource.status)}" aria-hidden="true"></span><p>${escapeHtml(platformLabel(snapshot?.platform))}</p></span><span class="pill pill--${escapeHtml(resource.status)}">${escapeHtml(overallStatus(resource.status))}</span></div><div class="system-overview__metrics">${metrics}</div><div class="network-overview__footer system-overview__footer"><span>${footerFacts}</span><span>${tr("Details", "详情")} →</span></div></button>`;
 }
@@ -152,10 +197,19 @@ export function renderSystemResourcePage(
   const hasDiskCapacity = supports(snapshot, "disk.capacity");
   const hasDiskThroughput = supports(snapshot, "disk.throughput");
   const hasDiskHealth = supports(snapshot, "disk.health");
+  const hasProcessAttribution = supports(snapshot, "disk.process-attribution");
   const hasThermal = supports(snapshot, "thermal.pressure");
   const cpuPoints = metric(analysis.data.gaugePoints, "system.cpu.percent");
   const readPoints = metric(analysis.data.counterPoints, "system.disk.read_bytes");
   const writePoints = metric(analysis.data.counterPoints, "system.disk.write_bytes");
+  const appReadPoints = metric(analysis.data.counterPoints, "system.disk.app.read_bytes");
+  const appWritePoints = metric(analysis.data.counterPoints, "system.disk.app.write_bytes");
+  const appTotals = appIoTotals(appReadPoints, appWritePoints);
+  const attributedRangeBytes = sum(appReadPoints) + sum(appWritePoints);
+  const physicalRangeBytes = sum(readPoints) + sum(writePoints);
+  const rangeCoverage = appReadPoints.length + appWritePoints.length > 0 && physicalRangeBytes > 0
+    ? Math.min(1, attributedRangeBytes / physicalRangeBytes)
+    : null;
   const rateSeries = (points: Record<string, unknown>[]) => points.map((point) => ({ epoch: number(point.observed_epoch), value: number(point.value) / Math.max(1, analysis.data.bucketSeconds) }));
   const freePoints = metric(analysis.data.gaugePoints, "system.disk.free_bytes");
   const swapPoints = metric(analysis.data.gaugePoints, "system.memory.swap_used_bytes");
@@ -170,6 +224,8 @@ export function renderSystemResourcePage(
   const rangeSummary = [
     hasDiskThroughput ? `<span><small>${tr("Physical reads", "物理读取")}</small><strong>${formatBytes(sum(readPoints))}</strong></span>` : "",
     hasDiskThroughput ? `<span><small>${tr("Physical writes", "物理写入")}</small><strong>${formatBytes(sum(writePoints))}</strong></span>` : "",
+    hasProcessAttribution && appReadPoints.length + appWritePoints.length > 0 ? `<span><small>${tr("App-attributed I/O", "App 已归因 I/O")}</small><strong>${formatBytes(attributedRangeBytes)}</strong></span>` : "",
+    hasProcessAttribution && rangeCoverage != null ? `<span><small>${tr("Attribution coverage", "归因覆盖率")}</small><strong>${ratio(rangeCoverage)}</strong></span>` : "",
     hasCpu ? `<span><small>${tr("Peak CPU", "CPU 峰值")}</small><strong>${percent(max(cpuPoints))}</strong></span>` : "",
     hasDiskCapacity ? `<span><small>${tr("Minimum free disk", "最低磁盘可用")}</small><strong>${formatBytes(Number.isFinite(min(freePoints)) ? min(freePoints) : disk?.free_bytes)}</strong></span>` : "",
     hasSwap ? `<span><small>${tr("Peak swap", "Swap 峰值")}</small><strong>${formatBytes(max(swapPoints) || memory?.swap_used_bytes)}</strong></span>` : "",
@@ -191,5 +247,9 @@ export function renderSystemResourcePage(
   ].filter(Boolean).join("");
   const pressurePanel = pressureItems ? `<article class="detail-panel"><div class="detail-panel__heading"><h3>${tr("System pressure", "系统压力")}</h3><span>${escapeHtml(platformLabel(snapshot?.platform))}</span></div><ul class="traffic-list">${pressureItems}</ul></article>` : "";
   const secondary = currentIoPanel || pressurePanel ? `<section class="system-secondary-grid">${currentIoPanel}${pressurePanel}</section>` : "";
-  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("LOCAL SYSTEM", "本机系统")}</p><h2>${escapeHtml(platformLabel(snapshot?.platform))}</h2></div><span class="pill pill--${escapeHtml(resource.status)}">${escapeHtml(overallStatus(resource.status))}</span></div><div class="system-current-grid">${currentCards}</div>${controls(analysis)}<section class="system-range-summary">${rangeSummary}</section>${historyState}${secondary}<p class="system-privacy">${tr("Host-wide aggregate counters only. No file names, paths, process arguments, window titles, or user content are recorded. History is persisted every five minutes; supported disk health checks run every six hours.", "仅记录整机聚合计数；不记录文件名、路径、进程参数、窗口标题或用户内容。历史每 5 分钟落盘；平台支持时，磁盘健康每 6 小时读取一次。")}</p></section>`;
+  const currentApps = disk?.attribution?.apps ?? [];
+  const currentAppRows = currentApps.map((app) => `<li><span>${escapeHtml(appLabel(app.id, app.label))}<small>${new Intl.NumberFormat().format(app.process_count)} ${tr("processes", "个进程")}</small></span><strong>${tr("Read", "读")} ${formatBytes(app.read_bytes_per_second)}/s · ${tr("Write", "写")} ${formatBytes(app.write_bytes_per_second)}/s</strong></li>`).join("");
+  const rangeAppRows = appTotals.map((app) => `<li><span>${escapeHtml(appLabel(app.id, app.label))}</span><strong>${tr("Read", "读")} ${formatBytes(app.readBytes)} · ${tr("Write", "写")} ${formatBytes(app.writeBytes)}</strong></li>`).join("");
+  const attributionPanel = hasProcessAttribution ? `<article class="detail-panel system-attribution"><div class="detail-panel__heading"><h3>${tr("Disk I/O by App", "按 App 的磁盘 I/O")}</h3><span>${tr("best-effort attribution", "尽力归因")}</span></div><div class="system-attribution__meta"><span>${tr("Current coverage", "当前覆盖率")} <strong>${ratio(disk?.attribution?.coverage_ratio)}</strong></span><span>${rangeLabel(analysis.range)} ${tr("coverage", "覆盖率")} <strong>${ratio(rangeCoverage)}</strong></span><span>${tr("Observed", "已观察")} <strong>${new Intl.NumberFormat().format(disk?.attribution?.observed_processes ?? 0)}</strong> ${tr("processes", "个进程")}</span></div><div class="system-attribution__columns"><section><h4>${tr("Current rate", "当前速率")}</h4><ul class="traffic-list system-app-list">${currentAppRows || `<li class="system-app-list__empty">${tr("Establishing the first process-counter interval.", "正在建立首个进程计数区间。")}</li>`}</ul></section><section><h4>${rangeLabel(analysis.range)}</h4><ul class="traffic-list system-app-list">${rangeAppRows || `<li class="system-app-list__empty">${tr("History appears after the next low-frequency rollup.", "下一个低频汇总完成后显示历史。")}</li>`}</ul></section></div><p class="system-attribution__note">${tr("Process counters can miss short-lived processes or inaccessible system services, and they are not expected to equal physical-device counters exactly.", "进程计数可能遗漏短命进程或无权读取的系统服务，不应预期与物理设备计数完全相等。")}</p></article>` : "";
+  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("LOCAL SYSTEM", "本机系统")}</p><h2>${escapeHtml(platformLabel(snapshot?.platform))}</h2></div><span class="pill pill--${escapeHtml(resource.status)}">${escapeHtml(overallStatus(resource.status))}</span></div><div class="system-current-grid">${currentCards}</div>${controls(analysis)}<section class="system-range-summary">${rangeSummary}</section>${historyState}${secondary}${attributionPanel}<p class="system-privacy">${tr("Host counters and bounded App I/O labels are sampled in memory. Completed 15-minute buckets are persisted; older history is compacted to hourly and daily resolution. No file names, paths, process arguments, window titles, or user content are recorded. Supported disk health checks run every six hours.", "整机计数与有界 App I/O 标签先在内存采样，仅将完成的 15 分钟桶落盘；较旧历史会压缩为小时和每日粒度。不记录文件名、路径、进程参数、窗口标题或用户内容；平台支持时，磁盘健康每 6 小时读取一次。")}</p></section>`;
 }

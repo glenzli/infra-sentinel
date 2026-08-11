@@ -29,6 +29,7 @@ from infra_sentinel.app.protocol import (  # noqa: E402
     PROJECTION_SCHEMA,
     complete_command,
     consume_commands,
+    projection_document,
 )
 from infra_sentinel.resources.network.remote import RemoteServerConfig  # noqa: E402
 from infra_sentinel.app.agent import (  # noqa: E402
@@ -42,7 +43,8 @@ from infra_sentinel.app.agent import (  # noqa: E402
     send_native_notification,
     process_read_only_commands,
     totals_for_window,
-    write_projection_state,
+    build_projection_state,
+    write_health_state,
 )
 from infra_sentinel.metrics.store import MetricStore  # noqa: E402
 from infra_sentinel.core.model import MetricPoint  # noqa: E402
@@ -144,7 +146,7 @@ class RuntimeConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             state_dir = Path(temporary)
             config = make_config(state_dir)
-            write_projection_state(
+            state = build_projection_state(
                 config,
                 sample(100, 40, 60),
                 {"up_bytes": 40, "down_bytes": 60},
@@ -153,10 +155,26 @@ class RuntimeConfigTests(unittest.TestCase):
                 {"enabled": False, "status": "disabled", "servers": []},
                 {"kernel": {"total_bytes": 100}, "vps": {"total_bytes": 0}},
             )
-            payload = json.loads((state_dir / "projection.json").read_text(encoding="utf-8"))
+            payload = projection_document(state)
             self.assertEqual(payload["schema"], PROJECTION_SCHEMA)
-            self.assertEqual(payload["protocol"]["transport"], "local-file")
+            self.assertEqual(payload["protocol"]["transport"], "stdio-stream")
+            self.assertEqual(payload["protocol"]["checkpoint"], "local-file")
             self.assertEqual(payload["infra"]["resources"][0]["id"], "network")
+
+    def test_unchanged_health_state_is_not_rewritten_every_sample(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary)
+            config = make_config(state_dir)
+            write_health_state(config, "ok")
+            health = state_dir / "health.json"
+            health.touch()
+            first_mtime = health.stat().st_mtime_ns
+
+            write_health_state(config, "ok")
+
+            self.assertEqual(health.stat().st_mtime_ns, first_mtime)
+            write_health_state(config, "error", "failed")
+            self.assertEqual(json.loads(health.read_text(encoding="utf-8"))["status"], "error")
 
     def test_system_event_is_visible_to_the_native_notification_watcher(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

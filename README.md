@@ -88,11 +88,13 @@ OpenCode calendar-day totals and Codex local-baseline windows may differ. The in
 
 ## Local system module
 
-The system collector consumes a platform-neutral capability contract rather than assuming every host exposes the same counters. The verified macOS backend observes aggregate CPU utilization, native memory-pressure state, compressed memory and swap, disk free space, physical disk bytes and operations, conservative disk-health evidence, and thermal state. Current values refresh with the normal Agent sample but stay in memory inside the active 15-minute bucket. Completed buckets are persisted in one transaction; supported disk-health checks run once at startup and then every six hours.
+The system collector consumes a platform-neutral capability contract rather than assuming every host exposes the same counters. The verified macOS backend observes aggregate CPU utilization, native memory-pressure state, compressed memory and swap, disk free space, physical disk bytes and operations, conservative disk-health evidence, and thermal state. It also provides best-effort disk-I/O attribution by App using cumulative process counters. Helpers inside one `.app` bundle are grouped together; only bounded App labels and read/write counters are projected or stored. File names, paths, process arguments, PIDs, window titles, and user content are never persisted.
+
+Current host and App values refresh with the normal Agent sample but stay in memory inside the active 15-minute bucket. Completed buckets are persisted in one transaction, and older history follows the same hourly and daily compaction as other metrics. Process attribution may miss short-lived processes or inaccessible system services and is not expected to equal physical-device counters exactly. Supported disk-health checks run once at startup and then every six hours.
 
 Initial Linux and Windows backends establish the cross-platform boundary: Linux uses aggregate procfs/sysfs counters; Windows uses stable Win32 CPU, memory, and disk-capacity APIs. A backend explicitly declares its capabilities, and the UI omits unavailable measurements instead of rendering them as zero or healthy. macOS remains the only packaged and release-verified desktop target for now.
 
-Warnings are limited to reliable pressure signals: macOS memory pressure, disk capacity below 10% or 5%, and serious or critical thermal state. High CPU or disk activity is graphed but is not treated as an incident without a sustained-pressure contract. The module is host-wide in this release; per-Agent process attribution is deliberately deferred.
+Warnings are limited to reliable pressure signals: macOS memory pressure, disk capacity below 10% or 5%, and serious or critical thermal state. High CPU or disk activity is graphed but is not treated as an incident without a sustained-pressure contract. App attribution is diagnostic evidence rather than an accounting or per-Agent billing boundary.
 
 ## Upstream service status
 

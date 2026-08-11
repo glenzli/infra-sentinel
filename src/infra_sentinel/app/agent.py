@@ -26,7 +26,11 @@ from infra_sentinel.app.protocol import (
     cleanup_command_results,
     complete_command,
     consume_commands,
-    write_projection,
+)
+from infra_sentinel.app.projection_publisher import (
+    PROJECTION_STREAM_ENV,
+    PROJECTION_STREAM_STDIO,
+    ProjectionPublisher,
 )
 from infra_sentinel.app.configuration import (
     Config,
@@ -459,7 +463,7 @@ def notify_system(event: dict[str, Any]) -> None:
     send_native_notification(title, str(event.get("description") or "请查看系统资源详情"))
 
 
-def write_projection_state(
+def build_projection_state(
     config: Config,
     sample: dict[str, Any],
     warning: dict[str, int],
@@ -471,7 +475,7 @@ def write_projection_state(
     storage: dict[str, Any] | None = None,
     facilities: dict[str, Any] | None = None,
     upstream_status: dict[str, Any] | None = None,
-) -> None:
+) -> dict[str, Any]:
     remote_servers = remote.get("servers", [])
     xray_servers = [server.get("xray_stats", {}) for server in remote_servers]
     active_xray = [server for server in xray_servers if server.get("enabled")]
@@ -540,16 +544,23 @@ def write_projection_state(
         ),
         "last_event": latest_delta_event(config.state_dir / "events.jsonl"),
     }
-    write_projection(config.state_dir, state)
+    return state
 
 
 def write_health_state(config: Config, status: str, message: str | None = None) -> None:
+    target = config.state_dir / "health.json"
+    try:
+        current = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        current = {}
+    if current.get("status") == status and current.get("message") == message:
+        return
     payload = {"schema": 1, "status": status, "updated_at": iso_now()}
     if message:
         payload["message"] = message
     temporary = config.state_dir / ".health.json.tmp"
     temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    temporary.replace(config.state_dir / "health.json")
+    temporary.replace(target)
 
 
 def configure_logger(config: Config) -> logging.Logger:
@@ -682,6 +693,7 @@ def handle_sample(
     system_collector: SystemResourceCollector,
     facility_monitor: FacilityMonitor,
     upstream_monitor: UpstreamStatusMonitor,
+    projection_publisher: ProjectionPublisher,
     logger: logging.Logger,
 ) -> tuple[dict[str, Any], bool]:
     sample = collect_interval(client, tracker, config.monitor.sample_seconds)
@@ -765,7 +777,7 @@ def handle_sample(
         event = build_upstream_event(upstream_transition)
         append_jsonl(config.state_dir / "events.jsonl", event, config.state)
         notify_upstream(event)
-    write_projection_state(
+    projection = build_projection_state(
         config,
         sample,
         warning,
@@ -780,6 +792,7 @@ def handle_sample(
         facility_monitor.snapshot(),
         upstream_snapshot,
     )
+    projection_publisher.publish(projection, epoch=float(sample["epoch"]))
     write_health_state(config, "ok")
     return sample, command_effects.restart_requested
 
@@ -869,6 +882,14 @@ def main() -> int:
         facility_monitor.start()
         upstream_monitor = UpstreamStatusMonitor(logger)
         upstream_monitor.start()
+        projection_publisher = ProjectionPublisher(
+            config.state_dir,
+            stream=(
+                sys.stdout.buffer
+                if os.environ.get(PROJECTION_STREAM_ENV) == PROJECTION_STREAM_STDIO
+                else None
+            ),
+        )
         imported = metric_store.import_legacy_network()
         if imported:
             logger.info("imported legacy network metric points=%s", imported)
@@ -916,11 +937,15 @@ def main() -> int:
                         system_collector,
                         facility_monitor,
                         upstream_monitor,
+                        projection_publisher,
                         logger,
                     )
                     if restart_requested:
                         logger.info("configuration updated; Agent restart requested")
                         return 0
+                except BrokenPipeError:
+                    logger.error("desktop projection stream closed; Agent restart requested")
+                    return 0
                 except Exception as exc:
                     logger.exception("sample failed")
                     write_health_state(config, "error", str(exc))
@@ -934,6 +959,7 @@ def main() -> int:
             session_meter.checkpoint()
             save_tracker(config.state_dir / "mihomo-baseline.json", tracker)
             save_recent_samples(config.state_dir, history)
+            projection_publisher.checkpoint()
             facility_monitor.stop()
             upstream_monitor.stop()
             lock.close()

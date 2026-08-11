@@ -11,15 +11,15 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::State;
 use uuid::Uuid;
 
 use crate::app_paths::state_dir;
+use crate::projection_cache::{ProjectionCache, PROTOCOL_SCHEMA};
 
 // Keep this in lockstep with src/infra_sentinel/app/protocol.py. The desktop bridge owns
 // command/projection validation, so a dated protocol revision must change on
 // both sides before a new Agent can be displayed.
-const PROTOCOL_SCHEMA: &str = "20260811.2";
-
 #[derive(Serialize)]
 pub struct CommandReceipt {
     id: String,
@@ -74,24 +74,9 @@ fn write_command(
     publish_command(&state_dir()?.join("commands"), command_type, payload)
 }
 
-fn decode_projection(document: &str) -> Result<Value, String> {
-    let projection: Value = serde_json::from_str(document)
-        .map_err(|error| format!("Agent Projection is not valid JSON: {error}"))?;
-    if projection.get("schema").and_then(Value::as_str) != Some(PROTOCOL_SCHEMA) {
-        return Err("Agent Projection protocol version is unsupported".to_owned());
-    }
-    Ok(projection)
-}
-
 #[tauri::command]
-pub fn read_projection() -> Result<Option<Value>, String> {
-    let path = state_dir()?.join("projection.json");
-    let document = match fs::read_to_string(&path) {
-        Ok(document) => document,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("cannot read Agent Projection: {error}")),
-    };
-    decode_projection(&document).map(Some)
+pub fn read_projection(cache: State<'_, ProjectionCache>) -> Result<Option<Value>, String> {
+    Ok(cache.snapshot().map(|projection| (*projection).clone()))
 }
 
 #[tauri::command]
@@ -106,7 +91,7 @@ pub fn read_agent_command_result(command_id: String) -> Result<Option<Value>, St
 }
 
 fn decode_and_consume_result(path: &Path, command_id: &str) -> Result<Option<Value>, String> {
-    let document = match fs::read_to_string(&path) {
+    let document = match fs::read_to_string(path) {
         Ok(document) => document,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(format!("cannot read Agent command result: {error}")),
@@ -207,8 +192,8 @@ pub fn open_external_status(url: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_allowed, decode_and_consume_result, decode_projection, publish_command,
-        validated_console_url, validated_external_status_url, PROTOCOL_SCHEMA,
+        command_allowed, decode_and_consume_result, publish_command, validated_console_url,
+        validated_external_status_url, PROTOCOL_SCHEMA,
     };
     use serde_json::{json, Map, Value};
     use std::fs;
@@ -238,14 +223,6 @@ mod tests {
         assert_eq!(value["type"], "metrics.query");
         assert_eq!(value["payload"]["bucket_seconds"], 300);
         fs::remove_dir_all(directory).expect("remove test command directory");
-    }
-
-    #[test]
-    fn bridge_rejects_an_incompatible_projection() {
-        assert!(decode_projection(r#"{"schema":"19990101.1"}"#).is_err());
-        assert!(
-            decode_projection(&format!(r#"{{"schema":"{PROTOCOL_SCHEMA}","infra":{{}}}}"#)).is_ok()
-        );
     }
 
     #[test]

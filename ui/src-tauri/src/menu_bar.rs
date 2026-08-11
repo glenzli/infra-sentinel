@@ -4,9 +4,8 @@
 //! monochrome template image designed for a 16–18 px status area. It reflects
 //! only the public Agent Projection and never performs collection itself.
 
-use crate::app_paths::state_dir;
+use crate::projection_cache::ProjectionCache;
 use serde_json::Value;
-use std::fs;
 use std::thread;
 use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
@@ -43,11 +42,7 @@ impl Indicator {
     }
 }
 
-fn status_from_projection(document: &str) -> Indicator {
-    let projection: Value = match serde_json::from_str(document) {
-        Ok(projection) => projection,
-        Err(_) => return Indicator::Critical,
-    };
+fn status_from_projection(projection: &Value) -> Indicator {
     match projection
         .pointer("/overall/status")
         .and_then(Value::as_str)
@@ -60,16 +55,12 @@ fn status_from_projection(document: &str) -> Indicator {
     }
 }
 
-fn current_indicator() -> Indicator {
-    let projection = match state_dir() {
-        Ok(state) => state.join("projection.json"),
-        Err(_) => return Indicator::Critical,
-    };
-    match fs::read_to_string(projection) {
-        Ok(document) => status_from_projection(&document),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Indicator::Starting,
-        Err(_) => Indicator::Critical,
-    }
+fn current_indicator(cache: &ProjectionCache) -> Indicator {
+    cache
+        .snapshot()
+        .as_deref()
+        .map(status_from_projection)
+        .unwrap_or(Indicator::Starting)
 }
 
 fn show_dashboard(app: &AppHandle) {
@@ -79,13 +70,13 @@ fn show_dashboard(app: &AppHandle) {
     }
 }
 
-fn watch_indicator(tray: tauri::tray::TrayIcon) {
+fn watch_indicator(tray: tauri::tray::TrayIcon, cache: ProjectionCache) {
     thread::Builder::new()
         .name("infra-menu-bar".to_owned())
         .spawn(move || {
             let mut previous = None;
             loop {
-                let current = current_indicator();
+                let current = current_indicator(&cache);
                 if previous != Some(current) {
                     let _ = tray.set_icon_with_as_template(Some(current.icon()), true);
                     let _ = tray.set_tooltip(Some(current.tooltip()));
@@ -97,13 +88,19 @@ fn watch_indicator(tray: tauri::tray::TrayIcon) {
         .expect("cannot start Infra Sentinel menu-bar watcher");
 }
 
-pub fn install(app: &AppHandle) -> Result<(), String> {
-    let open = MenuItem::with_id(app, "open-dashboard", "Open Infra Sentinel", true, None::<&str>)
-        .map_err(|error| error.to_string())?;
+pub fn install(app: &AppHandle, cache: ProjectionCache) -> Result<(), String> {
+    let open = MenuItem::with_id(
+        app,
+        "open-dashboard",
+        "Open Infra Sentinel",
+        true,
+        None::<&str>,
+    )
+    .map_err(|error| error.to_string())?;
     let quit = MenuItem::with_id(app, "quit", "Quit Infra Sentinel", true, None::<&str>)
         .map_err(|error| error.to_string())?;
     let menu = Menu::with_items(app, &[&open, &quit]).map_err(|error| error.to_string())?;
-    let initial = current_indicator();
+    let initial = current_indicator(&cache);
     let tray = TrayIconBuilder::with_id("infra-sentinel")
         .menu(&menu)
         .icon(initial.icon())
@@ -129,28 +126,28 @@ pub fn install(app: &AppHandle) -> Result<(), String> {
         })
         .build(app)
         .map_err(|error| error.to_string())?;
-    watch_indicator(tray);
+    watch_indicator(tray, cache);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{status_from_projection, Indicator};
+    use serde_json::json;
 
     #[test]
     fn projection_status_maps_to_a_small_set_of_menu_bar_states() {
         assert_eq!(
-            status_from_projection(r#"{"overall":{"status":"healthy"}}"#),
+            status_from_projection(&json!({"overall":{"status":"healthy"}})),
             Indicator::Normal
         );
         assert_eq!(
-            status_from_projection(r#"{"overall":{"status":"warning"}}"#),
+            status_from_projection(&json!({"overall":{"status":"warning"}})),
             Indicator::Warning
         );
         assert_eq!(
-            status_from_projection(r#"{"overall":{"status":"critical"}}"#),
+            status_from_projection(&json!({"overall":{"status":"critical"}})),
             Indicator::Critical
         );
-        assert_eq!(status_from_projection("not-json"), Indicator::Critical);
     }
 }

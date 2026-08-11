@@ -1,9 +1,8 @@
 """Versioned local contract between the Infra Agent and any desktop UI.
 
-The protocol is intentionally file-backed for this first transport: it is
-local-only, dependency-free, and works wherever Python can create an atomic
-replacement.  A future loopback IPC transport can expose these same payloads
-without changing collectors, storage, or projections.
+Live projections use the supervised sidecar's stdout pipe and command messages
+remain file-backed.  A low-frequency atomic projection checkpoint supports
+desktop cold start without making the filesystem the realtime transport.
 """
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ import time
 from typing import Any, Iterable
 
 
-PROJECTION_SCHEMA = "20260811.2"
+PROJECTION_SCHEMA = "20260812.1"
 COMMAND_SCHEMA = PROJECTION_SCHEMA
 PROJECTION_FILENAME = "projection.json"
 COMMANDS_DIRECTORY = "commands"
@@ -35,15 +34,27 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
-def write_projection(state_dir: Path, payload: dict[str, Any]) -> Path:
-    """Publish a whole, versioned projection for one local UI refresh."""
+def projection_document(payload: dict[str, Any]) -> dict[str, Any]:
+    """Build the versioned document shared by the live stream and checkpoint."""
     document = dict(payload)
     document["schema"] = PROJECTION_SCHEMA
     document["protocol"] = {
         "schema": PROJECTION_SCHEMA,
-        "transport": "local-file",
+        "transport": "stdio-stream",
+        "checkpoint": "local-file",
         "command_schema": COMMAND_SCHEMA,
+        "command_transport": "local-file",
     }
+    return document
+
+
+def encode_projection(document: dict[str, Any]) -> str:
+    """Encode one complete newline-safe projection frame."""
+    return json.dumps(document, ensure_ascii=False, separators=(",", ":"))
+
+
+def write_projection_checkpoint(state_dir: Path, document: dict[str, Any]) -> Path:
+    """Persist a low-frequency recovery checkpoint for desktop cold start."""
     path = state_dir / PROJECTION_FILENAME
     _atomic_json(path, document)
     return path

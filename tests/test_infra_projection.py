@@ -42,7 +42,7 @@ class InfraProjectionTests(unittest.TestCase):
             "none",
         )
 
-        self.assertEqual(projection["schema"], "20260811.2")
+        self.assertEqual(projection["schema"], "20260812.1")
         self.assertEqual(projection["overall"]["status"], "healthy")
         self.assertEqual(projection["resources"][0]["primary_metric"], "network.local_bytes")
         self.assertEqual(projection["resources"][0]["category"], "usage")

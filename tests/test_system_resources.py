@@ -20,12 +20,18 @@ from infra_sentinel.resources.system.disk_health import (  # noqa: E402
 )
 from infra_sentinel.resources.system.collector import SystemResourceCollector  # noqa: E402
 from infra_sentinel.resources.system.contract import (  # noqa: E402
-    CPU_UTILIZATION, DISK_CAPACITY, DISK_HEALTH, DISK_THROUGHPUT,
+    CPU_UTILIZATION, DISK_CAPACITY, DISK_HEALTH, DISK_PROCESS_ATTRIBUTION,
+    DISK_THROUGHPUT,
     MEMORY_CAPACITY, MEMORY_COMPRESSION, MEMORY_PRESSURE, MEMORY_SWAP,
     THERMAL_PRESSURE, HostReading,
 )
 from infra_sentinel.resources.system.backends.linux import LinuxSystemBackend  # noqa: E402
+from infra_sentinel.resources.system.backends.macos_process_io import app_identity  # noqa: E402
 from infra_sentinel.resources.system.backends import create_system_backend  # noqa: E402
+from infra_sentinel.resources.system.process_io import (  # noqa: E402
+    ProcessIoBatch,
+    ProcessIoCounter,
+)
 
 
 class FakeBackend:
@@ -45,6 +51,35 @@ class FakeBackend:
 class LimitedBackend(FakeBackend):
     platform = "windows"
     capabilities = (CPU_UTILIZATION, MEMORY_CAPACITY, DISK_CAPACITY)
+
+
+class FakeProcessIoBackend:
+    platform = "macos"
+
+    def __init__(self, batches: list[ProcessIoBatch]) -> None:
+        self.batches = iter(batches)
+
+    def read(self) -> ProcessIoBatch:
+        return next(self.batches)
+
+
+def process_batch(
+    codex_read: int,
+    codex_write: int,
+    helper_read: int,
+    helper_write: int,
+    chrome_read: int,
+    chrome_write: int,
+) -> ProcessIoBatch:
+    return ProcessIoBatch(
+        counters=(
+            ProcessIoCounter("10:1", "app:codex", "Codex", codex_read, codex_write),
+            ProcessIoCounter("11:1", "app:codex", "Codex", helper_read, helper_write),
+            ProcessIoCounter("12:1", "app:google-chrome", "Google Chrome", chrome_read, chrome_write),
+        ),
+        observed_processes=3,
+        skipped_processes=1,
+    )
 
 
 class SystemBackendSelectionTests(unittest.TestCase):
@@ -109,6 +144,16 @@ def context(epoch: float) -> CollectorContext:
 
 
 class SystemResourceCollectorTests(unittest.TestCase):
+    def test_macos_helpers_are_grouped_under_the_parent_app(self) -> None:
+        app = app_identity(
+            "/Applications/Codex.app/Contents/Frameworks/Codex Helper.app/Contents/MacOS/Codex Helper",
+            "Codex Helper",
+        )
+        process = app_identity("/usr/local/bin/python3", "Python")
+
+        self.assertEqual(app, ("app:codex", "Codex"))
+        self.assertEqual(process, ("process:python", "Python"))
+
     def test_disk_health_monitor_reads_at_startup_then_only_every_six_hours(self) -> None:
         calls = 0
 
@@ -179,6 +224,49 @@ class SystemResourceCollectorTests(unittest.TestCase):
         self.assertEqual(points["system.cpu.percent"].instrument, "gauge")
         self.assertGreater(points["system.cpu.percent"].value, 0)
         self.assertEqual(points["system.disk.free_bytes"].value, 50)
+
+    def test_process_io_is_live_in_memory_then_persisted_in_the_existing_rollup(self) -> None:
+        collector = SystemResourceCollector(
+            FakeBackend([
+                reading(0, disk_read=1_000, disk_write=2_000),
+                reading(150, disk_read=5_000, disk_write=8_000),
+                reading(300, disk_read=11_000, disk_write=17_000),
+            ]),
+            process_io_backend=FakeProcessIoBackend([
+                process_batch(100, 200, 50, 75, 80, 90),
+                process_batch(1_100, 1_200, 550, 575, 280, 390),
+                process_batch(2_100, 2_700, 1_050, 1_075, 680, 990),
+            ]),
+            persist_interval_seconds=300,
+        )
+
+        first = collector.collect(context(0))
+        live = collector.collect(context(150))
+        rolled = collector.collect(context(300))
+
+        self.assertEqual(first.points, ())
+        self.assertEqual(live.points, ())
+        self.assertIn(DISK_PROCESS_ATTRIBUTION, live.snapshot["capabilities"])
+        attribution = live.snapshot["disk"]["attribution"]
+        self.assertTrue(attribution["ready"])
+        self.assertEqual(attribution["apps"][0]["label"], "Codex")
+        self.assertAlmostEqual(attribution["apps"][0]["read_bytes_per_second"], 10.0)
+        self.assertNotIn("path", str(attribution).casefold())
+        self.assertNotIn("pid", str(attribution).casefold())
+        self.assertEqual(live.snapshot["privacy"], "aggregate-host-and-app-io-counters")
+
+        app_points = {
+            (point.metric, point.dimensions.get("app_id")): point
+            for point in rolled.points
+            if point.metric.startswith("system.disk.app.")
+        }
+        self.assertEqual(app_points[("system.disk.app.read_bytes", "app:codex")].value, 3_000)
+        self.assertEqual(app_points[("system.disk.app.write_bytes", "app:codex")].value, 3_500)
+        self.assertEqual(app_points[("system.disk.app.read_bytes", "app:google-chrome")].value, 600)
+        coverage = next(point for point in rolled.points if point.metric == "system.disk.process_coverage_ratio")
+        self.assertEqual(coverage.attribution_method, "inferred")
+        self.assertEqual(coverage.confidence, "medium")
+        self.assertTrue(coverage.estimated)
 
     def test_unsupported_platform_metrics_are_not_persisted_as_zeroes(self) -> None:
         collector = SystemResourceCollector(LimitedBackend([

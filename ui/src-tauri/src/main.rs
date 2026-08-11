@@ -5,13 +5,21 @@ mod agent_supervisor;
 mod app_paths;
 mod menu_bar;
 mod native_notifications;
+mod projection_cache;
+
+use projection_cache::ProjectionCache;
 
 fn main() {
+    let projection_cache = ProjectionCache::default();
     tauri::Builder::default()
-        .setup(|app| {
-            menu_bar::install(app.handle()).map_err(std::io::Error::other)?;
-            agent_supervisor::start(app.handle().clone()).map_err(std::io::Error::other)?;
-            native_notifications::start(app.handle().clone()).map_err(std::io::Error::other)?;
+        .manage(projection_cache.clone())
+        .setup(move |app| {
+            menu_bar::install(app.handle(), projection_cache.clone())
+                .map_err(std::io::Error::other)?;
+            agent_supervisor::start(app.handle().clone(), projection_cache.clone())
+                .map_err(std::io::Error::other)?;
+            native_notifications::start(app.handle().clone(), projection_cache.clone())
+                .map_err(std::io::Error::other)?;
             Ok(())
         })
         .on_window_event(|window, event| {

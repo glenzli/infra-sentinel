@@ -1,8 +1,9 @@
 """Low-overhead local system resource observation.
 
-The collector owns platform reads, counter deltas, five-minute persistence,
-health evaluation, and transition state.  It intentionally records no file
-names, process arguments, paths, window titles, or user content.
+The collector owns platform reads, counter deltas, five-minute rollups,
+health evaluation, and transition state.  Optional process attribution retains
+only bounded App labels and counters; it never records file names, process
+arguments, paths, window titles, or user content.
 """
 
 from __future__ import annotations
@@ -15,14 +16,18 @@ from infra_sentinel.core.collectors import Collection, CollectorCapability, Coll
 from infra_sentinel.core.model import MetricPoint
 from infra_sentinel.resources.system.disk_health import DiskHealthSnapshot
 from infra_sentinel.resources.system.contract import (
-    CPU_UTILIZATION, DISK_CAPACITY, DISK_THROUGHPUT, MEMORY_CAPACITY,
-    MEMORY_COMPRESSION, MEMORY_PRESSURE, MEMORY_SWAP, THERMAL_PRESSURE,
+    CPU_UTILIZATION, DISK_CAPACITY, DISK_PROCESS_ATTRIBUTION, DISK_THROUGHPUT,
+    MEMORY_CAPACITY, MEMORY_COMPRESSION, MEMORY_PRESSURE, MEMORY_SWAP, THERMAL_PRESSURE,
     HostReading, SystemResourceBackend,
 )
 from infra_sentinel.resources.system.backends import create_system_backend
+from infra_sentinel.resources.system.process_io import (
+    ProcessIoAttributor, ProcessIoBackend, ProcessIoInterval,
+    aggregate_process_io, create_process_io_backend,
+)
 
 
-SYSTEM_RESOURCE_SCHEMA = "20260811.3"
+SYSTEM_RESOURCE_SCHEMA = "20260812.1"
 SOURCE_ID = "local-system"
 RESOURCE_ID = "system"
 DEFAULT_PERSIST_INTERVAL_SECONDS = 300
@@ -41,6 +46,7 @@ class _Interval:
     disk_write_iops: float
     swapin_bytes: int
     swapout_bytes: int
+    process_io: ProcessIoInterval | None
 
 
 def _delta(current: int, previous: int, *, wraps_at: int | None = None) -> int:
@@ -114,6 +120,44 @@ def _point(
     )
 
 
+def _app_point(
+    reading: HostReading,
+    metric: str,
+    value: int,
+    app_id: str,
+    app_label: str,
+) -> MetricPoint:
+    return MetricPoint(
+        observed_at=reading.observed_at,
+        observed_epoch=reading.epoch,
+        metric=metric,
+        instrument="counter",
+        value=value,
+        unit="bytes",
+        source_id=SOURCE_ID,
+        resource_id=RESOURCE_ID,
+        dimensions={"app_id": app_id, "app_label": app_label},
+        attribution_method="mapped",
+        confidence="medium",
+    )
+
+
+def _coverage_point(reading: HostReading, value: float) -> MetricPoint:
+    return MetricPoint(
+        observed_at=reading.observed_at,
+        observed_epoch=reading.epoch,
+        metric="system.disk.process_coverage_ratio",
+        instrument="gauge",
+        value=value,
+        unit="ratio",
+        source_id=SOURCE_ID,
+        resource_id=RESOURCE_ID,
+        attribution_method="inferred",
+        confidence="medium",
+        estimated=True,
+    )
+
+
 class SystemResourceCollector:
     """Own live sampling, bounded persistence, and host-risk transitions."""
 
@@ -128,6 +172,8 @@ class SystemResourceCollector:
             "system.memory.swapin_bytes", "system.memory.swapout_bytes",
             "system.disk.free_bytes", "system.disk.read_bytes", "system.disk.write_bytes",
             "system.disk.read_operations", "system.disk.write_operations", "system.thermal.level",
+            "system.disk.app.read_bytes", "system.disk.app.write_bytes",
+            "system.disk.process_coverage_ratio",
         ),
     )
 
@@ -135,9 +181,18 @@ class SystemResourceCollector:
         self,
         backend: SystemResourceBackend | None = None,
         *,
+        process_io_backend: ProcessIoBackend | None = None,
         persist_interval_seconds: int = DEFAULT_PERSIST_INTERVAL_SECONDS,
     ) -> None:
+        owns_backend = backend is None
         self.backend = backend or create_system_backend()
+        if process_io_backend is None and owns_backend:
+            try:
+                process_io_backend = create_process_io_backend(self.backend.platform)
+            except Exception:
+                process_io_backend = None
+        self._process_io = ProcessIoAttributor(process_io_backend) if process_io_backend else None
+        self._latest_process_io: ProcessIoInterval | None = None
         self.persist_interval_seconds = max(1, int(persist_interval_seconds))
         self._previous: HostReading | None = None
         self._window_started: float | None = None
@@ -154,6 +209,8 @@ class SystemResourceCollector:
     def _interval(self, reading: HostReading) -> _Interval | None:
         previous = self._previous
         if previous is None:
+            if self._process_io is not None:
+                self._latest_process_io = self._process_io.sample(elapsed_seconds=None)
             return None
         seconds = reading.epoch - previous.epoch
         if seconds <= 0:
@@ -161,11 +218,21 @@ class SystemResourceCollector:
         if seconds > max(60, self.persist_interval_seconds):
             self._intervals.clear()
             self._window_started = reading.epoch
+            if self._process_io is not None:
+                self._latest_process_io = self._process_io.sample(elapsed_seconds=None)
             return None
         read_bytes = _delta(reading.disk_read_bytes, previous.disk_read_bytes)
         write_bytes = _delta(reading.disk_write_bytes, previous.disk_write_bytes)
         read_ops = _delta(reading.disk_read_operations, previous.disk_read_operations)
         write_ops = _delta(reading.disk_write_operations, previous.disk_write_operations)
+        process_io = None
+        if self._process_io is not None:
+            process_io = self._process_io.sample(
+                elapsed_seconds=seconds,
+                host_read_bytes=read_bytes,
+                host_write_bytes=write_bytes,
+            )
+            self._latest_process_io = process_io
         return _Interval(
             elapsed_seconds=seconds,
             cpu_percent=_cpu_percent(reading, previous),
@@ -179,6 +246,7 @@ class SystemResourceCollector:
             disk_write_iops=write_ops / seconds,
             swapin_bytes=_delta(reading.swapin_bytes, previous.swapin_bytes),
             swapout_bytes=_delta(reading.swapout_bytes, previous.swapout_bytes),
+            process_io=process_io if process_io is not None and process_io.ready else None,
         )
 
     def _transition(self, reading: HostReading, status: str, reasons: list[str]) -> None:
@@ -221,6 +289,8 @@ class SystemResourceCollector:
         pressure_level = {"normal": 0, "warning": 1, "critical": 2}.get(reading.memory_pressure, 0)
         thermal_level = {"nominal": 0, "fair": 1, "serious": 2, "critical": 3}.get(reading.thermal_state or "")
         capabilities = set(getattr(self.backend, "capabilities", (DISK_THROUGHPUT,)))
+        if self._process_io is not None:
+            capabilities.add(DISK_PROCESS_ATTRIBUTION)
         points: list[MetricPoint] = []
         if CPU_UTILIZATION in capabilities:
             points.append(_point(reading, "system.cpu.percent", "gauge", sum(item.cpu_percent for item in intervals) / len(intervals), "percent"))
@@ -245,6 +315,30 @@ class SystemResourceCollector:
                 _point(reading, "system.disk.read_operations", "counter", sum(item.disk_read_operations for item in intervals), "operations"),
                 _point(reading, "system.disk.write_operations", "counter", sum(item.disk_write_operations for item in intervals), "operations"),
             ])
+        if DISK_PROCESS_ATTRIBUTION in capabilities:
+            process_window = aggregate_process_io(
+                item.process_io for item in intervals if item.process_io is not None
+            )
+            if process_window is not None:
+                for app in process_window.apps:
+                    points.extend([
+                        _app_point(
+                            reading,
+                            "system.disk.app.read_bytes",
+                            app.read_bytes,
+                            app.app_id,
+                            app.app_label,
+                        ),
+                        _app_point(
+                            reading,
+                            "system.disk.app.write_bytes",
+                            app.write_bytes,
+                            app.app_id,
+                            app.app_label,
+                        ),
+                    ])
+                if process_window.coverage_ratio is not None:
+                    points.append(_coverage_point(reading, process_window.coverage_ratio))
         if THERMAL_PRESSURE in capabilities and thermal_level is not None:
             points.append(_point(reading, "system.thermal.level", "gauge", thermal_level, "level"))
         return tuple(points)
@@ -260,8 +354,31 @@ class SystemResourceCollector:
         points = self._points(reading)
         self._previous = reading
         capabilities = tuple(getattr(self.backend, "capabilities", (DISK_THROUGHPUT,)))
+        if self._process_io is not None and DISK_PROCESS_ATTRIBUTION not in capabilities:
+            capabilities += (DISK_PROCESS_ATTRIBUTION,)
         quality = "partial" if DISK_THROUGHPUT in capabilities and not reading.physical_io_available else "ok"
-        current = interval or _Interval(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        current = interval or _Interval(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None)
+        disk_snapshot: dict[str, Any] = {
+            "total_bytes": reading.disk_total_bytes,
+            "free_bytes": reading.disk_free_bytes,
+            "used_percent": max(0.0, min(100.0, (1 - reading.disk_free_bytes / max(1, reading.disk_total_bytes)) * 100)),
+            "read_bytes_per_second": current.disk_read_rate,
+            "write_bytes_per_second": current.disk_write_rate,
+            "read_iops": current.disk_read_iops,
+            "write_iops": current.disk_write_iops,
+            "physical_io_available": reading.physical_io_available,
+            "health": (
+                reading.disk_health.as_dict()
+                if reading.disk_health is not None
+                else DiskHealthSnapshot(
+                    state="unknown",
+                    observed_at=reading.observed_at,
+                    reason_codes=("health_signal_unavailable",),
+                ).as_dict()
+            ),
+        }
+        if self._latest_process_io is not None:
+            disk_snapshot["attribution"] = self._latest_process_io.as_dict()
         snapshot = {
             "schema": SYSTEM_RESOURCE_SCHEMA,
             "available": True,
@@ -283,28 +400,14 @@ class SystemResourceCollector:
                 "swapin_bytes_per_second": current.swapin_bytes / current.elapsed_seconds,
                 "swapout_bytes_per_second": current.swapout_bytes / current.elapsed_seconds,
             },
-            "disk": {
-                "total_bytes": reading.disk_total_bytes,
-                "free_bytes": reading.disk_free_bytes,
-                "used_percent": max(0.0, min(100.0, (1 - reading.disk_free_bytes / max(1, reading.disk_total_bytes)) * 100)),
-                "read_bytes_per_second": current.disk_read_rate,
-                "write_bytes_per_second": current.disk_write_rate,
-                "read_iops": current.disk_read_iops,
-                "write_iops": current.disk_write_iops,
-                "physical_io_available": reading.physical_io_available,
-                "health": (
-                    reading.disk_health.as_dict()
-                    if reading.disk_health is not None
-                    else DiskHealthSnapshot(
-                        state="unknown",
-                        observed_at=reading.observed_at,
-                        reason_codes=("health_signal_unavailable",),
-                    ).as_dict()
-                ),
-            },
+            "disk": disk_snapshot,
             "thermal": {"state": reading.thermal_state or "unavailable"},
             "persistence": {"interval_seconds": self.persist_interval_seconds},
-            "privacy": "aggregate-host-counters-only",
+            "privacy": (
+                "aggregate-host-and-app-io-counters"
+                if self._process_io is not None
+                else "aggregate-host-counters-only"
+            ),
         }
         return Collection(points=points, status="ok" if quality == "ok" else "degraded", snapshot=snapshot)
 

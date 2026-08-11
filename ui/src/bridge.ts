@@ -154,6 +154,25 @@ export interface SystemResourceProjection {
     read_iops: number;
     write_iops: number;
     physical_io_available: boolean;
+    attribution?: {
+      available: boolean;
+      ready: boolean;
+      coverage_ratio: number | null;
+      attributed_read_bytes_per_second: number;
+      attributed_write_bytes_per_second: number;
+      unattributed_read_bytes_per_second: number;
+      unattributed_write_bytes_per_second: number;
+      observed_processes: number;
+      skipped_processes: number;
+      error_kind?: string;
+      apps: Array<{
+        id: string;
+        label: string;
+        read_bytes_per_second: number;
+        write_bytes_per_second: number;
+        process_count: number;
+      }>;
+    };
     health?: {
       state: string;
       observed_at: string;

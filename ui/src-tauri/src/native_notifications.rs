@@ -5,9 +5,8 @@
 //! Sentinel process itself, so a notification click belongs to this app rather
 //! than to an `osascript` helper.
 
-use crate::app_paths::state_dir;
+use crate::projection_cache::ProjectionCache;
 use serde_json::Value;
-use std::fs;
 use std::thread;
 use std::time::Duration;
 use tauri::AppHandle;
@@ -48,7 +47,10 @@ fn notification_event(projection: &Value) -> Option<NotificationEvent> {
         .and_then(Value::as_str)
         .unwrap_or("Infra Sentinel");
     let event_type = event.get("type").and_then(Value::as_str).unwrap_or("alert");
-    let level = event.get("level").and_then(Value::as_str).unwrap_or("warning");
+    let level = event
+        .get("level")
+        .and_then(Value::as_str)
+        .unwrap_or("warning");
     let scope = event.get("scope").and_then(Value::as_str);
     let title = match (scope, event_type, level) {
         (Some("system_resources"), "recovered", _) => "本机系统已恢复".to_owned(),
@@ -80,7 +82,11 @@ fn notification_event(projection: &Value) -> Option<NotificationEvent> {
         "流量已回落至阈值以下".to_owned()
     } else {
         let windows = event.get("windows").and_then(Value::as_object);
-        let key = if level == "critical" { "critical" } else { "warning" };
+        let key = if level == "critical" {
+            "critical"
+        } else {
+            "warning"
+        };
         let totals = windows
             .and_then(|windows| windows.get(key))
             .and_then(Value::as_object)
@@ -94,11 +100,8 @@ fn notification_event(projection: &Value) -> Option<NotificationEvent> {
     Some(NotificationEvent { id, title, body })
 }
 
-fn read_event() -> Option<NotificationEvent> {
-    let path = state_dir().ok()?.join("projection.json");
-    let document = fs::read_to_string(path).ok()?;
-    let projection: Value = serde_json::from_str(&document).ok()?;
-    notification_event(&projection)
+fn read_event(cache: &ProjectionCache) -> Option<NotificationEvent> {
+    cache.snapshot().as_deref().and_then(notification_event)
 }
 
 #[cfg(target_os = "macos")]
@@ -115,13 +118,13 @@ fn show_native(event: &NotificationEvent) {
 #[cfg(not(target_os = "macos"))]
 fn show_native(_: &NotificationEvent) {}
 
-pub fn start(app: AppHandle) -> Result<(), String> {
+pub fn start(app: AppHandle, cache: ProjectionCache) -> Result<(), String> {
     thread::Builder::new()
         .name("infra-native-notifications".to_owned())
         .spawn(move || {
-            let mut latest_id = read_event().map(|event| event.id);
+            let mut latest_id = read_event(&cache).map(|event| event.id);
             loop {
-                if let Some(event) = read_event() {
+                if let Some(event) = read_event(&cache) {
                     if latest_id.as_deref() != Some(event.id.as_str()) {
                         latest_id = Some(event.id.clone());
                         let _ = app.run_on_main_thread(move || show_native(&event));

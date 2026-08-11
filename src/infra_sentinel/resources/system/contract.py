@@ -15,6 +15,7 @@ MEMORY_COMPRESSION = "memory.compression"
 MEMORY_SWAP = "memory.swap"
 DISK_CAPACITY = "disk.capacity"
 DISK_THROUGHPUT = "disk.throughput"
+DISK_PROCESS_ATTRIBUTION = "disk.process-attribution"
 DISK_HEALTH = "disk.health"
 THERMAL_PRESSURE = "thermal.pressure"
 
