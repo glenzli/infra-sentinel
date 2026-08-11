@@ -73,7 +73,10 @@ function renderCurrentSummary(providerSources: Record<string, unknown>[], source
     const window = windowOf(source, "today");
     const started = shortStartedAt(window.started_at);
     const method = String(window.method ?? "");
-    const detail = started ? tr(`since ${started}`, `${started} 起`) : method === "provider-day" ? tr("provider day", "供应商自然日") : localized(window.detail);
+    const sourceDetail = localized(window.detail);
+    const detail = started
+      ? [tr(`since ${started}`, `${started} 起`), sourceDetail].filter(Boolean).join(" · ")
+      : method === "provider-day" ? tr("provider day", "供应商自然日") : sourceDetail;
     return `<span><i class="source-state source-state--${escapeHtml(String(source.status ?? "ok"))}"></i><strong>${escapeHtml(source.label ?? source.source_id)}</strong><small>${escapeHtml(detail)}</small></span>`;
   }).join("");
   return `<section class="ai-usage-summary"><article><p>${tr("Observed today", "今日已观测")}</p><strong>${formatTokens(today)}</strong><small>${tr("Available source windows combined", "合并当前可用来源窗口")}</small></article><article><p>${tr("Local history total", "本机历史总量")}</p><strong>${formatTokens(cumulative)}</strong><small>${tr("All readable local records · not billing", "全部可读本地记录 · 非账单")}</small></article><article><p>${tr("Collector coverage", "采集覆盖")}</p><strong>${online} / ${sources.length}</strong><small>${tr("sources online", "个来源在线")}</small></article><div class="ai-window-coverage"><b>${tr("Window coverage", "统计窗口")}</b>${coverage}</div></section>`;
@@ -172,7 +175,8 @@ function providerDetails(source: Record<string, unknown>): string {
   const cumulative = windowOf(source, "cumulative");
   const groups = asArray(source.details);
   const started = shortStartedAt(today.started_at);
-  return `<details class="ai-provider-panel"><summary><span><strong>${escapeHtml(source.label ?? source.source_id)}</strong><small>${escapeHtml(String(source.collection_method ?? ""))}</small></span><span><small>${tr("Today", "今日")}</small><strong>${today.available ? formatTokens(today.tokens) : "—"}</strong></span><span><small>${tr("Cumulative", "累计")}</small><strong>${cumulative.available ? formatTokens(cumulative.tokens) : "—"}</strong></span><em>${started ? tr(`since ${started}`, `${started} 起`) : localized(today.detail)}</em></summary><div class="ai-provider-body">${groups.map((group) => `<section><div class="detail-panel__heading"><h3>${escapeHtml(localized(group.title))}</h3><span>${escapeHtml(localized(group.badge))}</span></div><dl>${asArray(group.metrics).map((metric) => `<div><dt>${escapeHtml(localized(metric.label))}<small>${escapeHtml(localized(metric.detail))}</small></dt><dd>${formatMetric(metric.value, metric.unit)}</dd></div>`).join("")}</dl>${group.note ? `<p>${escapeHtml(localized(group.note))}</p>` : ""}</section>`).join("")}</div></details>`;
+  const todaySource = [started ? tr(`since ${started}`, `${started} 起`) : "", localized(today.detail)].filter(Boolean).join(" · ");
+  return `<details class="ai-provider-panel"><summary><span><strong>${escapeHtml(source.label ?? source.source_id)}</strong><small>${escapeHtml(String(source.collection_method ?? ""))}</small></span><span><small>${tr("Today", "今日")}</small><strong>${today.available ? formatTokens(today.tokens) : "—"}</strong></span><span><small>${tr("Cumulative", "累计")}</small><strong>${cumulative.available ? formatTokens(cumulative.tokens) : "—"}</strong></span><em>${escapeHtml(todaySource)}</em></summary><div class="ai-provider-body">${groups.map((group) => `<section><div class="detail-panel__heading"><h3>${escapeHtml(localized(group.title))}</h3><span>${escapeHtml(localized(group.badge))}</span></div><dl>${asArray(group.metrics).map((metric) => `<div><dt>${escapeHtml(localized(metric.label))}<small>${escapeHtml(localized(metric.detail))}</small></dt><dd>${formatMetric(metric.value, metric.unit)}</dd></div>`).join("")}</dl>${group.note ? `<p>${escapeHtml(localized(group.note))}</p>` : ""}</section>`).join("")}</div></details>`;
 }
 
 function renderActivity(providerSources: Record<string, unknown>[]): string {

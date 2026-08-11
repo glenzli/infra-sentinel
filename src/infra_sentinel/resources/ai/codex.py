@@ -6,7 +6,8 @@ they must not be added to the user-facing token counter.  This collector uses
 only ``thread_source = 'user'`` for user token and model totals, while keeping
 all-thread topology as a separate workload signal.  It never selects titles,
 prompts, previews, working directories, Git metadata, agent names, or agent
-paths.
+paths.  Its daily window starts from a Sentinel baseline on the local calendar
+day, which may not share the reporting boundary used by Codex's own panel.
 """
 
 from __future__ import annotations
@@ -232,6 +233,14 @@ class CodexUsageCollector:
 
     def _snapshot_for(self, stats: CodexStats, timestamp: str, epoch: float) -> dict[str, Any]:
         today_tokens, started_at, model_today = self._daily_window(stats, epoch, timestamp)
+        today_detail = localized(
+            "local calendar-day baseline; may differ from the Codex Usage panel reporting day",
+            "本机自然日基线；可能与 Codex 用量面板的统计日界线不同",
+        )
+        cumulative_detail = localized(
+            "sum of readable local root-thread counters; approximate and not billing",
+            "可读本地主任务计数器之和；近似值，非账单口径",
+        )
         return ai_usage_snapshot(
             source_id="codex",
             label="Codex",
@@ -241,22 +250,22 @@ class CodexUsageCollector:
             today=usage_window(
                 today_tokens,
                 method="sentinel-day-baseline",
-                detail=localized("observed since today's local baseline", "自当天本机基线以来已观测"),
+                detail=today_detail,
                 started_at=started_at,
             ),
             cumulative=usage_window(
                 stats.total_tokens,
                 method="local-root-thread",
-                detail=localized("account-activity aligned local approximation", "与账户活动对齐的本机近似"),
+                detail=cumulative_detail,
             ),
             models=[model_usage(
                 str(model["id"]),
                 today_tokens=model_today.get(str(model["id"]), 0),
                 cumulative_tokens=int(model["total_tokens"]),
                 today_method="sentinel-day-baseline",
-                today_detail=localized("observed since today's local baseline", "自当天本机基线以来已观测"),
+                today_detail=today_detail,
                 cumulative_method="local-root-thread",
-                cumulative_detail=localized("account-activity aligned local approximation", "与账户活动对齐的本机近似"),
+                cumulative_detail=cumulative_detail,
             ) for model in stats.models],
             details=[detail_group("task-topology", localized("Task topology", "任务拓扑"), [
                 token_metric("root-threads", localized("Root threads", "主任务"), stats.user_threads, localized("source classified as user", "来源标为 user"), unit="count"),

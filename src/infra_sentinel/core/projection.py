@@ -26,14 +26,14 @@ def _collector_status(source_id: str, configured_status: str, runs: Iterable[Col
     return configured_status
 
 
-def _status_for(level: str, remote: dict[str, Any], runs: Iterable[CollectorRun]) -> str:
+def _network_status(level: str, remote: dict[str, Any], sources: Iterable[SourceStatus]) -> str:
     if level == "critical":
         return "critical"
     if level == "warning":
         return "warning"
-    if any(run.status == "error" for run in runs):
-        return "degraded"
     if remote.get("enabled") and remote.get("status") == "error":
+        return "degraded"
+    if any(source.enabled and source.status != "ok" for source in sources):
         return "degraded"
     return "healthy"
 
@@ -301,7 +301,7 @@ def build_infra_projection(
     resources = [{
         "id": "network",
         "category": "usage",
-        "status": _status_for(alert_level, remote, collector_runs),
+        "status": _network_status(alert_level, remote, network_sources),
         "enabled": True,
         "primary_metric": "network.billable_bytes" if billing_available else "network.local_bytes",
         "primary_value": primary_total,
@@ -346,7 +346,7 @@ def build_infra_projection(
             attribution_method="exact",
             confidence="high",
         ).as_dict())
-    base_status = _overall_with_upstream(_status_for(alert_level, remote, collector_runs), upstream_state)
+    base_status = _overall_with_upstream(_network_status(alert_level, remote, network_sources), upstream_state)
     if system_resource:
         base_status = _highest_status(base_status, str(system_resource["status"]))
     system_alerts = 1 if system_resource and system_resource["status"] in {"warning", "critical"} else 0

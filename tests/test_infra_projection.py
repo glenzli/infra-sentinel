@@ -83,6 +83,29 @@ class InfraProjectionTests(unittest.TestCase):
         )
         self.assertEqual(projection["overall"]["status"], "degraded")
 
+    def test_nested_remote_source_error_degrades_network_and_overall_health(self) -> None:
+        projection = build_infra_projection(
+            sample(),
+            {"kernel": {"total_bytes": 100}, "vps": {"total_bytes": 300}},
+            {
+                "enabled": True,
+                "status": "ok",
+                "servers": [{
+                    "id": "primary",
+                    "label": "Primary VPS",
+                    "vps": {"enabled": True, "status": "ok", "updated_at": "now"},
+                    "xray_stats": {"enabled": True, "status": "error", "updated_at": "now"},
+                }],
+            },
+            "none",
+        )
+
+        network = next(resource for resource in projection["resources"] if resource["id"] == "network")
+        self.assertEqual(network["status"], "degraded")
+        self.assertEqual(network["online_source_count"], 2)
+        self.assertEqual(projection["overall"]["status"], "degraded")
+        self.assertEqual(projection["overall"]["active_alerts"], 0)
+
     def test_metric_adapter_failure_is_exposed_as_source_health(self) -> None:
         run = CollectorRun(
             capability=CollectorCapability(

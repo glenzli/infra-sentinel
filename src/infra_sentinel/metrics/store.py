@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -18,9 +18,11 @@ from infra_sentinel.metrics.aggregation import MetricAccumulator, MetricBucket, 
 from infra_sentinel.resources.network.metrics import local_sample_metrics, vps_sample_metrics, xray_sample_metrics
 
 
-STORE_SCHEMA = "20260812.1"
+STORE_SCHEMA = "20260812.3"
 STORE_FILENAME = "infra.sqlite3"
 LEGACY_NETWORK_IMPORT = "legacy-network-jsonl-20260808.2"
+TIERED_METRIC_MIGRATION = "20260812.1"
+REMOTE_HISTORY_REBUILD = "remote-network-history-rebuild-20260812.3"
 MAINTENANCE_EPOCH = "metric-maintenance-20260812.1"
 HOT_RESOLUTION_SECONDS = 15 * 60
 HOURLY_RESOLUTION_SECONDS = 60 * 60
@@ -39,6 +41,7 @@ class MetricStore:
         self._initialized = False
         self._point_count = 0
         self._legacy_imported = False
+        self._remote_history_rebuilt = False
         self._lock = threading.RLock()
 
     def _connect(self, *, write: bool = False) -> sqlite3.Connection:
@@ -126,6 +129,9 @@ class MetricStore:
                 self._point_count = int(connection.execute("SELECT COUNT(*) FROM metric_points").fetchone()[0])
                 self._legacy_imported = connection.execute(
                     "SELECT 1 FROM store_metadata WHERE key = ?", (LEGACY_NETWORK_IMPORT,)
+                ).fetchone() is not None
+                self._remote_history_rebuilt = connection.execute(
+                    "SELECT 1 FROM store_metadata WHERE key = ?", (REMOTE_HISTORY_REBUILD,)
                 ).fetchone() is not None
             self._initialized = True
 
@@ -269,15 +275,15 @@ class MetricStore:
         self.initialize()
         return self._legacy_imported
 
-    def import_legacy_network(self) -> int:
-        """Import prior diagnostics once; retry safely if interrupted before commit."""
-        if self._legacy_import_complete():
-            return 0
+    def _remote_network_points(self) -> list[MetricPoint]:
+        """Read exact remote interval logs, including the pre-fleet legacy path."""
         points: list[MetricPoint] = []
-        for path in sorted(self.state_dir.glob("samples*.jsonl")):
+        for path in sorted(self.state_dir.glob("vps_samples*.jsonl")):
             for sample in self._iter_jsonl(path):
-                if "kernel" in sample and "timestamp" in sample and "epoch" in sample:
-                    points.extend(local_sample_metrics(sample))
+                points.extend(vps_sample_metrics("legacy", sample))
+        for path in sorted(self.state_dir.glob("xray_user_samples*.jsonl")):
+            for sample in self._iter_jsonl(path):
+                points.extend(xray_sample_metrics("legacy", sample))
         remote_root = self.state_dir / "remote"
         for remote_dir in remote_root.iterdir() if remote_root.is_dir() else ():
             if not remote_dir.is_dir():
@@ -288,6 +294,18 @@ class MetricStore:
             for path in sorted(remote_dir.glob("xray_user_samples*.jsonl")):
                 for sample in self._iter_jsonl(path):
                     points.extend(xray_sample_metrics(remote_dir.name, sample))
+        return points
+
+    def import_legacy_network(self) -> int:
+        """Import prior diagnostics once; retry safely if interrupted before commit."""
+        if self._legacy_import_complete():
+            return 0
+        points: list[MetricPoint] = []
+        for path in sorted(self.state_dir.glob("samples*.jsonl")):
+            for sample in self._iter_jsonl(path):
+                if "kernel" in sample and "timestamp" in sample and "epoch" in sample:
+                    points.extend(local_sample_metrics(sample))
+        points.extend(self._remote_network_points())
         self.initialize()
         with self._lock, self._transaction(write=True) as connection:
             before = connection.total_changes
@@ -302,6 +320,93 @@ class MetricStore:
             self._legacy_imported = True
             return inserted
 
+    @staticmethod
+    def _migration_epoch(value: Any) -> float:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+
+    def rebuild_remote_history(self) -> dict[str, Any]:
+        """Replace only the tiered-pipeline window with exact remote JSONL facts.
+
+        The 20260812.1 pipeline could merge the same retained five-minute sample
+        on every local poll.  The migration timestamp bounds that exposure; all
+        older tiers remain untouched.  Replacement is one transaction and only
+        proceeds when every affected source has a corresponding raw log.
+        """
+        self.initialize()
+        if self._remote_history_rebuilt:
+            return {"status": "current"}
+        with self._lock, self._transaction() as connection:
+            migration = connection.execute(
+                "SELECT applied_at FROM schema_migrations WHERE version = ?",
+                (TIERED_METRIC_MIGRATION,),
+            ).fetchone()
+        if migration is None:
+            report: dict[str, Any] = {"status": "not-required", "schema": STORE_SCHEMA}
+            with self._lock, self._transaction(write=True) as connection:
+                connection.execute(
+                    "INSERT OR REPLACE INTO store_metadata(key, value) VALUES (?, ?)",
+                    (REMOTE_HISTORY_REBUILD, json.dumps(report, separators=(",", ":"))),
+                )
+            self._remote_history_rebuilt = True
+            return report
+
+        cutoff = bucket_start(self._migration_epoch(migration[0]), HOT_RESOLUTION_SECONDS)
+        raw_points = tuple(point for point in self._remote_network_points() if self._epoch(point) >= cutoff)
+        raw_groups = {(point.metric, point.source_id) for point in raw_points}
+        with self._lock, self._transaction() as connection:
+            affected_groups = {
+                (str(row[0]), str(row[1]))
+                for row in connection.execute("""
+                    SELECT DISTINCT metric, source_id
+                    FROM metric_points
+                    WHERE observed_epoch >= ? AND (
+                        (metric = 'network.billable_bytes' AND source_id LIKE 'vps:%') OR
+                        (metric = 'network.logical_bytes' AND source_id LIKE 'xray:%')
+                    )
+                """, (cutoff,))
+            }
+        missing_groups = sorted(affected_groups - raw_groups)
+        if missing_groups:
+            return {
+                "status": "blocked",
+                "reason": "raw-remote-history-missing",
+                "cutoff_epoch": cutoff,
+                "missing": [{"metric": metric, "source_id": source_id} for metric, source_id in missing_groups],
+            }
+
+        with self._lock, self._transaction(write=True) as connection:
+            deleted = connection.execute("""
+                DELETE FROM metric_points
+                WHERE observed_epoch >= ? AND (
+                    (metric = 'network.billable_bytes' AND source_id LIKE 'vps:%') OR
+                    (metric = 'network.logical_bytes' AND source_id LIKE 'xray:%')
+                )
+            """, (cutoff,)).rowcount
+            before_insert = connection.total_changes
+            connection.executemany(f"""
+                INSERT OR IGNORE INTO metric_points({self._insert_columns()})
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, [self._row(point) for point in raw_points])
+            inserted = connection.total_changes - before_insert
+            report = {
+                "status": "rebuilt",
+                "schema": STORE_SCHEMA,
+                "cutoff_epoch": cutoff,
+                "deleted": max(0, int(deleted)),
+                "inserted": inserted,
+                "source_groups": len(raw_groups),
+            }
+            connection.execute(
+                "INSERT OR REPLACE INTO store_metadata(key, value) VALUES (?, ?)",
+                (REMOTE_HISTORY_REBUILD, json.dumps(report, separators=(",", ":"))),
+            )
+            self._point_count = int(connection.execute("SELECT COUNT(*) FROM metric_points").fetchone()[0])
+        self._remote_history_rebuilt = True
+        return report
+
     def summary(self) -> dict[str, Any]:
         self.initialize()
         return {
@@ -310,6 +415,7 @@ class MetricStore:
             "status": "ok",
             "metric_points": self._point_count,
             "legacy_import_complete": self._legacy_imported,
+            "remote_history_rebuild_complete": self._remote_history_rebuilt,
         }
 
     @staticmethod

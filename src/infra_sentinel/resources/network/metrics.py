@@ -7,9 +7,17 @@ not become stored metric dimensions.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+import json
 from typing import Any, Iterable
 
-from infra_sentinel.core.collectors import CallableCollector, CollectorCapability, CollectorContext, CollectorRegistry
+from infra_sentinel.core.collectors import (
+    CallableCollector,
+    Collection,
+    CollectorCapability,
+    CollectorContext,
+    CollectorRegistry,
+)
 from infra_sentinel.core.model import MetricPoint
 
 
@@ -115,11 +123,11 @@ def remote_state_metrics(remote: dict[str, Any]) -> list[MetricPoint]:
         server_id = str(server.get("id") or "remote")
         vps = server.get("vps") if isinstance(server.get("vps"), dict) else {}
         vps_sample = vps.get("last_sample") if isinstance(vps.get("last_sample"), dict) else None
-        if vps_sample:
+        if vps_sample and vps.get("status") != "error":
             points.extend(vps_sample_metrics(server_id, vps_sample, str(server.get("billing_mode") or "both")))
         xray = server.get("xray_stats") if isinstance(server.get("xray_stats"), dict) else {}
         xray_sample = xray.get("last_sample") if isinstance(xray.get("last_sample"), dict) else None
-        if xray_sample:
+        if xray_sample and xray.get("status") != "error":
             points.extend(xray_sample_metrics(server_id, xray_sample))
     return points
 
@@ -131,8 +139,69 @@ def _server(remote: dict[str, Any], server_id: str) -> dict[str, Any] | None:
     return None
 
 
-def _vps_collector(server_id: str, billing_mode: str) -> CallableCollector:
-    return CallableCollector(
+def _sample_identity(sample: dict[str, Any]) -> str:
+    """Identify one immutable remote interval without retaining traffic values."""
+    return json.dumps({
+        "schema": sample.get("schema"),
+        "timestamp": sample.get("timestamp"),
+        "epoch": sample.get("epoch"),
+        "interval_started_epoch": sample.get("interval_started_epoch"),
+    }, sort_keys=True, separators=(",", ":"))
+
+
+class _LatestRemoteSampleCollector:
+    """Emit each remote interval once and keep source health independent."""
+
+    def __init__(
+        self,
+        capability: CollectorCapability,
+        server_id: str,
+        state_key: str,
+        adapter: Callable[[dict[str, Any]], Iterable[MetricPoint]],
+    ) -> None:
+        self.capability = capability
+        self.server_id = server_id
+        self.state_key = state_key
+        self.adapter = adapter
+        self._last_sample_identity: str | None = None
+        self._baseline_epoch: float | None = None
+
+    def collect(self, context: CollectorContext) -> Collection:
+        if self._baseline_epoch is None:
+            try:
+                self._baseline_epoch = float(context.local_sample.get("epoch") or 0)
+            except (TypeError, ValueError):
+                self._baseline_epoch = 0
+        server = _server(context.remote_state, self.server_id)
+        state = server.get(self.state_key) if isinstance(server, dict) else None
+        if not isinstance(state, dict):
+            return Collection(status="waiting")
+        sample = state.get("last_sample") if isinstance(state.get("last_sample"), dict) else None
+        identity = _sample_identity(sample) if isinstance(sample, dict) else None
+        status = str(state.get("status") or ("ok" if sample is not None else "waiting"))
+        if status not in {"ok", "degraded"}:
+            # Consume a retained sample while unavailable so recovery cannot
+            # replay evidence from before the failure as a fresh interval.
+            if identity is not None:
+                self._last_sample_identity = identity
+            return Collection(status=status)
+        if sample is None or identity == self._last_sample_identity:
+            return Collection(status=status)
+        self._last_sample_identity = identity
+        try:
+            sample_epoch = float(sample.get("epoch") or 0)
+        except (TypeError, ValueError):
+            sample_epoch = 0
+        if sample_epoch <= self._baseline_epoch:
+            # A sample retained from before this Agent started is already in
+            # the raw log/history. Establish a restart baseline without
+            # replaying it; later identities are emitted normally.
+            return Collection(status=status)
+        return Collection(points=tuple(self.adapter(sample)), status=status)
+
+
+def _vps_collector(server_id: str, billing_mode: str) -> _LatestRemoteSampleCollector:
+    return _LatestRemoteSampleCollector(
         capability=CollectorCapability(
             id=f"network.vps:{server_id}",
             source_id=f"vps:{server_id}",
@@ -140,12 +209,14 @@ def _vps_collector(server_id: str, billing_mode: str) -> CallableCollector:
             resource_id="network",
             metrics=("network.billable_bytes",),
         ),
-        collect=lambda context: _vps_metrics_for_server(context, server_id, billing_mode),
+        server_id=server_id,
+        state_key="vps",
+        adapter=lambda sample: vps_sample_metrics(server_id, sample, billing_mode),
     )
 
 
-def _xray_collector(server_id: str) -> CallableCollector:
-    return CallableCollector(
+def _xray_collector(server_id: str) -> _LatestRemoteSampleCollector:
+    return _LatestRemoteSampleCollector(
         capability=CollectorCapability(
             id=f"network.xray:{server_id}",
             source_id=f"xray:{server_id}",
@@ -153,22 +224,10 @@ def _xray_collector(server_id: str) -> CallableCollector:
             resource_id="network",
             metrics=("network.logical_bytes",),
         ),
-        collect=lambda context: _xray_metrics_for_server(context, server_id),
+        server_id=server_id,
+        state_key="xray_stats",
+        adapter=lambda sample: xray_sample_metrics(server_id, sample),
     )
-
-
-def _vps_metrics_for_server(context: CollectorContext, server_id: str, billing_mode: str) -> Iterable[MetricPoint]:
-    server = _server(context.remote_state, server_id)
-    vps = server.get("vps") if isinstance(server, dict) else None
-    sample = vps.get("last_sample") if isinstance(vps, dict) else None
-    return vps_sample_metrics(server_id, sample, billing_mode) if isinstance(sample, dict) else ()
-
-
-def _xray_metrics_for_server(context: CollectorContext, server_id: str) -> Iterable[MetricPoint]:
-    server = _server(context.remote_state, server_id)
-    xray = server.get("xray_stats") if isinstance(server, dict) else None
-    sample = xray.get("last_sample") if isinstance(xray, dict) else None
-    return xray_sample_metrics(server_id, sample) if isinstance(sample, dict) else ()
 
 
 def network_collector_registry(servers: Iterable[tuple[str, str]]) -> CollectorRegistry:

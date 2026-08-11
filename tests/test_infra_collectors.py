@@ -94,6 +94,84 @@ class CollectorRegistryTests(unittest.TestCase):
         self.assertEqual([point.value for point in points if point.metric == "network.billable_bytes"], [120])
         self.assertEqual([point.dimensions["direction"] for point in points if point.metric == "network.billable_bytes"], ["out"])
 
+    def test_remote_collectors_emit_one_fact_set_per_sample_identity(self) -> None:
+        remote = {"servers": [{
+            "id": "primary",
+            "vps": {"status": "ok", "last_sample": {
+                "timestamp": "2026-08-12T03:00:00+08:00", "epoch": 10.0,
+                "interval_started_epoch": 5.0, "in_bytes": 100, "out_bytes": 120,
+            }},
+            "xray_stats": {"status": "ok", "last_sample": {
+                "timestamp": "2026-08-12T03:00:00+08:00", "epoch": 10.0,
+                "interval_started_epoch": 5.0,
+                "users": {"mac": {"up_bytes": 25, "down_bytes": 75}},
+            }},
+        }]}
+        registry = network_collector_registry((("primary", "both"),))
+
+        first = registry.collect(CollectorContext({}, remote))
+        repeated = registry.collect(CollectorContext({}, remote))
+        remote["servers"][0]["vps"]["last_sample"] = {  # type: ignore[index]
+            "timestamp": "2026-08-12T03:05:00+08:00", "epoch": 15.0,
+            "interval_started_epoch": 10.0, "in_bytes": 7, "out_bytes": 9,
+        }
+        advanced = registry.collect(CollectorContext({}, remote))
+
+        remote_points = lambda runs: sum(
+            len(run.points) for run in runs if run.capability.source_id != "local-mihomo"
+        )
+        self.assertEqual(remote_points(first), 4)
+        self.assertEqual(remote_points(repeated), 0)
+        self.assertEqual(remote_points(advanced), 2)
+
+    def test_failed_remote_source_reports_error_without_replaying_last_sample(self) -> None:
+        remote = {"servers": [{
+            "id": "primary",
+            "vps": {"status": "ok", "last_sample": {
+                "timestamp": "2026-08-12T03:00:00+08:00", "epoch": 10.0,
+                "interval_started_epoch": 5.0, "in_bytes": 100, "out_bytes": 120,
+            }},
+            "xray_stats": {"status": "error", "last_sample": {
+                "timestamp": "2026-08-12T02:55:00+08:00", "epoch": 5.0,
+                "interval_started_epoch": 0.0,
+                "users": {"mac": {"up_bytes": 25, "down_bytes": 75}},
+            }},
+        }]}
+        registry = network_collector_registry((("primary", "both"),))
+
+        failed = registry.collect(CollectorContext({}, remote))
+        remote["servers"][0]["xray_stats"]["status"] = "ok"  # type: ignore[index]
+        recovered_without_new_sample = registry.collect(CollectorContext({}, remote))
+
+        xray_failed = next(run for run in failed if run.capability.source_id == "xray:primary")
+        xray_recovered = next(run for run in recovered_without_new_sample if run.capability.source_id == "xray:primary")
+        self.assertEqual(xray_failed.status, "error")
+        self.assertEqual(xray_failed.points, ())
+        self.assertEqual(xray_recovered.status, "ok")
+        self.assertEqual(xray_recovered.points, ())
+
+    def test_remote_collector_baselines_a_sample_retained_across_agent_restart(self) -> None:
+        remote = {"servers": [{
+            "id": "primary",
+            "vps": {"status": "ok", "last_sample": {
+                "timestamp": "2026-08-12T03:00:00+08:00", "epoch": 10.0,
+                "interval_started_epoch": 5.0, "in_bytes": 100, "out_bytes": 120,
+            }},
+        }]}
+        registry = network_collector_registry((("primary", "both"),))
+
+        retained = registry.collect(CollectorContext({"epoch": 20.0}, remote))
+        remote["servers"][0]["vps"]["last_sample"] = {  # type: ignore[index]
+            "timestamp": "2026-08-12T03:05:00+08:00", "epoch": 25.0,
+            "interval_started_epoch": 20.0, "in_bytes": 7, "out_bytes": 9,
+        }
+        fresh = registry.collect(CollectorContext({"epoch": 25.0}, remote))
+
+        vps_retained = next(run for run in retained if run.capability.source_id == "vps:primary")
+        vps_fresh = next(run for run in fresh if run.capability.source_id == "vps:primary")
+        self.assertEqual(vps_retained.points, ())
+        self.assertEqual([point.value for point in vps_fresh.points], [7, 9])
+
 
 if __name__ == "__main__":
     unittest.main()

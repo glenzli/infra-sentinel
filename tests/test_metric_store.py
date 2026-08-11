@@ -19,7 +19,12 @@ from infra_sentinel.metrics.store import (  # noqa: E402
     MetricStore,
     STORE_SCHEMA,
 )
-from infra_sentinel.resources.network.metrics import local_sample_metrics, remote_state_metrics  # noqa: E402
+from infra_sentinel.resources.network.metrics import (  # noqa: E402
+    local_sample_metrics,
+    remote_state_metrics,
+    vps_sample_metrics,
+    xray_sample_metrics,
+)
 
 
 class MetricStoreTests(unittest.TestCase):
@@ -63,6 +68,87 @@ class MetricStoreTests(unittest.TestCase):
         }]})
         self.assertEqual({point.source_id for point in local}, {"local-mihomo"})
         self.assertEqual({point.source_id for point in remote}, {"vps:primary", "xray:primary"})
+
+    def test_remote_history_rebuild_replaces_polluted_window_from_exact_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary)
+            remote_dir = state_dir / "remote" / "primary"
+            remote_dir.mkdir(parents=True)
+            epoch = 1_786_473_000.0
+            vps_sample = {
+                "schema": 3, "timestamp": "2026-08-12T02:30:00+08:00", "epoch": epoch,
+                "interval_started_epoch": epoch - 300, "in_bytes": 3, "out_bytes": 4,
+            }
+            xray_sample = {
+                "schema": 1, "timestamp": "2026-08-12T02:30:00+08:00", "epoch": epoch,
+                "interval_started_epoch": epoch - 300,
+                "users": {"mac": {"up_bytes": 5, "down_bytes": 6}},
+            }
+            (remote_dir / "vps_samples.jsonl").write_text(json.dumps(vps_sample) + "\n", encoding="utf-8")
+            (remote_dir / "xray_user_samples.jsonl").write_text(json.dumps(xray_sample) + "\n", encoding="utf-8")
+            store = MetricStore(state_dir)
+            store.initialize()
+            with store._transaction(write=True) as connection:
+                connection.execute(
+                    "INSERT OR REPLACE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                    ("20260812.1", "2026-08-11 18:28:28"),
+                )
+            polluted = MetricAccumulator(HOT_RESOLUTION_SECONDS)
+            for _ in range(12):
+                polluted.add_points(vps_sample_metrics("primary", vps_sample))
+                polluted.add_points(xray_sample_metrics("primary", xray_sample))
+            store.write_buckets(polluted.buckets())
+            local = MetricPoint(
+                observed_at="2026-08-12T02:30:00+08:00", observed_epoch=epoch,
+                metric="network.bytes", instrument="counter", value=99, unit="bytes",
+                source_id="local-mihomo", resource_id="network", dimensions={"direction": "up"},
+            )
+            store.write((local,))
+
+            report = store.rebuild_remote_history()
+
+            remote_rows = store.query_points(
+                since_epoch=epoch - 1, until_epoch=epoch + 1, resource_id="network",
+                instrument="counter",
+            )
+            remote_rows = [row for row in remote_rows if row["source_id"] != "local-mihomo"]
+            self.assertEqual(report["status"], "rebuilt")
+            self.assertEqual(sum(row["value"] for row in remote_rows), 18)
+            self.assertEqual({row["sample_count"] for row in remote_rows}, {1})
+            self.assertEqual(store.rebuild_remote_history(), {"status": "current"})
+            self.assertTrue(store.summary()["remote_history_rebuild_complete"])
+            self.assertEqual(store.query_points(
+                since_epoch=epoch - 1, until_epoch=epoch + 1, source_id="local-mihomo",
+            )[0]["value"], 99)
+
+    def test_remote_history_rebuild_fails_closed_without_matching_raw_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            store = MetricStore(Path(temporary))
+            store.initialize()
+            with store._transaction(write=True) as connection:
+                connection.execute(
+                    "INSERT OR REPLACE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                    ("20260812.1", "2026-08-11 18:28:28"),
+                )
+            point = MetricPoint(
+                observed_at="2026-08-12T02:30:00+08:00", observed_epoch=1_786_473_000.0,
+                metric="network.billable_bytes", instrument="counter", value=120, unit="bytes",
+                source_id="vps:missing", resource_id="network", dimensions={"direction": "out"},
+            )
+            polluted = MetricAccumulator(HOT_RESOLUTION_SECONDS)
+            polluted.add_point(point)
+            store.write_buckets(polluted.buckets())
+
+            report = store.rebuild_remote_history()
+
+            self.assertEqual(report["status"], "blocked")
+            self.assertEqual(report["missing"], [{
+                "metric": "network.billable_bytes", "source_id": "vps:missing",
+            }])
+            self.assertEqual(store.query_points(
+                since_epoch=0, until_epoch=2_000_000_000,
+                source_id="vps:missing", metric="network.billable_bytes",
+            )[0]["value"], 120)
 
     def test_local_adapter_records_service_dimensions_without_connection_identity(self) -> None:
         points = local_sample_metrics({

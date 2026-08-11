@@ -819,12 +819,14 @@ def main() -> int:
         if args.maintain:
             metric_store = MetricStore(config.state_dir)
             imported = metric_store.import_legacy_network()
+            remote_history = metric_store.rebuild_remote_history()
             maintenance = metric_store.maintain_history(force=True)
             vacuum = metric_store.vacuum()
             transient = cleanup_command_results(config.state_dir, older_than_seconds=0)
             print(json.dumps({
                 "status": "ok",
                 "legacy_imported": imported,
+                "remote_history": remote_history,
                 "maintenance": maintenance,
                 "vacuum": vacuum,
                 "transient_results": transient,
@@ -870,6 +872,9 @@ def main() -> int:
         imported = metric_store.import_legacy_network()
         if imported:
             logger.info("imported legacy network metric points=%s", imported)
+        remote_history = metric_store.rebuild_remote_history()
+        if remote_history.get("status") != "current":
+            logger.info("remote metric history migration=%s", remote_history)
         metric_pipeline = MetricPipeline(metric_store)
         maintenance_stop = threading.Event()
         maintenance_thread = threading.Thread(

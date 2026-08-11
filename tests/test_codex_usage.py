@@ -98,6 +98,10 @@ class CodexUsageTests(unittest.TestCase):
         self.assertEqual(first.points, ())
         self.assertEqual(first.snapshot["usage"]["cumulative"]["tokens"], 100)  # type: ignore[index]
         self.assertEqual(first.snapshot["usage"]["today"]["tokens"], 0)  # type: ignore[index]
+        self.assertIn("local calendar-day baseline", first.snapshot["usage"]["today"]["detail"]["en"])  # type: ignore[index]
+        self.assertIn("统计日界线不同", first.snapshot["usage"]["today"]["detail"]["zh"])  # type: ignore[index]
+        self.assertIn("root-thread counters", first.snapshot["usage"]["cumulative"]["detail"]["en"])  # type: ignore[index]
+        self.assertIn("非账单口径", first.snapshot["usage"]["cumulative"]["detail"]["zh"])  # type: ignore[index]
         self.assertEqual(len(later.points), 2)
         self.assertEqual({point.metric for point in later.points}, {"ai.tokens.total"})
         self.assertEqual({point.value for point in later.points}, {45})
