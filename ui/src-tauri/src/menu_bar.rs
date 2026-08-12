@@ -36,7 +36,7 @@ impl Indicator {
         match self {
             Self::Starting => "Infra Sentinel — starting",
             Self::Normal => "Infra Sentinel — monitoring",
-            Self::Warning => "Infra Sentinel — warning",
+            Self::Warning => "Infra Sentinel — attention needed",
             Self::Critical => "Infra Sentinel — action needed",
         }
     }
@@ -44,13 +44,13 @@ impl Indicator {
 
 fn status_from_projection(projection: &Value) -> Indicator {
     match projection
-        .pointer("/overall/status")
+        .pointer("/infra/overall/status")
         .and_then(Value::as_str)
         .unwrap_or("starting")
     {
         "healthy" | "ok" | "none" => Indicator::Normal,
-        "warning" => Indicator::Warning,
-        "critical" | "degraded" | "error" => Indicator::Critical,
+        "warning" | "degraded" => Indicator::Warning,
+        "critical" | "error" => Indicator::Critical,
         _ => Indicator::Starting,
     }
 }
@@ -138,16 +138,32 @@ mod tests {
     #[test]
     fn projection_status_maps_to_a_small_set_of_menu_bar_states() {
         assert_eq!(
-            status_from_projection(&json!({"overall":{"status":"healthy"}})),
+            status_from_projection(&json!({"infra":{"overall":{"status":"healthy"}}})),
             Indicator::Normal
         );
         assert_eq!(
-            status_from_projection(&json!({"overall":{"status":"warning"}})),
+            status_from_projection(&json!({"infra":{"overall":{"status":"warning"}}})),
             Indicator::Warning
         );
         assert_eq!(
-            status_from_projection(&json!({"overall":{"status":"critical"}})),
+            status_from_projection(&json!({"infra":{"overall":{"status":"degraded"}}})),
+            Indicator::Warning
+        );
+        assert_eq!(
+            status_from_projection(&json!({"infra":{"overall":{"status":"critical"}}})),
             Indicator::Critical
+        );
+        assert_eq!(
+            status_from_projection(&json!({"infra":{"overall":{"status":"error"}}})),
+            Indicator::Critical
+        );
+        assert_eq!(
+            status_from_projection(&json!({"infra":{"overall":{"status":"unknown"}}})),
+            Indicator::Starting
+        );
+        assert_eq!(
+            status_from_projection(&json!({"overall":{"status":"critical"}})),
+            Indicator::Starting
         );
     }
 }
