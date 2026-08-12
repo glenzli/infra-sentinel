@@ -33,7 +33,10 @@ def _network_status(level: str, remote: dict[str, Any], sources: Iterable[Source
         return "warning"
     if remote.get("enabled") and remote.get("status") == "error":
         return "degraded"
-    if any(source.enabled and source.status != "ok" for source in sources):
+    # Waiting/baseline is normal startup coverage, not a confirmed failure.
+    # The source remains visibly offline in its own row, but must not turn the
+    # whole Network resource into a fault before a first aligned sample exists.
+    if any(source.enabled and source.status not in {"ok", "waiting", "baseline"} for source in sources):
         return "degraded"
     return "healthy"
 
@@ -254,6 +257,22 @@ def build_infra_projection(
         if isinstance(guard, dict) and guard.get("level") in {"warning", "critical"}
     )
     billing_available = bool(remote.get("enabled"))
+    network_alert = {
+        # The resource level also includes per-host daily guards.  Keep the
+        # sliding-window diagnostic independent so the UI never attributes a
+        # daily billing warning to the realtime traffic window.
+        "level": str(session.get("traffic_alert_level") or "none"),
+        "windows": {
+            "warning": session.get("alert_windows", {}).get("warning", {})
+            if isinstance(session.get("alert_windows"), dict) else {},
+            "critical": session.get("alert_windows", {}).get("critical", {})
+            if isinstance(session.get("alert_windows"), dict) else {},
+        },
+        "window_seconds": session.get("alert_window_seconds", {})
+        if isinstance(session.get("alert_window_seconds"), dict) else {},
+        "threshold_bytes": session.get("alert_threshold_bytes", {})
+        if isinstance(session.get("alert_threshold_bytes"), dict) else {},
+    }
     primary_total = vps_total if billing_available else local_total
     primary_source = "network.vps-billing" if billing_available else "local-mihomo"
     sources = [SourceStatus(
@@ -356,7 +375,7 @@ def build_infra_projection(
         "product": {"id": "infra-sentinel", "mode": "infra"},
         "overall": {
             "status": _overall_status(base_status, facility_state),
-            "active_alerts": (active_daily_guards or (0 if alert_level == "none" else 1))
+            "active_alerts": active_daily_guards + (0 if network_alert["level"] == "none" else 1)
             + _number(facility_state.get("attention")) + _number(upstream_state.get("attention")) + system_alerts,
         },
         "resources": resources,
@@ -365,6 +384,10 @@ def build_infra_projection(
         "capabilities": DEFAULT_SOURCE_REGISTRY.capabilities(),
         "collectors": [run.as_dict() for run in collector_runs],
         "facilities": facility_state,
+        "network_diagnostics": {
+            "traffic_alert": network_alert,
+            "daily_usage_guards": daily_usage_guards,
+        },
         "upstream_status": upstream_state,
         "ai_usage": {"schema": AI_USAGE_SNAPSHOT_SCHEMA, "sources": ai_snapshots, "aggregate": ai_aggregate} if ai_resource else {},
         "system": system_snapshot or {},

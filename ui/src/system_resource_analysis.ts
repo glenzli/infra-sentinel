@@ -1,6 +1,6 @@
 import { requestAgentCommand } from "./agent_client";
 
-export type SystemTimeRange = "1h" | "24h" | "7d" | "30d";
+export type SystemTimeRange = "today" | "1h" | "24h" | "7d" | "30d";
 
 export type SystemAnalysisData = {
   gaugePoints: Record<string, unknown>[];
@@ -22,13 +22,13 @@ type CacheEntry = { fetchedAt: number; data: SystemAnalysisData };
 
 function windowFor(range: SystemTimeRange): Omit<SystemAnalysisData, "gaugePoints" | "counterPoints"> & { bucketOffsetSeconds: number } {
   const untilEpoch = Date.now() / 1_000;
-  const seconds = range === "1h" ? 3_600 : range === "24h" ? 86_400 : range === "7d" ? 7 * 86_400 : 30 * 86_400;
-  const bucketSeconds = range === "1h" || range === "24h" ? 900 : range === "7d" ? 3_600 : 86_400;
   const localMidnight = new Date();
   localMidnight.setHours(0, 0, 0, 0);
   const dayStartEpoch = localMidnight.getTime() / 1_000;
+  const seconds = range === "1h" ? 3_600 : range === "24h" ? 86_400 : range === "7d" ? 7 * 86_400 : 30 * 86_400;
+  const bucketSeconds = range === "today" || range === "1h" || range === "24h" ? 900 : range === "7d" ? 3_600 : 86_400;
   return {
-    sinceEpoch: untilEpoch - seconds,
+    sinceEpoch: range === "today" ? dayStartEpoch : untilEpoch - seconds,
     untilEpoch,
     bucketSeconds,
     bucketOffsetSeconds: bucketSeconds === 86_400 ? ((dayStartEpoch % 86_400) + 86_400) % 86_400 : 0,
@@ -44,11 +44,15 @@ function pointsFrom(result: Awaited<ReturnType<typeof requestAgentCommand>>): Re
 
 /** Owns bounded system history queries and stale-result rejection. */
 export class SystemResourceAnalysisController {
-  private range: SystemTimeRange = "1h";
+  private range: SystemTimeRange;
   private generation = 0;
   private readonly cache = new Map<SystemTimeRange, CacheEntry>();
   private readonly loading = new Set<SystemTimeRange>();
   private readonly errors = new Map<SystemTimeRange, string>();
+
+  constructor(initialRange: SystemTimeRange = "1h") {
+    this.range = initialRange;
+  }
 
   selectRange(range: SystemTimeRange): void {
     if (range === this.range) return;

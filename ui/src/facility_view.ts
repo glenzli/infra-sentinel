@@ -1,6 +1,7 @@
 import { FacilitiesProjection, FacilityMetric, FacilityProjection } from "./bridge";
 import { formatBytes, formatDuration } from "./format";
 import { tr } from "./i18n";
+import { AttentionDiagnostic, renderAttentionDiagnostics } from "./attention_diagnostics";
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" })[char] ?? char);
@@ -90,6 +91,18 @@ function issueLabel(code: string): string {
   return labels[code] ?? code;
 }
 
+function reasonLabel(code: string): string {
+  const labels: Record<string, string> = {
+    collection_failed: tr("Collection failed", "采集失败"),
+    collection_stale: tr("Collection is stale", "采集已过期"),
+    workspace_unavailable: tr("Workspace unavailable", "工作区不可用"),
+    no_workspaces_registered: tr("No workspace registered", "尚未登记工作区"),
+    integrity_issue: tr("Integrity issue detected", "发现完整性问题"),
+    contention_stalled: tr("Contention is stalled", "协作竞争已阻塞"),
+  };
+  return labels[code] ?? code.replace(/[._-]+/g, " ");
+}
+
 function severityLabel(severity: string): string {
   const labels: Record<string, string> = {
     info: tr("Info", "提示"),
@@ -133,6 +146,52 @@ function consoleControl(facility: FacilityProjection, compact = false): string {
   return `<button class="${compact ? "facility-console" : "button button--subtle"}" type="button" data-console-url="${escapeHtml(facility.console_url)}">${tr("Open Console", "打开 Console")} ↗</button>`;
 }
 
+function facilityDiagnostics(facility: FacilityProjection): AttentionDiagnostic[] {
+  const diagnostics: AttentionDiagnostic[] = [];
+  if (facility.error_kind) {
+    diagnostics.push({
+      id: "observation-error",
+      level: "degraded",
+      subject: facility.label,
+      title: tr("The facility could not be observed", "无法读取该设施的观测快照"),
+      current: facility.error_kind,
+      basis: tr("The observation endpoint failed repeatedly before the public status changed.", "观测端点连续失败达到确认次数后，公开状态才会变化。"),
+      action: facility.console_url
+        ? tr("Confirm the facility process is running, then open its Console for deeper diagnostics. Sentinel keeps retrying.", "确认设施进程仍在运行，再打开其 Console 深入诊断；Sentinel 会继续重试。")
+        : tr("Confirm the facility process and discovery registration are present. Sentinel keeps retrying.", "确认设施进程与发现注册仍然存在；Sentinel 会继续重试。"),
+    });
+  }
+  for (const issue of facility.snapshot?.issues ?? []) {
+    if (issue.severity === "info" && facility.status === "healthy") continue;
+    diagnostics.push({
+      id: `issue-${issue.code}-${issue.subject_id ?? "facility"}`,
+      level: issue.severity === "critical" ? "critical" : issue.severity === "warning" ? "warning" : "info",
+      subject: issue.subject_id && issue.subject_id !== "observer" ? issue.subject_id : facility.label,
+      title: issueLabel(issue.code),
+      current: tr(`reported ${severityLabel(issue.severity)} · ${new Date(issue.observed_at).toLocaleString()}`, `报告级别 ${severityLabel(issue.severity)} · ${new Date(issue.observed_at).toLocaleString()}`),
+      basis: issue.code,
+      action: facility.console_url
+        ? tr("Open this facility's Console to inspect the owning workload and resolve it at the source.", "打开该设施的 Console，检查对应工作负载并从源头处理。")
+        : tr("Inspect the owning facility; Sentinel only reads and reports this issue.", "检查对应设施；Sentinel 只读取并展示该问题。"),
+    });
+  }
+  if (!diagnostics.length && !["healthy", "starting", "stopping"].includes(facility.status)) {
+    const reasons = facility.snapshot?.status.reason_codes ?? [];
+    diagnostics.push({
+      id: "facility-status",
+      level: facility.status === "unavailable" || facility.status === "unreachable" ? "critical" : "degraded",
+      subject: facility.label,
+      title: tr("The facility reported a degraded state", "设施报告了降级状态"),
+      current: reasons.length ? reasons.map(reasonLabel).join(" · ") : statusLabel(facility.status),
+      basis: reasons.length ? reasons.join(" · ") : tr("No structured issue was included in the current snapshot.", "当前快照未包含结构化问题。"),
+      action: facility.console_url
+        ? tr("Open the facility Console for the provider's full diagnostic context.", "打开设施 Console 查看提供方的完整诊断上下文。")
+        : tr("Check that the facility and its observation endpoint are running.", "检查设施及其观测端点是否仍在运行。"),
+    });
+  }
+  return diagnostics.slice(0, 8);
+}
+
 function facilityCard(facility: FacilityProjection): string {
   const metrics = headlineMetrics(facility)
     .map((metric) => `<span><small>${escapeHtml(metricLabel(metric.id))}</small><strong>${escapeHtml(metricValue(metric))}</strong></span>`)
@@ -166,11 +225,12 @@ export function renderFacilityDetailPage(facility?: FacilityProjection): string 
   }).join("");
   const headline = headlineMetrics(facility).map((metric) => `<span><small>${escapeHtml(metricLabel(metric.id))}</small><strong>${escapeHtml(metricValue(metric))}</strong></span>`).join("");
   const capturedAt = facility.snapshot?.captured_at ?? facility.observed_at;
+  const diagnosticPanel = renderAttentionDiagnostics(facilityDiagnostics(facility));
 
   return `<section class="resource-section resource-section--detail facility-instance-page">
     <header class="facility-instance-header"><div><p class="eyebrow">${escapeHtml(facilityKindLabel(facility.kind))} · ${escapeHtml(facility.instance_id)}</p><span class="facility-detail__identity"><i class="source-state source-state--${escapeHtml(facility.status)}"></i><h2>${escapeHtml(facility.label)}</h2></span><p>${escapeHtml(facility.protocol)} · ${escapeHtml(facility.protocol_version)}</p></div><div><span class="pill pill--${escapeHtml(facility.status)}">${escapeHtml(statusLabel(facility.status))}</span>${consoleControl(facility)}</div></header>
+    ${diagnosticPanel}
     ${headline ? `<div class="facility-instance-headlines">${headline}</div>` : ""}
-    ${facility.error_kind ? `<p class="facility-page-note facility-page-note--warning">${tr("Observation error", "观测异常")} · ${escapeHtml(facility.error_kind)}</p>` : ""}
     <div class="facility-detail__facts">
       <span><small>${tr("Last observed", "最近观测")}</small><strong>${capturedAt ? new Date(capturedAt).toLocaleString() : "—"}</strong></span>
       <span><small>${tr("Snapshot sequence", "快照序列")}</small><strong>${escapeHtml(facility.snapshot?.sequence ?? "—")}</strong></span>

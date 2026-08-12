@@ -31,13 +31,14 @@ const networkAnalysis = new NetworkAnalysisController();
 const networkOverviewAnalysis = new NetworkAnalysisController("attribution", "today");
 const aiAnalysis = new AiAnalysisController();
 const systemAnalysis = new SystemResourceAnalysisController();
+const systemOverviewAnalysis = new SystemResourceAnalysisController("today");
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" })[char] ?? char);
 }
 
 function statusLabel(status: OverallStatus): string {
-  const labels: Record<string, string> = { healthy: tr("Healthy", "正常"), warning: tr("Attention", "需关注"), critical: tr("Critical", "严重"), degraded: tr("Data source issue", "数据源异常") };
+  const labels: Record<string, string> = { healthy: tr("Healthy", "正常"), warning: tr("Attention", "需关注"), critical: tr("Critical", "严重"), degraded: tr("Attention", "需关注") };
   return labels[status] ?? status;
 }
 
@@ -85,7 +86,7 @@ function renderProjection(projection: AgentProjection): void {
       ? `${controls}${renderUpstreamStatusResourcePage(upstreamStatus, projection.infra.upstream_status)}`
     : activeView === "facility"
       ? `${facilityControls}${renderFacilityDetailPage(selectedFacility)}`
-    : renderOverview(projection, networkOverviewAnalysis.snapshot());
+    : renderOverview(projection, networkOverviewAnalysis.snapshot(), systemOverviewAnalysis.snapshot());
   root.innerHTML = `<main class="shell">${topbar(projection.infra.overall.status)}${content}${footer(projection)}</main>`;
   root.querySelector<HTMLButtonElement>("#settings")?.addEventListener("click", () => void openSettings());
   root.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", () => void refresh());
@@ -163,6 +164,9 @@ function renderProjection(projection: AgentProjection): void {
     if (activeView === "network" && latestProjection) renderProjection(latestProjection);
   });
   if (activeView === "overview" && network) void networkOverviewAnalysis.hydrate(() => {
+    if (activeView === "overview" && latestProjection) renderProjection(latestProjection);
+  });
+  if (activeView === "overview" && system) void systemOverviewAnalysis.hydrate(() => {
     if (activeView === "overview" && latestProjection) renderProjection(latestProjection);
   });
   if (activeView === "ai_usage") void aiAnalysis.hydrate(() => {

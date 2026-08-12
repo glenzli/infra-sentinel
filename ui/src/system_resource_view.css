@@ -1,11 +1,29 @@
 .resource-grid--compact .resource-card--system { grid-column: span 2; min-height: 158px; }
-.system-overview__metrics { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); margin-top: 15px; }
+.system-overview__metrics { display: grid; gap: 12px; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 15px; }
 .system-overview__metrics span { display: grid; gap: 3px; min-width: 0; }
 .system-overview__metrics small { color: #777d86; font-size: 10px; font-weight: 680; margin: 0; }
 .system-overview__metrics strong { font-size: 19px !important; margin: 0 !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .system-overview__footer { margin-top: 12px; }
+.system-overview__footer span:first-child { color: #606871; font-variant-numeric: tabular-nums; }
 .system-current-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
 .system-current-grid .network-card { min-height: 112px; }
+.system-diagnostics { background: #fff8e8; border: 1px solid #f0d99c; border-radius: 11px; display: grid; gap: 10px; margin-bottom: 12px; padding: 12px 14px; }
+.system-diagnostics--critical { background: #fff0f0; border-color: #efb7b7; }
+.system-diagnostics__heading { align-items: baseline; display: flex; gap: 10px; justify-content: space-between; }
+.system-diagnostics__heading p { color: #9b6500; font-size: 9px; font-weight: 760; letter-spacing: .07em; margin: 0; }
+.system-diagnostics--critical .system-diagnostics__heading p { color: #b3261e; }
+.system-diagnostics__heading strong { color: #5e4100; font-size: 12px; }
+.system-diagnostics--critical .system-diagnostics__heading strong { color: #8f1d18; }
+.system-diagnostics ul { display: grid; gap: 0; list-style: none; margin: 0; padding: 0; }
+.system-diagnostics li { align-items: center; border-top: 1px solid rgba(129, 91, 0, .13); display: grid; gap: 10px; grid-template-columns: auto minmax(0, 1fr) auto; padding: 9px 0 0; }
+.system-diagnostics li + li { margin-top: 9px; }
+.system-diagnostics li > div { display: grid; gap: 2px; min-width: 0; }
+.system-diagnostics li > div strong { font-size: 12px; }
+.system-diagnostics li > div small { color: #7a705d; font-size: 10px; line-height: 1.45; }
+.system-diagnostics li > div small b { color: #5f5645; font-size: 9px; text-transform: uppercase; }
+.system-diagnostics li > span:last-child { color: #4d4537; font-size: 11px; font-weight: 720; text-align: right; }
+.system-diagnostic__state { background: #c47a00; border-radius: 50%; height: 7px; width: 7px; }
+.system-diagnostic__state--critical { background: #d93025; }
 .system-analysis-toolbar { align-items: center; display: flex; justify-content: flex-end; gap: 9px; margin: 14px 0 11px; }
 .system-analysis-toolbar > span { color: #777d86; font-size: 11px; font-weight: 680; }
 .system-analysis-toolbar > div { background: #eceff3; border-radius: 8px; display: flex; padding: 3px; }

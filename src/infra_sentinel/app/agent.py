@@ -42,6 +42,7 @@ from infra_sentinel.app.configuration import (
     write_user_settings,
 )
 from infra_sentinel.core.collectors import CollectorContext, CollectorRegistry, CollectorRun, collected_points
+from infra_sentinel.core.status_stability import StatusStabilizer
 from infra_sentinel.platform.process_lock import acquire_process_lock
 from infra_sentinel.resources.facilities.observer import FacilityMonitor
 from infra_sentinel.core.projection import build_infra_projection
@@ -242,6 +243,12 @@ def totals_for_window(
 class AlertEngine:
     def __init__(self) -> None:
         self.level = "none"
+        self._stability = StatusStabilizer(
+            "none",
+            {"none": 0, "warning": 1, "critical": 2},
+            worsen_after=2,
+            recover_after=2,
+        )
 
     def evaluate(
         self,
@@ -255,7 +262,9 @@ class AlertEngine:
             next_level = "warning"
         else:
             next_level = "none"
-        if next_level == self.level:
+        decision = self._stability.observe(next_level)
+        next_level = decision.status
+        if not decision.changed:
             return None
         previous = self.level
         self.level = next_level
@@ -475,7 +484,22 @@ def build_projection_state(
     storage: dict[str, Any] | None = None,
     facilities: dict[str, Any] | None = None,
     upstream_status: dict[str, Any] | None = None,
+    traffic_alert_level: str | None = None,
 ) -> dict[str, Any]:
+    confirmed_traffic_level = traffic_alert_level if traffic_alert_level in {"none", "warning", "critical"} else "none"
+    session = {
+        **session,
+        "traffic_alert_level": confirmed_traffic_level,
+        "alert_windows": {"warning": warning, "critical": critical},
+        "alert_window_seconds": {
+            "warning": config.monitor.warning_window_seconds,
+            "critical": config.monitor.critical_window_seconds,
+        },
+        "alert_threshold_bytes": {
+            "warning": config.monitor.warning_bytes,
+            "critical": config.monitor.critical_bytes,
+        },
+    }
     remote_servers = remote.get("servers", [])
     xray_servers = [server.get("xray_stats", {}) for server in remote_servers]
     active_xray = [server for server in xray_servers if server.get("enabled")]
@@ -791,6 +815,7 @@ def handle_sample(
         metric_store.summary(),
         facility_monitor.snapshot(),
         upstream_snapshot,
+        alerts.level,
     )
     projection_publisher.publish(projection, epoch=float(sample["epoch"]))
     write_health_state(config, "ok")

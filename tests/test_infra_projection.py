@@ -106,6 +106,48 @@ class InfraProjectionTests(unittest.TestCase):
         self.assertEqual(projection["overall"]["status"], "degraded")
         self.assertEqual(projection["overall"]["active_alerts"], 0)
 
+    def test_waiting_remote_source_is_startup_coverage_not_network_failure(self) -> None:
+        projection = build_infra_projection(
+            sample(),
+            {"kernel": {"total_bytes": 100}, "vps": {"total_bytes": 300}},
+            {
+                "enabled": True,
+                "status": "waiting",
+                "servers": [{
+                    "id": "primary", "label": "Primary VPS",
+                    "vps": {"enabled": True, "status": "ok", "updated_at": "now"},
+                    "xray_stats": {"enabled": True, "status": "waiting"},
+                }],
+            },
+            "none",
+        )
+
+        network = next(resource for resource in projection["resources"] if resource["id"] == "network")
+        self.assertEqual(network["status"], "healthy")
+        self.assertEqual(network["online_source_count"], 2)
+        self.assertEqual(projection["overall"]["status"], "healthy")
+
+    def test_network_diagnostics_expose_confirmed_window_and_daily_guards(self) -> None:
+        guard = {"source_id": "primary", "level": "warning", "usage_bytes": 20, "warning_bytes": 10, "critical_bytes": 30}
+        session = {
+            "kernel": {"total_bytes": 100}, "vps": {"total_bytes": 300},
+            "alert_windows": {"warning": {"up_bytes": 12, "down_bytes": 4}, "critical": {"up_bytes": 8, "down_bytes": 3}},
+            "traffic_alert_level": "warning",
+            "alert_window_seconds": {"warning": 300, "critical": 600},
+            "alert_threshold_bytes": {"warning": 10, "critical": 30},
+        }
+        projection = build_infra_projection(
+            sample(), session,
+            {"enabled": True, "status": "ok", "servers": [], "daily_usage_guards": [guard]},
+            "warning",
+        )
+
+        diagnostics = projection["network_diagnostics"]
+        self.assertEqual(diagnostics["traffic_alert"]["level"], "warning")
+        self.assertEqual(diagnostics["traffic_alert"]["windows"]["warning"]["up_bytes"], 12)
+        self.assertEqual(diagnostics["traffic_alert"]["window_seconds"]["warning"], 300)
+        self.assertEqual(diagnostics["daily_usage_guards"], [guard])
+
     def test_metric_adapter_failure_is_exposed_as_source_health(self) -> None:
         run = CollectorRun(
             capability=CollectorCapability(

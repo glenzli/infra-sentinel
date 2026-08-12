@@ -19,6 +19,7 @@ from infra_sentinel.resources.facilities.protocols import (  # noqa: E402
     DEV_MESH_OBSERVER_PROTOCOL_VERSION,
     FacilityObservation,
     FacilityProtocolError,
+    FacilityTransportError,
     PCP_ADAPTER,
 )
 
@@ -54,19 +55,21 @@ def observation(
     *,
     label: str = "PCP",
     metric_id: str = "pcp.pages.current",
+    status: str = "healthy",
+    sequence: int = 1,
 ) -> FacilityObservation:
     captured = timestamp(0)
     return FacilityObservation(
         label=label,
-        status="healthy",
+        status=status,
         observed_at=captured,
-        sequence=1,
+        sequence=sequence,
         snapshot={
             "schema": "infra-sentinel.facility-observation",
             "schema_version": "20260810.1",
             "captured_at": captured,
-            "sequence": 1,
-            "status": {"state": "healthy", "reason_codes": []},
+            "sequence": sequence,
+            "status": {"state": status, "reason_codes": []},
             "headline_metrics": [metric_id],
             "metrics": [{"id": metric_id, "kind": "gauge", "value": 2}],
             "issues": [],
@@ -111,6 +114,38 @@ class FacilityMonitorTests(unittest.TestCase):
             self.assertEqual(facility["generation"], "gen-1")
             self.assertEqual(facility["console_url"], "http://127.0.0.1:4318/")
             self.assertEqual(facility["snapshot"]["metrics"][0]["value"], 2)
+
+    def test_initial_degraded_business_state_is_confirmed_before_attention(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = private_runtime(temporary)
+            write_registration(root, registration())
+            monitor = FacilityMonitor(logging.getLogger("facility-test"), root, [PCP_ADAPTER])
+
+            for offset in (0, 1):
+                if offset:
+                    monitor._records["pcp:local"].next_poll_epoch = 0
+                with patch.object(
+                    type(PCP_ADAPTER),
+                    "observe",
+                    return_value=observation(status="degraded", sequence=offset + 1),
+                ):
+                    monitor.refresh_once(NOW.timestamp() + offset)
+                pending = monitor.snapshot()
+                self.assertEqual(pending["status"], "starting")
+                self.assertEqual(
+                    pending["items"][0]["snapshot"]["sequence"],
+                    offset + 1,
+                )
+
+            monitor._records["pcp:local"].next_poll_epoch = 0
+            with patch.object(
+                type(PCP_ADAPTER),
+                "observe",
+                return_value=observation(status="degraded", sequence=3),
+            ):
+                monitor.refresh_once(NOW.timestamp() + 2)
+
+            self.assertEqual(monitor.snapshot()["status"], "degraded")
 
     def test_monitor_discovers_and_projects_dev_mesh_observer(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -164,6 +199,65 @@ class FacilityMonitorTests(unittest.TestCase):
             facility = monitor.snapshot()["items"][0]
             self.assertEqual(facility["status"], "unreachable")
             self.assertEqual(facility["snapshot"]["sequence"], 1)
+
+    def test_single_transport_failure_keeps_last_confirmed_facility_healthy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = private_runtime(temporary)
+            write_registration(root, registration())
+            monitor = FacilityMonitor(logging.getLogger("facility-test"), root, [PCP_ADAPTER])
+            with patch.object(type(PCP_ADAPTER), "observe", return_value=observation()):
+                monitor.refresh_once(NOW.timestamp())
+
+            monitor._records["pcp:local"].next_poll_epoch = 0
+            with patch.object(
+                type(PCP_ADAPTER),
+                "observe",
+                side_effect=FacilityTransportError("wire down"),
+            ):
+                monitor.refresh_once(NOW.timestamp() + 1)
+
+            state = monitor.snapshot()
+            facility = state["items"][0]
+            self.assertEqual(state["status"], "healthy")
+            self.assertEqual(facility["status"], "healthy")
+            self.assertNotIn("error_kind", facility)
+            self.assertEqual(facility["confirmation"], {
+                "candidate_status": "unreachable", "consecutive": 1, "required": 3,
+            })
+
+    def test_three_transport_failures_confirm_unreachable_then_two_successes_recover(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = private_runtime(temporary)
+            write_registration(root, registration())
+            monitor = FacilityMonitor(logging.getLogger("facility-test"), root, [PCP_ADAPTER])
+            with patch.object(type(PCP_ADAPTER), "observe", return_value=observation()):
+                monitor.refresh_once(NOW.timestamp())
+
+            for offset in (1, 2, 3):
+                monitor._records["pcp:local"].next_poll_epoch = 0
+                with patch.object(
+                    type(PCP_ADAPTER),
+                    "observe",
+                    side_effect=FacilityTransportError("wire down"),
+                ):
+                    monitor.refresh_once(NOW.timestamp() + offset)
+            self.assertEqual(monitor.snapshot()["items"][0]["status"], "unreachable")
+
+            for offset in (4, 5):
+                monitor._records["pcp:local"].next_poll_epoch = 0
+                fresh = observation()
+                fresh = FacilityObservation(
+                    label=fresh.label,
+                    status=fresh.status,
+                    observed_at=fresh.observed_at,
+                    sequence=offset,
+                    snapshot={**fresh.snapshot, "sequence": offset},
+                    console_url=fresh.console_url,
+                )
+                with patch.object(type(PCP_ADAPTER), "observe", return_value=fresh):
+                    monitor.refresh_once(NOW.timestamp() + offset)
+
+            self.assertEqual(monitor.snapshot()["items"][0]["status"], "healthy")
 
     def test_sequence_still_advances_when_endpoint_changes_in_one_generation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -248,10 +342,10 @@ class FacilityMonitorTests(unittest.TestCase):
             with patch.object(
                 type(PCP_ADAPTER),
                 "observe",
-                side_effect=[FacilityProtocolError("wire down"), observation()],
+                side_effect=[FacilityTransportError("wire down"), observation()],
             ) as observe:
                 monitor.refresh_once(NOW.timestamp())
-                self.assertEqual(monitor.snapshot()["items"][0]["status"], "unreachable")
+                self.assertEqual(monitor.snapshot()["items"][0]["status"], "starting")
                 monitor.refresh_once(NOW.timestamp() + 5)
                 self.assertEqual(observe.call_count, 1)
                 monitor.refresh_once(NOW.timestamp() + 16)
@@ -270,18 +364,31 @@ class FacilityMonitorTests(unittest.TestCase):
             self.assertEqual(state["status"], "disabled")
             self.assertNotIn("error_kind", state)
 
-    def test_invalid_runtime_root_is_isolated_as_discovery_failure(self) -> None:
+    def test_invalid_runtime_root_requires_confirmation_and_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = private_runtime(temporary)
             root.chmod(0o755)
             monitor = FacilityMonitor(logging.getLogger("facility-test"), root, [PCP_ADAPTER])
 
-            monitor.refresh_once(NOW.timestamp())
+            for offset in (0, 1):
+                monitor.refresh_once(NOW.timestamp() + offset)
+                pending = monitor.snapshot()
+                self.assertEqual(pending["status"], "disabled")
+                self.assertNotIn("error_kind", pending)
+                self.assertEqual(pending["confirmation"]["candidate_status"], "error")
+
+            monitor.refresh_once(NOW.timestamp() + 2)
 
             state = monitor.snapshot()
             self.assertEqual(state["status"], "degraded")
             self.assertEqual(state["attention"], 1)
             self.assertEqual(state["error_kind"], "DiscoveryError")
+
+            root.chmod(0o700)
+            monitor.refresh_once(NOW.timestamp() + 3)
+            self.assertEqual(monitor.snapshot()["status"], "degraded")
+            monitor.refresh_once(NOW.timestamp() + 4)
+            self.assertEqual(monitor.snapshot()["status"], "disabled")
 
 
 if __name__ == "__main__":

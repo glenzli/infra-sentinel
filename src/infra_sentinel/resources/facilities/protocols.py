@@ -17,6 +17,7 @@ from typing import Any, Iterable
 from urllib.parse import urlsplit
 
 from infra_sentinel.resources.facilities.discovery import (
+    DiscoveryError,
     DiscoveryOffer,
     DiscoveryPaths,
     Registration,
@@ -35,6 +36,10 @@ MAX_U64 = (1 << 64) - 1
 
 class FacilityProtocolError(ValueError):
     """A selected provider violated its own application protocol."""
+
+
+class FacilityTransportError(FacilityProtocolError):
+    """A selected provider could not be reached for a transient observation."""
 
 
 def _strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -105,8 +110,8 @@ def _exchange_line(
     timeout: float,
     require_eof: bool,
 ) -> dict[str, Any]:
-    validate_private_socket(endpoint)
     try:
+        validate_private_socket(endpoint)
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(timeout)
             connection.connect(str(endpoint))
@@ -118,8 +123,10 @@ def _exchange_line(
             )
     except FacilityProtocolError:
         raise
+    except DiscoveryError as error:
+        raise FacilityTransportError("provider endpoint is unavailable") from error
     except (OSError, TimeoutError) as error:
-        raise FacilityProtocolError("provider request failed") from error
+        raise FacilityTransportError("provider request failed") from error
     return _decode_json(line)
 
 

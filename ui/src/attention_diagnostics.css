@@ -1,0 +1,24 @@
+.attention-diagnostics { background: #fff; border: 1px solid #dfe4e9; border-radius: 12px; overflow: hidden; }
+.attention-diagnostics > header { align-items: center; background: #f5f7f9; color: #5f6872; display: flex; font-size: 11px; font-weight: 720; justify-content: space-between; padding: 9px 13px; text-transform: uppercase; }
+.attention-diagnostics > header em { align-items: center; background: #e7ebef; border-radius: 999px; display: inline-flex; font-size: 10px; font-style: normal; height: 20px; justify-content: center; min-width: 20px; padding: 0 6px; }
+.attention-diagnostics--warning { border-color: #ead8aa; }
+.attention-diagnostics--warning > header { background: #fff8e8; color: #86601c; }
+.attention-diagnostics--critical { border-color: #efc5c2; }
+.attention-diagnostics--critical > header { background: #fff1f0; color: #a43b35; }
+.attention-diagnostics--degraded { border-color: #d4dbe3; }
+.attention-diagnostics__list { display: grid; }
+.attention-diagnostic { align-items: start; border-top: 1px solid #edf0f2; display: grid; gap: 10px; grid-template-columns: auto minmax(0, 1fr); padding: 12px 14px; }
+.attention-diagnostic:first-child { border-top: 0; }
+.attention-diagnostic > i { background: #8190a0; border-radius: 50%; height: 8px; margin-top: 5px; width: 8px; }
+.attention-diagnostic--warning > i { background: #c2851d; }
+.attention-diagnostic--critical > i { background: #d0443e; }
+.attention-diagnostic--info > i { background: #4d83be; }
+.attention-diagnostic__body { display: grid; gap: 8px; min-width: 0; }
+.attention-diagnostic__body p { align-items: baseline; display: flex; gap: 8px; margin: 0; }
+.attention-diagnostic__body p small { color: #7b838c; flex: 0 0 auto; font-size: 10px; font-weight: 680; }
+.attention-diagnostic__body p strong { color: #25292e; font-size: 12px; }
+.attention-diagnostic__body dl { display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; }
+.attention-diagnostic__body dl > div { display: grid; gap: 2px; min-width: 0; }
+.attention-diagnostic__body dt { color: #9298a0; font-size: 9px; }
+.attention-diagnostic__body dd { color: #58616b; font-size: 10px; line-height: 1.45; margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 760px) { .attention-diagnostic__body dl { grid-template-columns: 1fr; }.attention-diagnostic__body p { align-items: flex-start; flex-direction: column; gap: 3px; } }

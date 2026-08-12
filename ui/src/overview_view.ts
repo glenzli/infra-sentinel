@@ -5,6 +5,7 @@ import { NetworkAnalysisSnapshot, networkPathTotals } from "./network_analysis";
 import { renderFacilityCards } from "./facility_view";
 import { renderUpstreamStatusCard } from "./upstream_status_view";
 import { renderSystemResourceCard } from "./system_resource_view";
+import { SystemAnalysisSnapshot } from "./system_resource_analysis";
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" })[char] ?? char);
@@ -21,7 +22,7 @@ function resourceLabel(resource: ResourceProjection): string {
 }
 
 function statusLabel(status: string): string {
-  const labels: Record<string, string> = { healthy: tr("Healthy", "正常"), warning: tr("Attention", "需关注"), critical: tr("Critical", "严重"), degraded: tr("Data source issue", "数据源异常") };
+  const labels: Record<string, string> = { healthy: tr("Healthy", "正常"), warning: tr("Attention", "需关注"), critical: tr("Critical", "严重"), degraded: tr("Attention", "需关注") };
   return labels[status] ?? status;
 }
 
@@ -33,6 +34,21 @@ function resourceValue(resource: ResourceProjection): string {
 
 function sourceSummary(resource: ResourceProjection): string {
   return `${resource.online_source_count} / ${resource.source_count} ${tr("sources online", "个数据源在线")}`;
+}
+
+function overallExplanation(projection: AgentProjection, resources: ResourceProjection[]): string {
+  const activeAlerts = projection.infra.overall.active_alerts;
+  const affected = resources
+    .filter((resource) => ["warning", "critical", "degraded", "error", "unavailable", "unreachable"].includes(String(resource.status)))
+    .map(resourceLabel);
+  const facilityItems = projection.infra.facilities?.items
+    .filter((facility) => !["healthy", "starting", "stopping"].includes(facility.status))
+    .map((facility) => facility.label) ?? [];
+  const names = [...affected, ...facilityItems];
+  if (activeAlerts && names.length) return tr(`${activeAlerts} confirmed alert${activeAlerts === 1 ? "" : "s"} · ${names.slice(0, 3).join(" · ")}`, `${activeAlerts} 个已确认告警 · ${names.slice(0, 3).join(" · ")}`);
+  if (activeAlerts) return tr(`${activeAlerts} confirmed active alert${activeAlerts === 1 ? "" : "s"}`, `当前 ${activeAlerts} 个已确认活动告警`);
+  if (names.length) return tr(`Attention: ${names.slice(0, 3).join(" · ")}`, `需查看：${names.slice(0, 3).join(" · ")}`);
+  return tr("No active alerts", "暂无活动告警");
 }
 
 function dailyUsageThresholds(guard: Record<string, unknown>): string {
@@ -83,20 +99,24 @@ function resourceCard(resource: ResourceProjection): string {
   return `<article class="resource-card resource-card--${escapeHtml(resource.status)}"><div class="resource-card__heading"><span class="resource-card__identity"><span class="resource-card__state source-state source-state--${escapeHtml(resource.status)}" aria-hidden="true"></span><p>${escapeHtml(resourceLabel(resource))}</p></span><span class="pill pill--${escapeHtml(resource.status)}">${escapeHtml(statusLabel(resource.status))}</span></div><div class="resource-card__metric"><strong>${escapeHtml(resourceValue(resource))}</strong><small>${escapeHtml(sourceSummary(resource))}</small></div></article>`;
 }
 
-export function renderOverview(projection: AgentProjection, networkAnalysis: NetworkAnalysisSnapshot): string {
+export function renderOverview(
+  projection: AgentProjection,
+  networkAnalysis: NetworkAnalysisSnapshot,
+  systemToday: SystemAnalysisSnapshot,
+): string {
   const { infra, session } = projection;
   const resources = infra.resources.filter((resource) => resource.enabled);
   const categoryOrder: Record<string, number> = { usage: 0, runtime: 1, dependency: 2 };
   const orderedResources = [...resources].sort((left, right) =>
     (categoryOrder[left.category] ?? 99) - (categoryOrder[right.category] ?? 99));
-  const activeAlerts = infra.overall.active_alerts;
+  const overallDetail = overallExplanation(projection, orderedResources);
   const onlineSources = orderedResources.reduce((total, resource) => total + resource.online_source_count, 0);
   const configuredSources = orderedResources.reduce((total, resource) => total + resource.source_count, 0);
   const facilities = infra.facilities;
   const renderResourceCard = (resource: ResourceProjection) => resource.id === "network"
     ? networkCard(projection, resource, networkAnalysis)
     : resource.id === "system"
-      ? renderSystemResourceCard(resource, projection.infra.system)
+      ? renderSystemResourceCard(resource, projection.infra.system, systemToday)
     : resource.id === "ai_usage"
       ? aiUsageCard(projection, resource)
       : resource.id === "upstream_status"
@@ -119,5 +139,5 @@ export function renderOverview(projection: AgentProjection, networkAnalysis: Net
     group("dependency", tr("EXTERNAL", "外部服务"), tr("External dependencies", "外部依赖"), resourceCards("dependency"), orderedResources.filter((resource) => resource.category === "dependency").length),
     group("other", tr("OTHER", "其他"), tr("Other infrastructure", "其他基础设施"), otherResources.map(renderResourceCard).join(""), otherResources.length),
   ].join("");
-  return `<section class="overview-toolbar"><div class="overview-toolbar__session"><span>${tr("Session", "当前统计周期")}</span><strong>${formatDuration(session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button></div></section><section class="summary-grid summary-grid--compact" aria-label="${tr("Overview", "概览")}"><article class="summary-card summary-card--status"><p>${tr("Overall health", "整体健康")}</p><strong class="status-value status-value--${escapeHtml(infra.overall.status)}">${escapeHtml(statusLabel(infra.overall.status))}</strong><small>${activeAlerts ? tr(`${activeAlerts} active alert${activeAlerts === 1 ? "" : "s"}`, `当前 ${activeAlerts} 个活动告警`) : tr("No active alerts", "暂无活动告警")}</small></article><article class="summary-card"><p>${tr("Enabled resources", "已启用资源")}</p><strong>${orderedResources.length}</strong><small>${orderedResources.map(resourceLabel).join(" · ") || tr("None", "无")}</small></article><article class="summary-card"><p>${tr("Data sources", "数据源")}</p><strong>${onlineSources}<em> / ${configuredSources}</em></strong><small>${tr("online", "在线")}</small></article><article class="summary-card"><p>${tr("Facilities", "运行设施")}</p><strong>${facilities?.healthy ?? 0}<em> / ${facilities?.total ?? 0}</em></strong><small>${facilities?.attention ? tr(`${facilities.attention} need attention`, `${facilities.attention} 个需关注`) : tr("discovered locally", "本机自动发现")}</small></article></section><section class="module-section module-section--overview"><div class="section-heading"><div><p class="eyebrow">${tr("INFRASTRUCTURE", "基础设施")}</p><h2>${tr("Infrastructure", "基础设施")}</h2></div><span class="section-heading__meta">${moduleCount} ${tr("modules", "个模块")}</span></div><div class="overview-groups">${groupedModules || `<p class="empty">${tr("No infrastructure module is available.", "尚无可用基础设施模块。")}</p>`}</div></section>`;
+  return `<section class="overview-toolbar"><div class="overview-toolbar__session"><span>${tr("Session", "当前统计周期")}</span><strong>${formatDuration(session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button></div></section><section class="summary-grid summary-grid--compact" aria-label="${tr("Overview", "概览")}"><article class="summary-card summary-card--status"><p>${tr("Overall health", "整体健康")}</p><strong class="status-value status-value--${escapeHtml(infra.overall.status)}">${escapeHtml(statusLabel(infra.overall.status))}</strong><small>${escapeHtml(overallDetail)}</small></article><article class="summary-card"><p>${tr("Enabled resources", "已启用资源")}</p><strong>${orderedResources.length}</strong><small>${orderedResources.map(resourceLabel).join(" · ") || tr("None", "无")}</small></article><article class="summary-card"><p>${tr("Data sources", "数据源")}</p><strong>${onlineSources}<em> / ${configuredSources}</em></strong><small>${tr("online", "在线")}</small></article><article class="summary-card"><p>${tr("Facilities", "运行设施")}</p><strong>${facilities?.healthy ?? 0}<em> / ${facilities?.total ?? 0}</em></strong><small>${facilities?.attention ? tr(`${facilities.attention} need attention`, `${facilities.attention} 个需关注`) : tr("discovered locally", "本机自动发现")}</small></article></section><section class="module-section module-section--overview"><div class="section-heading"><div><p class="eyebrow">${tr("INFRASTRUCTURE", "基础设施")}</p><h2>${tr("Infrastructure", "基础设施")}</h2></div><span class="section-heading__meta">${moduleCount} ${tr("modules", "个模块")}</span></div><div class="overview-groups">${groupedModules || `<p class="empty">${tr("No infrastructure module is available.", "尚无可用基础设施模块。")}</p>`}</div></section>`;
 }

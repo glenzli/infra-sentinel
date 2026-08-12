@@ -174,6 +174,39 @@ class XrayStatsMonitorTests(unittest.TestCase):
             self.assertEqual(counted["total_bytes"], 200)
             self.assertEqual(counted["intervals"], 1)
 
+    def test_poll_requires_two_failures_and_two_successes_to_change_health(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = time.time()
+            values: list[object] = [
+                (1_000, 2_000), RuntimeError("ssh 1"), RuntimeError("ssh 2"),
+                (1_100, 2_100), (1_200, 2_200),
+            ]
+
+            def reader(_: XrayStatsConfig) -> dict[str, object]:
+                value = values.pop(0)
+                if isinstance(value, Exception):
+                    raise value
+                up_bytes, down_bytes = value
+                return {
+                    "timestamp": "sample", "epoch": base,
+                    "users": {"workstation": {"up_bytes": up_bytes, "down_bytes": down_bytes}},
+                }
+
+            monitor = XrayStatsMonitor(config(), Path(temporary), LogState(), reader=reader)
+            monitor.align_session(base)
+            first = monitor.maybe_poll(base, force=True)
+            failed_once = monitor.maybe_poll(base + 1, force=True)
+            failed = monitor.maybe_poll(base + 2, force=True)
+            recovery_pending = monitor.maybe_poll(base + 3, force=True)
+            recovered = monitor.maybe_poll(base + 4, force=True)
+
+            self.assertEqual(first["status"], "baseline")
+            self.assertEqual(failed_once["status"], "baseline")
+            self.assertEqual(failed_once["confirmation"]["consecutive"], 1)
+            self.assertEqual(failed["status"], "error")
+            self.assertEqual(recovery_pending["status"], "error")
+            self.assertEqual(recovered["status"], "ok")
+
 
 if __name__ == "__main__":
     unittest.main()

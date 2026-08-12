@@ -5,6 +5,7 @@ import { currentLocale, tr } from "./i18n";
 import { DailyBarBucket, DailyBarSeries, renderDailyBarChart } from "./daily_bar_chart";
 import { AiAnalysisSnapshot, AiTimeRange, AiViewMode } from "./ai_analysis";
 import { AnalysisTimeWindow } from "./analysis_time";
+import { AttentionDiagnostic, renderAttentionDiagnostics } from "./attention_diagnostics";
 import {
   ProjectedUsage, UsageInterval, aggregateByModel, aggregateBySource, completeDailyBuckets,
   completeRateEpochs, projectUsage,
@@ -197,8 +198,39 @@ function sourceRow(source: SourceProjection): string {
   return `<li class="source-row"><span class="source-state source-state--${escapeHtml(source.status)}"></span><span class="source-main"><strong>${escapeHtml(source.label)}</strong><small>${escapeHtml(source.kind)}</small></span><span class="source-status">${escapeHtml(source.status)}</span></li>`;
 }
 
-export function renderAiUsageResourcePage(projection: AgentProjection, _resource: ResourceProjection, sources: SourceProjection[], snapshot: AiAnalysisSnapshot): string {
+function aiUsageDiagnostics(projection: AgentProjection, resource: ResourceProjection, sources: SourceProjection[]): AttentionDiagnostic[] {
+  const diagnostics: AttentionDiagnostic[] = [];
+  const collectors = projection.infra.collectors ?? [];
+  const collectorBySource = new Map(collectors.map((collector) => [collector.capability.source_id, collector]));
+  for (const source of sources) {
+    if (!source.enabled || ["ok", "waiting", "baseline", "disabled"].includes(source.status)) continue;
+    const collector = collectorBySource.get(source.id);
+    diagnostics.push({
+      id: source.id,
+      level: "degraded",
+      subject: source.label,
+      title: tr("Usage metadata could not be collected", "无法采集用量元数据"),
+      current: tr(`status ${source.status}${collector?.error_kind ? ` · ${collector.error_kind}` : ""}`, `状态 ${source.status}${collector?.error_kind ? ` · ${collector.error_kind}` : ""}`),
+      basis: tr("Three consecutive collection failures are required before this source is marked unavailable.", "连续 3 次采集失败后，才会将该来源标记为不可用。"),
+      action: tr("Confirm the local Agent and its metadata store are available; Sentinel never reads prompts or response bodies.", "确认本地 Agent 及其元数据存储可用；Sentinel 不会读取提示词或响应正文。"),
+    });
+  }
+  if (!diagnostics.length && !["ok", "healthy", "waiting"].includes(String(resource.status))) {
+    diagnostics.push({
+      id: "ai-usage-status",
+      level: "degraded",
+      subject: tr("AI usage", "AI 用量"),
+      title: tr("No provider currently has a usable usage snapshot", "当前没有来源提供可用的用量快照"),
+      current: tr(`resource status ${resource.status}`, `资源状态 ${resource.status}`),
+      action: tr("Check the collector rows below and refresh after the local Agent writes new metadata.", "检查下方采集来源，并在本地 Agent 写入新元数据后刷新。"),
+    });
+  }
+  return diagnostics;
+}
+
+export function renderAiUsageResourcePage(projection: AgentProjection, resource: ResourceProjection, sources: SourceProjection[], snapshot: AiAnalysisSnapshot): string {
   const providerSources = asArray(asRecord(projection.infra.ai_usage).sources);
   const sourceNames = providerSources.map((source) => String(source.label ?? source.source_id ?? "")).filter(Boolean).join(" · ");
-  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("RESOURCE DETAIL", "资源详情")}</p><h2>${tr("AI usage", "AI 用量")}</h2></div><span class="section-heading__meta">${escapeHtml(sourceNames)}</span></div><section class="network-detail">${renderCurrentSummary(providerSources, sources)}${renderControls(snapshot)}${analysisBody(snapshot, providerSources)}<article class="sources-card sources-card--footer"><div class="sources-card__heading"><h3>${tr("Collector sources", "采集数据源")}</h3><span>${sources.length}</span></div><ul>${sources.map(sourceRow).join("")}</ul></article></section></section>`;
+  const diagnostics = renderAttentionDiagnostics(aiUsageDiagnostics(projection, resource, sources));
+  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("RESOURCE DETAIL", "资源详情")}</p><h2>${tr("AI usage", "AI 用量")}</h2></div><span class="section-heading__meta">${escapeHtml(sourceNames)}</span></div>${diagnostics}<section class="network-detail">${renderCurrentSummary(providerSources, sources)}${renderControls(snapshot)}${analysisBody(snapshot, providerSources)}<article class="sources-card sources-card--footer"><div class="sources-card__heading"><h3>${tr("Collector sources", "采集数据源")}</h3><span>${sources.length}</span></div><ul>${sources.map(sourceRow).join("")}</ul></article></section></section>`;
 }

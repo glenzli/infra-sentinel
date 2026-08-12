@@ -10,6 +10,7 @@ import re
 import time
 from typing import Any, Callable
 
+from infra_sentinel.core.status_stability import StatusDecision, StatusStabilizer
 from infra_sentinel.resources.network.remote_ssh import run_read_only_script
 
 
@@ -175,6 +176,22 @@ class XrayStatsMonitor:
         self.next_poll_at = 0.0
         self._load_session()
         self.public_state = self._build_public_state("disabled" if not config.enabled else "waiting")
+        self._status_stability = StatusStabilizer(
+            str(self.public_state["status"]),
+            {"disabled": 0, "waiting": 0, "baseline": 0, "ok": 0, "error": 1},
+            worsen_after=2,
+            recover_after=2,
+        )
+
+    @staticmethod
+    def _confirmation(decision: StatusDecision) -> dict[str, Any] | None:
+        if not decision.pending_status:
+            return None
+        return {
+            "candidate_status": decision.pending_status,
+            "consecutive": decision.pending_count,
+            "required": decision.required_count,
+        }
 
     @property
     def baseline_path(self) -> Path:
@@ -352,6 +369,7 @@ class XrayStatsMonitor:
         current = time.time() if now is None else float(now)
         if not self.config.enabled:
             self.public_state = self._build_public_state("disabled")
+            self._status_stability.observe("disabled", immediate=True)
             return self.public_state
         if not force and current < self.next_poll_at:
             return self.public_state
@@ -363,17 +381,29 @@ class XrayStatsMonitor:
             self._save_tracker()
             self._append_sample(sample)
             self._record_session(sample)
+            candidate_status = "baseline" if was_uninitialized else "ok"
+            decision = self._status_stability.observe(
+                candidate_status,
+                immediate=self._status_stability.status in {"waiting", "baseline"},
+            )
             self.public_state = self._build_public_state(
-                "baseline" if was_uninitialized else "ok",
+                decision.status,
                 updated_at=sample["timestamp"],
                 last_sample=sample,
             )
+            confirmation = self._confirmation(decision)
+            if confirmation:
+                self.public_state["confirmation"] = confirmation
         except Exception as exc:
             previous = self.public_state
+            decision = self._status_stability.observe("error")
             self.public_state = self._build_public_state(
-                "error",
+                decision.status,
                 updated_at=previous.get("updated_at"),
                 last_sample=previous.get("last_sample"),
-                error=str(exc),
+                error=str(exc) if decision.status == "error" else None,
             )
+            confirmation = self._confirmation(decision)
+            if confirmation:
+                self.public_state["confirmation"] = confirmation
         return self.public_state

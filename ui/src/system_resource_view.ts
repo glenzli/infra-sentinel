@@ -57,6 +57,93 @@ function appLabel(id: string, label: string): string {
   return id === "other-attributed" ? tr("Other attributed processes", "其他已归因进程") : label;
 }
 
+type SystemDiagnostic = {
+  code: string;
+  level: "warning" | "critical";
+  title: string;
+  current: string;
+  basis: string;
+  action: string;
+};
+
+function systemDiagnostics(snapshot?: SystemResourceProjection): SystemDiagnostic[] {
+  if (!snapshot) return [];
+  const memory = snapshot.memory;
+  const disk = snapshot.disk;
+  const freePercent = disk.total_bytes > 0 ? disk.free_bytes / disk.total_bytes * 100 : 0;
+  const diskCounts = `${tr("errors", "错误")} ${combinedCount(disk.health?.read_errors, disk.health?.write_errors)} · ${tr("retries", "重试")} ${combinedCount(disk.health?.read_retries, disk.health?.write_retries)}`;
+  const known: Record<string, Omit<SystemDiagnostic, "code">> = {
+    memory_pressure_warning: {
+      level: "warning",
+      title: tr("Memory pressure is elevated", "内存压力升高"),
+      current: pressure(memory.pressure),
+      basis: tr("Reported by the operating system's native memory-pressure state.", "由操作系统原生内存压力状态触发。"),
+      action: tr("Inspect the active workload and memory consumers; the state clears after two healthy samples.", "检查当前工作负载与内存占用；连续 2 次健康采样后会恢复。"),
+    },
+    memory_pressure_critical: {
+      level: "critical",
+      title: tr("Memory pressure is critical", "内存压力严重"),
+      current: pressure(memory.pressure),
+      basis: tr("The operating system reports critical memory pressure.", "操作系统报告严重内存压力。"),
+      action: tr("Reduce the active workload or memory concurrency immediately, then confirm pressure returns to normal.", "立即降低工作负载或内存并发，并确认压力恢复正常。"),
+    },
+    disk_space_low: {
+      level: "warning",
+      title: tr("Free disk space is low", "磁盘剩余空间偏低"),
+      current: `${formatBytes(disk.free_bytes)} ${tr("free", "可用")} · ${percent(freePercent)}`,
+      basis: tr("Attention begins at 10% free; critical begins at 5% free.", "可用空间不高于 10% 时需关注，不高于 5% 时为严重。"),
+      action: tr("Review storage details and remove or move nonessential data before free space reaches 5%.", "查看存储详情，在可用空间降至 5% 前清理或迁移非必要数据。"),
+    },
+    disk_space_critical: {
+      level: "critical",
+      title: tr("Free disk space is critical", "磁盘剩余空间严重不足"),
+      current: `${formatBytes(disk.free_bytes)} ${tr("free", "可用")} · ${percent(freePercent)}`,
+      basis: tr("Free disk space is at or below the 5% critical threshold.", "可用空间已达到或低于 5% 严重线。"),
+      action: tr("Free disk space now to protect writes, databases, and the operating system.", "立即释放磁盘空间，避免写入、数据库与系统运行受影响。"),
+    },
+    thermal_pressure_serious: {
+      level: "warning",
+      title: tr("Thermal pressure is elevated", "温度压力较高"),
+      current: thermal(snapshot.thermal.state),
+      basis: tr("Reported by the operating system's native thermal state.", "由操作系统原生温度状态触发。"),
+      action: tr("Reduce sustained CPU/GPU work and improve cooling; recovery requires two healthy samples.", "降低持续 CPU/GPU 负载并改善散热；连续 2 次健康采样后恢复。"),
+    },
+    thermal_pressure_critical: {
+      level: "critical",
+      title: tr("Thermal pressure is critical", "温度压力严重"),
+      current: thermal(snapshot.thermal.state),
+      basis: tr("The operating system reports critical thermal pressure.", "操作系统报告严重温度压力。"),
+      action: tr("Stop or reduce the heaviest workload until the native thermal state recovers.", "停止或降低最重的工作负载，直到系统温度状态恢复。"),
+    },
+    disk_health_warning: {
+      level: "warning",
+      title: tr("Disk health needs attention", "磁盘健康需关注"),
+      current: diskCounts,
+      basis: tr("The low-frequency native disk check reported errors or retries.", "低频原生磁盘检查发现错误或重试。"),
+      action: tr("Back up important data and inspect the disk in the system's native diagnostic tools.", "备份重要数据，并使用系统原生诊断工具检查磁盘。"),
+    },
+    disk_health_critical: {
+      level: "critical",
+      title: tr("Disk health is critical", "磁盘健康严重异常"),
+      current: diskCounts,
+      basis: tr("The native disk check reported a critical device state.", "原生磁盘检查报告设备处于严重状态。"),
+      action: tr("Back up important data immediately and arrange device-level diagnosis or replacement.", "立即备份重要数据，并安排设备级诊断或更换。"),
+    },
+  };
+  return (snapshot.reasons ?? []).map((code) => {
+    const diagnostic = known[code];
+    if (diagnostic) return { code, ...diagnostic };
+    return {
+      code,
+      level: snapshot.status === "critical" ? "critical" : "warning",
+      title: tr("System condition reported", "系统报告异常状态"),
+      current: overallStatus(snapshot.status),
+      basis: tr(`Diagnostic code: ${code}`, `诊断代码：${code}`),
+      action: tr("Inspect the current system facts below and refresh after the affected condition changes.", "检查下方当前系统事实，并在异常条件变化后刷新。"),
+    };
+  });
+}
+
 type AppIoTotal = { id: string; label: string; readBytes: number; writeBytes: number };
 
 function appIoTotals(
@@ -92,26 +179,40 @@ function appIoTotals(
   return selected;
 }
 
-export function renderSystemResourceCard(resource: ResourceProjection, snapshot?: SystemResourceProjection): string {
+export function renderSystemResourceCard(
+  resource: ResourceProjection,
+  snapshot?: SystemResourceProjection,
+  today?: SystemAnalysisSnapshot,
+): string {
   const cpu = snapshot?.cpu?.percent ?? 0;
   const memory = snapshot?.memory;
   const disk = snapshot?.disk;
   const dominantApp = disk?.attribution?.ready ? disk.attribution.apps[0] : undefined;
+  const diagnostic = systemDiagnostics(snapshot)[0];
+  const todayReads = today?.ready ? sum(metric(today.data.counterPoints, "system.disk.read_bytes")) : null;
+  const todayWrites = today?.ready ? sum(metric(today.data.counterPoints, "system.disk.write_bytes")) : null;
+  const currentIo = supports(snapshot, "disk.throughput")
+    ? `${tr("Now", "当前")} · ${tr("read", "读")} ${formatBytes(disk?.read_bytes_per_second)}/s · ${tr("write", "写")} ${formatBytes(disk?.write_bytes_per_second)}/s`
+    : "";
   const metrics = [
     supports(snapshot, "cpu.utilization") ? `<span><small>CPU</small><strong>${percent(cpu)}</strong></span>` : "",
     supports(snapshot, "memory.pressure")
       ? `<span><small>${tr("Memory pressure", "内存压力")}</small><strong>${escapeHtml(pressure(memory?.pressure ?? "unavailable"))}</strong></span>`
       : supports(snapshot, "memory.capacity") ? `<span><small>${tr("Memory available", "可用内存")}</small><strong>${formatBytes(memory?.available_bytes)}</strong></span>` : "",
-    supports(snapshot, "disk.throughput") ? `<span><small>${tr("Disk read", "磁盘读取")}</small><strong>${formatBytes(disk?.read_bytes_per_second)}/s</strong></span>` : "",
-    supports(snapshot, "disk.throughput") ? `<span><small>${tr("Disk write", "磁盘写入")}</small><strong>${formatBytes(disk?.write_bytes_per_second)}/s</strong></span>` : "",
+    supports(snapshot, "disk.throughput") ? `<span><small>${tr("Reads today", "今日读取")}</small><strong>${todayReads == null ? "—" : formatBytes(todayReads)}</strong></span>` : "",
+    supports(snapshot, "disk.throughput") ? `<span><small>${tr("Writes today", "今日写入")}</small><strong>${todayWrites == null ? "—" : formatBytes(todayWrites)}</strong></span>` : "",
     !supports(snapshot, "disk.throughput") && supports(snapshot, "disk.capacity") ? `<span><small>${tr("Disk available", "磁盘可用")}</small><strong>${formatBytes(disk?.free_bytes)}</strong></span>` : "",
   ].filter(Boolean).join("");
-  const footerFacts = [
+  const healthFacts = [
+    diagnostic ? `${diagnostic.title} · ${diagnostic.current}` : "",
     supports(snapshot, "thermal.pressure") ? `${tr("Thermal", "温度压力")} ${escapeHtml(thermal(snapshot?.thermal?.state ?? "unavailable"))}` : "",
     supports(snapshot, "disk.health") ? `${tr("Disk", "磁盘")} ${escapeHtml(diskHealth(disk?.health?.state ?? "unknown"))}` : "",
     dominantApp ? `${tr("Top I/O", "主要 I/O")} ${escapeHtml(appLabel(dominantApp.id, dominantApp.label))}` : "",
   ].filter(Boolean).join(" · ") || tr("Platform capabilities detected", "已按平台能力检测");
-  return `<button class="resource-card resource-card--system resource-card--${escapeHtml(resource.status)}" type="button" data-resource-id="system"><div class="resource-card__heading"><span class="resource-card__identity"><span class="resource-card__state source-state source-state--${escapeHtml(resource.status)}" aria-hidden="true"></span><p>${escapeHtml(platformLabel(snapshot?.platform))}</p></span><span class="pill pill--${escapeHtml(resource.status)}">${escapeHtml(overallStatus(resource.status))}</span></div><div class="system-overview__metrics">${metrics}</div><div class="network-overview__footer system-overview__footer"><span>${footerFacts}</span><span>${tr("Details", "详情")} →</span></div></button>`;
+  const todayState = today?.error
+    ? tr("Today's history unavailable", "今日历史暂不可用")
+    : today?.loading && !today.ready ? tr("Loading today's totals", "正在汇总今日数据") : currentIo;
+  return `<button class="resource-card resource-card--system resource-card--${escapeHtml(resource.status)}" type="button" data-resource-id="system"><div class="resource-card__heading"><span class="resource-card__identity"><span class="resource-card__state source-state source-state--${escapeHtml(resource.status)}" aria-hidden="true"></span><p>${escapeHtml(platformLabel(snapshot?.platform))}</p></span><span class="pill pill--${escapeHtml(resource.status)}">${escapeHtml(overallStatus(resource.status))}</span></div><div class="system-overview__metrics">${metrics}</div><div class="network-overview__footer system-overview__footer"><span>${escapeHtml(todayState)}</span><span>${healthFacts}</span><span>${tr("Details", "详情")} →</span></div></button>`;
 }
 
 function metric(points: Record<string, unknown>[], name: string): Record<string, unknown>[] {
@@ -175,7 +276,7 @@ function lineChart(
 }
 
 function rangeLabel(range: SystemTimeRange): string {
-  return ({ "1h": tr("Last hour", "近 1 小时"), "24h": tr("Last 24 hours", "近 24 小时"), "7d": tr("Last 7 days", "近 7 天"), "30d": tr("Last 30 days", "近 30 天") })[range];
+  return ({ today: tr("Today", "今日"), "1h": tr("Last hour", "近 1 小时"), "24h": tr("Last 24 hours", "近 24 小时"), "7d": tr("Last 7 days", "近 7 天"), "30d": tr("Last 30 days", "近 30 天") })[range];
 }
 
 function controls(snapshot: SystemAnalysisSnapshot): string {
@@ -199,6 +300,11 @@ export function renderSystemResourcePage(
   const hasDiskHealth = supports(snapshot, "disk.health");
   const hasProcessAttribution = supports(snapshot, "disk.process-attribution");
   const hasThermal = supports(snapshot, "thermal.pressure");
+  const diagnostics = systemDiagnostics(snapshot);
+  const diagnosticRows = diagnostics.map((item) => `<li data-system-reason="${escapeHtml(item.code)}"><span class="system-diagnostic__state system-diagnostic__state--${item.level}" aria-hidden="true"></span><div><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.basis)}</small><small><b>${tr("Next", "建议")}</b> · ${escapeHtml(item.action)}</small></div><span>${escapeHtml(item.current)}</span></li>`).join("");
+  const diagnosticPanel = diagnostics.length
+    ? `<section class="system-diagnostics system-diagnostics--${escapeHtml(resource.status)}"><div class="system-diagnostics__heading"><p>${tr("WHY THIS NEEDS ATTENTION", "为什么需要关注")}</p><strong>${diagnostics.length === 1 ? escapeHtml(diagnostics[0].title) : tr(`${diagnostics.length} active conditions`, `${diagnostics.length} 项当前异常`)}</strong></div><ul>${diagnosticRows}</ul></section>`
+    : "";
   const cpuPoints = metric(analysis.data.gaugePoints, "system.cpu.percent");
   const readPoints = metric(analysis.data.counterPoints, "system.disk.read_bytes");
   const writePoints = metric(analysis.data.counterPoints, "system.disk.write_bytes");
@@ -251,5 +357,5 @@ export function renderSystemResourcePage(
   const currentAppRows = currentApps.map((app) => `<li><span>${escapeHtml(appLabel(app.id, app.label))}<small>${new Intl.NumberFormat().format(app.process_count)} ${tr("processes", "个进程")}</small></span><strong>${tr("Read", "读")} ${formatBytes(app.read_bytes_per_second)}/s · ${tr("Write", "写")} ${formatBytes(app.write_bytes_per_second)}/s</strong></li>`).join("");
   const rangeAppRows = appTotals.map((app) => `<li><span>${escapeHtml(appLabel(app.id, app.label))}</span><strong>${tr("Read", "读")} ${formatBytes(app.readBytes)} · ${tr("Write", "写")} ${formatBytes(app.writeBytes)}</strong></li>`).join("");
   const attributionPanel = hasProcessAttribution ? `<article class="detail-panel system-attribution"><div class="detail-panel__heading"><h3>${tr("Disk I/O by App", "按 App 的磁盘 I/O")}</h3><span>${tr("best-effort attribution", "尽力归因")}</span></div><div class="system-attribution__meta"><span>${tr("Current coverage", "当前覆盖率")} <strong>${ratio(disk?.attribution?.coverage_ratio)}</strong></span><span>${rangeLabel(analysis.range)} ${tr("coverage", "覆盖率")} <strong>${ratio(rangeCoverage)}</strong></span><span>${tr("Observed", "已观察")} <strong>${new Intl.NumberFormat().format(disk?.attribution?.observed_processes ?? 0)}</strong> ${tr("processes", "个进程")}</span></div><div class="system-attribution__columns"><section><h4>${tr("Current rate", "当前速率")}</h4><ul class="traffic-list system-app-list">${currentAppRows || `<li class="system-app-list__empty">${tr("Establishing the first process-counter interval.", "正在建立首个进程计数区间。")}</li>`}</ul></section><section><h4>${rangeLabel(analysis.range)}</h4><ul class="traffic-list system-app-list">${rangeAppRows || `<li class="system-app-list__empty">${tr("History appears after the next low-frequency rollup.", "下一个低频汇总完成后显示历史。")}</li>`}</ul></section></div><p class="system-attribution__note">${tr("Process counters can miss short-lived processes or inaccessible system services, and they are not expected to equal physical-device counters exactly.", "进程计数可能遗漏短命进程或无权读取的系统服务，不应预期与物理设备计数完全相等。")}</p></article>` : "";
-  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("LOCAL SYSTEM", "本机系统")}</p><h2>${escapeHtml(platformLabel(snapshot?.platform))}</h2></div><span class="pill pill--${escapeHtml(resource.status)}">${escapeHtml(overallStatus(resource.status))}</span></div><div class="system-current-grid">${currentCards}</div>${controls(analysis)}<section class="system-range-summary">${rangeSummary}</section>${historyState}${secondary}${attributionPanel}<p class="system-privacy">${tr("Host counters and bounded App I/O labels are sampled in memory. Completed 15-minute buckets are persisted; older history is compacted to hourly and daily resolution. No file names, paths, process arguments, window titles, or user content are recorded. Supported disk health checks run every six hours.", "整机计数与有界 App I/O 标签先在内存采样，仅将完成的 15 分钟桶落盘；较旧历史会压缩为小时和每日粒度。不记录文件名、路径、进程参数、窗口标题或用户内容；平台支持时，磁盘健康每 6 小时读取一次。")}</p></section>`;
+  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("LOCAL SYSTEM", "本机系统")}</p><h2>${escapeHtml(platformLabel(snapshot?.platform))}</h2></div><span class="pill pill--${escapeHtml(resource.status)}">${escapeHtml(overallStatus(resource.status))}</span></div>${diagnosticPanel}<div class="system-current-grid">${currentCards}</div>${controls(analysis)}<section class="system-range-summary">${rangeSummary}</section>${historyState}${secondary}${attributionPanel}<p class="system-privacy">${tr("Host counters and bounded App I/O labels are sampled in memory. Completed 15-minute buckets are persisted; older history is compacted to hourly and daily resolution. No file names, paths, process arguments, window titles, or user content are recorded. Supported disk health checks run every six hours.", "整机计数与有界 App I/O 标签先在内存采样，仅将完成的 15 分钟桶落盘；较旧历史会压缩为小时和每日粒度。不记录文件名、路径、进程参数、窗口标题或用户内容；平台支持时，磁盘健康每 6 小时读取一次。")}</p></section>`;
 }

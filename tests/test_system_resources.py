@@ -283,29 +283,58 @@ class SystemResourceCollectorTests(unittest.TestCase):
         self.assertEqual(result.snapshot["capabilities"], list(LimitedBackend.capabilities))
         self.assertEqual(result.snapshot["quality"], "ok")
 
-    def test_native_pressure_capacity_and_thermal_states_drive_health(self) -> None:
+    def test_capacity_is_immediate_while_transient_pressure_requires_confirmation(self) -> None:
         collector = SystemResourceCollector(FakeBackend([
             reading(0, pressure="warning"),
-            reading(5, pressure="critical"),
-            reading(10, pressure="normal", free=8, thermal="nominal"),
-            reading(15, pressure="normal", free=50, thermal="nominal"),
+            reading(5, pressure="normal"),
+            reading(10, pressure="warning"),
+            reading(15, pressure="warning"),
+            reading(20, pressure="warning"),
+            reading(25, pressure="normal", free=8, thermal="nominal"),
+            reading(30, pressure="normal", free=50, thermal="nominal"),
+            reading(35, pressure="normal", free=50, thermal="nominal"),
         ]), persist_interval_seconds=300)
 
-        warning = collector.collect(context(0)).snapshot
-        critical_memory = collector.collect(context(5)).snapshot
-        warning_disk = collector.collect(context(10)).snapshot
-        recovered = collector.collect(context(15)).snapshot
+        transient = collector.collect(context(0)).snapshot
+        normal = collector.collect(context(5)).snapshot
+        first = collector.collect(context(10)).snapshot
+        second = collector.collect(context(15)).snapshot
+        confirmed = collector.collect(context(20)).snapshot
+        warning_disk = collector.collect(context(25)).snapshot
+        recovery_pending = collector.collect(context(30)).snapshot
+        recovered = collector.collect(context(35)).snapshot
 
-        self.assertEqual(warning["status"], "warning")
-        self.assertIn("memory_pressure_warning", warning["reasons"])
-        self.assertEqual(critical_memory["status"], "critical")
+        self.assertEqual(transient["status"], "healthy")
+        self.assertEqual(transient["health_confirmation"]["consecutive"], 1)
+        self.assertEqual(normal["status"], "healthy")
+        self.assertEqual((first["status"], second["status"]), ("healthy", "healthy"))
+        self.assertEqual(confirmed["status"], "warning")
+        self.assertIn("memory_pressure_warning", confirmed["reasons"])
         self.assertEqual(warning_disk["status"], "warning")
         self.assertIn("disk_space_low", warning_disk["reasons"])
+        self.assertEqual(recovery_pending["status"], "warning")
         self.assertEqual(recovered["status"], "healthy")
         self.assertEqual(
             [item["type"] for item in collector.drain_transitions()],
-            ["alert", "escalated", "deescalated", "recovered"],
+            ["alert", "recovered"],
         )
+
+    def test_single_low_disk_sample_is_immediate_but_recovery_is_confirmed(self) -> None:
+        collector = SystemResourceCollector(FakeBackend([
+            reading(0, free=8),
+            reading(5, free=50),
+            reading(10, free=50),
+        ]))
+
+        low = collector.collect(context(0)).snapshot
+        pending = collector.collect(context(5)).snapshot
+        recovered = collector.collect(context(10)).snapshot
+
+        self.assertEqual(low["status"], "warning")
+        self.assertEqual(low["reasons"], ["disk_space_low"])
+        self.assertEqual(pending["status"], "warning")
+        self.assertEqual(pending["health_confirmation"]["candidate_status"], "healthy")
+        self.assertEqual(recovered["status"], "healthy")
 
     def test_missing_physical_io_is_partial_data_not_a_resource_alert(self) -> None:
         collector = SystemResourceCollector(FakeBackend([reading(0, io_available=False)]))
@@ -317,15 +346,23 @@ class SystemResourceCollectorTests(unittest.TestCase):
         self.assertEqual(result.snapshot["quality"], "partial")
         self.assertEqual(collector.drain_transitions(), ())
 
-    def test_disk_health_warning_contributes_to_host_health(self) -> None:
+    def test_disk_health_warning_requires_confirmation_before_host_attention(self) -> None:
         health = classify_disk_health(
             DiskHealthEvidence(nand_status="Ready", write_retries=2),
             "2026-08-11T12:00:00+08:00",
         )
-        collector = SystemResourceCollector(FakeBackend([reading(0, disk_health=health)]))
+        collector = SystemResourceCollector(FakeBackend([
+            reading(0, disk_health=health),
+            reading(5, disk_health=health),
+            reading(10, disk_health=health),
+        ]))
 
-        result = collector.collect(context(0))
+        first = collector.collect(context(0))
+        second = collector.collect(context(5))
+        result = collector.collect(context(10))
 
+        self.assertEqual(first.snapshot["status"], "healthy")
+        self.assertEqual(second.snapshot["status"], "healthy")
         self.assertEqual(result.snapshot["status"], "warning")
         self.assertEqual(result.snapshot["disk"]["health"]["state"], "warning")
         self.assertIn("disk_health_warning", result.snapshot["reasons"])

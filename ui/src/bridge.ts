@@ -25,6 +25,29 @@ export interface ResourceProjection {
   online_source_count: number;
 }
 
+export interface CollectorProjection {
+  capability: {
+    id: string;
+    source_id: string;
+    source_kind: string;
+    resource_id: string;
+    metrics: string[];
+  };
+  status: string;
+  point_count: number;
+  error_kind?: string;
+}
+
+export interface NetworkDiagnosticsProjection {
+  traffic_alert?: {
+    level?: string;
+    windows?: Record<string, Record<string, number>>;
+    window_seconds?: Record<string, number>;
+    threshold_bytes?: Record<string, number>;
+  };
+  daily_usage_guards?: Array<Record<string, unknown>>;
+}
+
 export interface FacilityMetric {
   id: string;
   kind: "gauge" | "counter" | "state" | string;
@@ -119,6 +142,8 @@ export interface InfraProjection {
   overall: { status: OverallStatus; active_alerts: number };
   resources: ResourceProjection[];
   sources: SourceProjection[];
+  collectors?: CollectorProjection[];
+  network_diagnostics?: NetworkDiagnosticsProjection;
   ai_usage?: Record<string, unknown>;
   facilities?: FacilitiesProjection;
   upstream_status?: UpstreamStatusProjection;

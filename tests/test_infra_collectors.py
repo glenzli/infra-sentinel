@@ -25,7 +25,7 @@ def point_identity(point: MetricPoint) -> str:
 
 
 class CollectorRegistryTests(unittest.TestCase):
-    def test_one_failed_virtual_collector_does_not_block_other_collectors(self) -> None:
+    def test_one_failed_virtual_collector_is_isolated_and_waits_for_confirmation(self) -> None:
         good_capability = CollectorCapability(
             id="test.good", source_id="test:good", source_kind="test", resource_id="test",
             metrics=("test.counter",),
@@ -46,10 +46,41 @@ class CollectorRegistryTests(unittest.TestCase):
 
         runs = registry.collect(CollectorContext({}, {}))
 
-        self.assertEqual([run.status for run in runs], ["ok", "error"])
-        self.assertEqual(runs[1].error_kind, "RuntimeError")
+        self.assertEqual([run.status for run in runs], ["ok", "waiting"])
+        self.assertIsNone(runs[1].error_kind)
         self.assertEqual(list(collected_points(runs)), [point])
         self.assertEqual([item["id"] for item in registry.capabilities()], ["test.good", "test.bad"])
+
+    def test_collector_failure_requires_three_attempts_and_recovery_requires_two(self) -> None:
+        capability = CollectorCapability(
+            id="test.flaky", source_id="test:flaky", source_kind="test", resource_id="test",
+            metrics=("test.counter",),
+        )
+        point = MetricPoint(
+            observed_at="2026-08-08T12:00:00+08:00", observed_epoch=1.0,
+            metric="test.counter", instrument="counter", value=42, unit="items",
+            source_id="test:flaky", resource_id="test",
+        )
+        outcomes: list[object] = [
+            (point,), RuntimeError("one"), RuntimeError("two"), RuntimeError("three"),
+            (point,), (point,),
+        ]
+
+        def collect(_: CollectorContext):
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        registry = CollectorRegistry((CallableCollector(capability, collect),))
+        states = [registry.collect(CollectorContext({}, {}))[0] for _ in range(6)]
+
+        self.assertEqual([run.status for run in states], ["ok", "ok", "ok", "error", "error", "ok"])
+        self.assertEqual(states[1].snapshot, states[0].snapshot)
+        self.assertEqual(states[1].points, ())
+        self.assertEqual(states[3].error_kind, "RuntimeError")
+        self.assertEqual(states[4].points, ())
+        self.assertEqual(states[5].points, (point,))
 
     def test_network_collectors_match_the_existing_network_metric_fixture(self) -> None:
         local = {
@@ -124,7 +155,7 @@ class CollectorRegistryTests(unittest.TestCase):
         self.assertEqual(remote_points(repeated), 0)
         self.assertEqual(remote_points(advanced), 2)
 
-    def test_failed_remote_source_reports_error_without_replaying_last_sample(self) -> None:
+    def test_failed_remote_source_waits_for_confirmation_without_replaying_last_sample(self) -> None:
         remote = {"servers": [{
             "id": "primary",
             "vps": {"status": "ok", "last_sample": {
@@ -145,7 +176,7 @@ class CollectorRegistryTests(unittest.TestCase):
 
         xray_failed = next(run for run in failed if run.capability.source_id == "xray:primary")
         xray_recovered = next(run for run in recovered_without_new_sample if run.capability.source_id == "xray:primary")
-        self.assertEqual(xray_failed.status, "error")
+        self.assertEqual(xray_failed.status, "waiting")
         self.assertEqual(xray_failed.points, ())
         self.assertEqual(xray_recovered.status, "ok")
         self.assertEqual(xray_recovered.points, ())

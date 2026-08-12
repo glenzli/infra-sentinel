@@ -1,5 +1,6 @@
 import { ResourceProjection, UpstreamProviderProjection, UpstreamStatusProjection } from "./bridge";
 import { tr } from "./i18n";
+import { AttentionDiagnostic, renderAttentionDiagnostics } from "./attention_diagnostics";
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" })[char] ?? char);
@@ -57,8 +58,54 @@ function providerCard(provider: UpstreamProviderProjection): string {
   </article>`;
 }
 
+function upstreamDiagnostics(providers: UpstreamProviderProjection[]): AttentionDiagnostic[] {
+  const diagnostics: AttentionDiagnostic[] = [];
+  for (const provider of providers) {
+    if (!provider.available || provider.status === "unknown") {
+      diagnostics.push({
+        id: `read-${provider.id}`,
+        level: "degraded",
+        subject: provider.label,
+        title: tr("Official status could not be read", "无法读取官方状态"),
+        current: provider.error_kind ?? tr("no current provider snapshot", "当前没有供应商快照"),
+        basis: tr("This is a data-coverage issue and is not classified as a provider outage.", "这是数据覆盖问题，不会被判定为供应商故障。"),
+        action: tr("Open the official status page or wait for the next five-minute read.", "打开官方状态页确认，或等待下一次 5 分钟读取。"),
+      });
+      continue;
+    }
+    for (const active of provider.incidents.filter((item) => item.level === "warning" || item.level === "critical")) {
+      diagnostics.push({
+        id: `incident-${provider.id}-${active.id}`,
+        level: active.level === "critical" ? "critical" : "warning",
+        subject: provider.label,
+        title: active.name,
+        current: tr(`incident status ${active.status}${active.updated_at ? ` · updated ${timestamp(active.updated_at)}` : ""}`, `事件状态 ${active.status}${active.updated_at ? ` · 更新于 ${timestamp(active.updated_at)}` : ""}`),
+        basis: tr(`official impact ${active.impact}`, `官方影响级别 ${active.impact}`),
+        action: tr("Check the affected public components below, then open the official status page for updates.", "检查下方受影响的公开组件，并打开官方状态页查看进展。"),
+      });
+    }
+    const affected = provider.components.filter((component) => component.level === "warning" || component.level === "critical");
+    if (!provider.incidents.length && affected.length) {
+      diagnostics.push({
+        id: `components-${provider.id}`,
+        level: affected.some((item) => item.level === "critical") ? "critical" : "warning",
+        subject: provider.label,
+        title: tr("Public components report degraded service", "公开组件报告服务异常"),
+        current: affected.slice(0, 4).map((item) => item.name).join(" · "),
+        basis: tr(`${affected.length} affected public status item(s)`, `${affected.length} 个公开状态项受影响`),
+        action: tr("Open the official status page to confirm scope and updates.", "打开官方状态页确认影响范围与更新。"),
+      });
+    }
+  }
+  return diagnostics.slice(0, 8);
+}
+
 export function renderUpstreamStatusResourcePage(resource: ResourceProjection, snapshot?: UpstreamStatusProjection): string {
   const providers = snapshot?.items ?? [];
+  const diagnostics = renderAttentionDiagnostics(
+    upstreamDiagnostics(providers),
+    snapshot?.attention ? tr("Why upstream needs attention", "为什么上游需要关注") : tr("Status coverage notes", "状态覆盖说明"),
+  );
   const summary = snapshot
     ? tr(
       `${snapshot.healthy} operational · ${snapshot.attention} need attention · ${snapshot.unknown} unknown`,
@@ -67,6 +114,7 @@ export function renderUpstreamStatusResourcePage(resource: ResourceProjection, s
     : tr("Waiting for the first official status read", "等待首次读取官方状态");
   return `<section class="resource-section resource-section--detail upstream-status-page">
     <div class="section-heading"><div><p class="eyebrow">UPSTREAM SERVICES</p><h2>${tr("Upstream services", "上游服务状态")}</h2></div><span class="pill pill--${escapeHtml(resource.status)}">${escapeHtml(statusLabel(resource.status))}</span></div>
+    ${diagnostics}
     <div class="upstream-status-summary"><strong>${escapeHtml(summary)}</strong><span>${tr("Public provider status is diagnostic context, not a guarantee for a specific account, model, or region.", "官方状态用于辅助诊断，不代表特定账户、模型或地区一定可用。")}</span></div>
     <div class="upstream-provider-grid">${providers.map(providerCard).join("") || `<p class="empty">${tr("No upstream provider status is available.", "暂无上游服务状态。")}</p>`}</div>
     <p class="panel-footnote">${tr("Read-only checks run every five minutes. A read failure is shown as unknown and never treated as a provider outage.", "每 5 分钟进行一次只读检测；读取失败只显示为未知，不会被判定为供应商故障。")}</p>

@@ -197,6 +197,11 @@ class AlertEngineTests(unittest.TestCase):
     def test_alerts_use_exact_mihomo_total_windows(self) -> None:
         config = make_config(PROJECT_ROOT / "state")
         engine = AlertEngine()
+        self.assertIsNone(engine.evaluate(
+            {"up_bytes": 101, "down_bytes": 0},
+            {"up_bytes": 101, "down_bytes": 0},
+            config,
+        ))
         self.assertEqual(
             engine.evaluate(
                 {"up_bytes": 101, "down_bytes": 0},
@@ -205,6 +210,11 @@ class AlertEngineTests(unittest.TestCase):
             ),
             ("alert", "warning"),
         )
+        self.assertIsNone(engine.evaluate(
+            {"up_bytes": 700, "down_bytes": 400},
+            {"up_bytes": 700, "down_bytes": 400},
+            config,
+        ))
         self.assertEqual(
             engine.evaluate(
                 {"up_bytes": 700, "down_bytes": 400},
@@ -213,6 +223,11 @@ class AlertEngineTests(unittest.TestCase):
             ),
             ("alert", "critical"),
         )
+        self.assertIsNone(engine.evaluate(
+            {"up_bytes": 0, "down_bytes": 0},
+            {"up_bytes": 0, "down_bytes": 0},
+            config,
+        ))
         self.assertEqual(
             engine.evaluate(
                 {"up_bytes": 0, "down_bytes": 0},
@@ -221,6 +236,22 @@ class AlertEngineTests(unittest.TestCase):
             ),
             ("recovered", "none"),
         )
+
+    def test_one_sample_traffic_spike_does_not_change_public_alert_level(self) -> None:
+        config = make_config(PROJECT_ROOT / "state")
+        engine = AlertEngine()
+
+        self.assertIsNone(engine.evaluate(
+            {"up_bytes": 101, "down_bytes": 0},
+            {"up_bytes": 101, "down_bytes": 0},
+            config,
+        ))
+        self.assertIsNone(engine.evaluate(
+            {"up_bytes": 0, "down_bytes": 0},
+            {"up_bytes": 0, "down_bytes": 0},
+            config,
+        ))
+        self.assertEqual(engine.level, "none")
 
     def test_window_totals_sum_kernel_directions(self) -> None:
         samples = [sample(100, 10, 20), sample(200, 30, 40)]
@@ -309,6 +340,42 @@ class VpsTrackerTests(unittest.TestCase):
                 (forced["last_sample"]["in_bytes"], forced["last_sample"]["out_bytes"]),
                 (10, 20),
             )
+
+    def test_vps_poll_requires_two_failures_and_two_successes_to_change_health(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = time.time()
+            values: list[object] = [
+                (1_000, 2_000), RuntimeError("ssh 1"), RuntimeError("ssh 2"),
+                (1_100, 2_100), (1_200, 2_200),
+            ]
+
+            def reader(config: VpsConfig) -> dict[str, object]:
+                value = values.pop(0)
+                if isinstance(value, Exception):
+                    raise value
+                incoming, outgoing = value
+                return {
+                    "timestamp": "2026-08-12T12:00:00+08:00", "epoch": base,
+                    "interface": "eth0", "in_bytes": incoming, "out_bytes": outgoing,
+                    "in_packets": 10, "out_packets": 20,
+                }
+
+            monitor = VpsMonitor(
+                VpsConfig(True, "sentinel-vps", "auto", 300, 1),
+                Path(temporary), StateConfig(1024 * 1024, 1), reader=reader,
+            )
+            first = monitor.maybe_poll(base, force=True)
+            failed_once = monitor.maybe_poll(base + 1, force=True)
+            failed = monitor.maybe_poll(base + 2, force=True)
+            recovery_pending = monitor.maybe_poll(base + 3, force=True)
+            recovered = monitor.maybe_poll(base + 4, force=True)
+
+            self.assertEqual(first["status"], "baseline")
+            self.assertEqual(failed_once["status"], "baseline")
+            self.assertEqual(failed_once["confirmation"]["consecutive"], 1)
+            self.assertEqual(failed["status"], "error")
+            self.assertEqual(recovery_pending["status"], "error")
+            self.assertEqual(recovered["status"], "ok")
 
 
 class TrafficEstimationTests(unittest.TestCase):

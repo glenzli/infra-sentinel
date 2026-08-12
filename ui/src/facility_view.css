@@ -215,6 +215,18 @@
   margin: 6px 0 0 17px;
 }
 
+.facility-instance-page > .attention-diagnostics {
+  margin: 20px 0 8px;
+}
+
+.facility-instance-page > .attention-diagnostics > header {
+  padding: 13px 16px;
+}
+
+.facility-instance-page > .attention-diagnostics .attention-diagnostic {
+  padding: 17px 18px;
+}
+
 .facility-detail__identity {
   align-items: center;
   display: flex;

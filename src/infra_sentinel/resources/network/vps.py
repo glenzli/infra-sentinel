@@ -10,6 +10,7 @@ import re
 import time
 from typing import Any, Callable, Iterable
 
+from infra_sentinel.core.status_stability import StatusDecision, StatusStabilizer
 from infra_sentinel.resources.network.remote_ssh import run_read_only_script
 
 
@@ -200,6 +201,22 @@ class VpsMonitor:
         self.tracker = self._load_tracker()
         self.next_poll_at = 0.0
         self.public_state = self._initial_public_state()
+        self._status_stability = StatusStabilizer(
+            str(self.public_state["status"]),
+            {"disabled": 0, "waiting": 0, "baseline": 0, "ok": 0, "error": 1},
+            worsen_after=2,
+            recover_after=2,
+        )
+
+    @staticmethod
+    def _confirmation(decision: StatusDecision) -> dict[str, Any] | None:
+        if not decision.pending_status:
+            return None
+        return {
+            "candidate_status": decision.pending_status,
+            "consecutive": decision.pending_count,
+            "required": decision.required_count,
+        }
 
     def _load_tracker(self) -> VpsCounterTracker:
         path = self.state_dir / "vps_counter_baseline.json"
@@ -296,6 +313,7 @@ class VpsMonitor:
                 "billing_mode": self.config.billing_mode,
                 "cycle": self._cycle(current),
             }
+            self._status_stability.observe("disabled", immediate=True)
             return self.public_state
         if force or current >= self.next_poll_at:
             self.next_poll_at = current + self.config.poll_seconds
@@ -305,9 +323,14 @@ class VpsMonitor:
                 sample = self.tracker.apply(raw)
                 self._save_tracker()  # A crash may lose an interval, never replay one.
                 self._append_sample(sample)
+                candidate_status = "baseline" if was_uninitialized else "ok"
+                decision = self._status_stability.observe(
+                    candidate_status,
+                    immediate=self._status_stability.status in {"waiting", "baseline"},
+                )
                 self.public_state = {
                     "enabled": True,
-                    "status": "baseline" if was_uninitialized else "ok",
+                    "status": decision.status,
                     "server_id": self.config.server_id,
                     "label": self.config.label,
                     "ssh_host": self.config.ssh_host,
@@ -317,13 +340,24 @@ class VpsMonitor:
                     "last_sample": sample,
                     "cycle": self._cycle(float(sample["epoch"])),
                 }
+                confirmation = self._confirmation(decision)
+                if confirmation:
+                    self.public_state["confirmation"] = confirmation
             except Exception as exc:
                 previous = dict(self.public_state)
+                decision = self._status_stability.observe("error")
                 previous.update({
                     "enabled": True,
-                    "status": "error",
-                    "error": str(exc)[:500],
+                    "status": decision.status,
                     "cycle": self._cycle(current),
                 })
+                previous.pop("confirmation", None)
+                if decision.status == "error":
+                    previous["error"] = str(exc)[:500]
+                else:
+                    previous.pop("error", None)
+                confirmation = self._confirmation(decision)
+                if confirmation:
+                    previous["confirmation"] = confirmation
                 self.public_state = previous
         return self.public_state

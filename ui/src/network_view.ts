@@ -4,6 +4,7 @@ import { asArray, asRecord, formatBytes, number } from "./format";
 import { tr } from "./i18n";
 import { DailyBarBucket, DailyBarSeries, renderDailyBarChart } from "./daily_bar_chart";
 import { NetworkAnalysisData, NetworkAnalysisSnapshot, NetworkTimeRange, NetworkViewMode, networkPathTotals } from "./network_analysis";
+import { AttentionDiagnostic, renderAttentionDiagnostics } from "./attention_diagnostics";
 
 const TRAFFIC_COLORS = ["#3178dc", "#2f9461", "#2e9298", "#9468c9", "#c77b2c"];
 
@@ -69,6 +70,88 @@ function dailyUsageThresholds(usage: Record<string, unknown>): string {
     `notice ${formatBytes(usage.warning_bytes)} · critical ${formatBytes(usage.critical_bytes)}`,
     `提醒 ${formatBytes(usage.warning_bytes)} · 严重 ${formatBytes(usage.critical_bytes)}`,
   );
+}
+
+function minutes(value: unknown): string {
+  const seconds = number(value);
+  return seconds >= 60 && seconds % 60 === 0
+    ? tr(`${seconds / 60} min`, `${seconds / 60} 分钟`)
+    : tr(`${seconds} sec`, `${seconds} 秒`);
+}
+
+function networkDiagnostics(
+  projection: AgentProjection,
+  resource: ResourceProjection,
+  sources: SourceProjection[],
+): AttentionDiagnostic[] {
+  const diagnostics: AttentionDiagnostic[] = [];
+  const projected = projection.infra.network_diagnostics;
+  const traffic = projected?.traffic_alert;
+  const trafficLevel = String(traffic?.level ?? "none");
+  if (trafficLevel === "warning" || trafficLevel === "critical") {
+    const windows = traffic?.windows ?? {};
+    const values = windows[trafficLevel] ?? {};
+    const up = number(values.up_bytes);
+    const down = number(values.down_bytes);
+    const threshold = number(traffic?.threshold_bytes?.[trafficLevel]);
+    const duration = minutes(traffic?.window_seconds?.[trafficLevel]);
+    const critical = trafficLevel === "critical";
+    diagnostics.push({
+      id: `traffic-${trafficLevel}`,
+      level: trafficLevel,
+      subject: tr("Realtime traffic", "实时流量"),
+      title: critical ? tr("Combined traffic crossed the critical line", "合计流量超过严重线") : tr("One direction crossed the notice line", "单向流量超过提醒线"),
+      current: critical
+        ? tr(`${duration} combined ${formatBytes(up + down)} (up ${formatBytes(up)} · down ${formatBytes(down)})`, `${duration}合计 ${formatBytes(up + down)}（上行 ${formatBytes(up)} · 下行 ${formatBytes(down)}）`)
+        : tr(`${duration}: up ${formatBytes(up)} · down ${formatBytes(down)}`, `${duration}：上行 ${formatBytes(up)} · 下行 ${formatBytes(down)}`),
+      basis: critical
+        ? tr(`combined > ${formatBytes(threshold)}`, `合计 > ${formatBytes(threshold)}`)
+        : tr(`either direction > ${formatBytes(threshold)}`, `任一方向 > ${formatBytes(threshold)}`),
+      action: tr("Inspect current attribution and active transfers; the alert clears automatically after the window returns below the line.", "查看当前流量归因与活跃传输；窗口回落到阈值内后会自动恢复。"),
+    });
+  }
+
+  const guards = projected?.daily_usage_guards ?? asArray(asRecord(projection.vps).daily_usage_guards);
+  for (const guard of guards) {
+    const level = String(guard.level ?? "none");
+    if (level !== "warning" && level !== "critical") continue;
+    diagnostics.push({
+      id: `daily-${String(guard.source_id ?? guard.label ?? diagnostics.length)}`,
+      level,
+      subject: String(guard.label ?? guard.source_id ?? "VPS"),
+      title: level === "critical" ? tr("Today's billable traffic crossed the critical line", "今日计费流量超过严重线") : tr("Today's billable traffic crossed the notice line", "今日计费流量超过提醒线"),
+      current: tr(`today ${formatBytes(guard.usage_bytes)}`, `今日 ${formatBytes(guard.usage_bytes)}`),
+      basis: dailyUsageThresholds(guard),
+      action: tr("Check this host's traffic composition and billing direction; the daily state resets at the next local day.", "检查该主机的流量构成与计费方向；每日状态会在下一个本地自然日重置。"),
+    });
+  }
+
+  const collectors = projection.infra.collectors ?? [];
+  const collectorBySource = new Map(collectors.map((collector) => [collector.capability.source_id, collector]));
+  for (const source of sources) {
+    if (!source.enabled || ["ok", "waiting", "baseline", "disabled"].includes(source.status)) continue;
+    const collector = collectorBySource.get(source.id);
+    diagnostics.push({
+      id: `source-${source.id}`,
+      level: "degraded",
+      subject: source.label,
+      title: tr("Collector is not returning usable data", "采集器未返回可用数据"),
+      current: tr(`status ${source.status}${collector?.error_kind ? ` · ${collector.error_kind}` : ""}`, `状态 ${source.status}${collector?.error_kind ? ` · ${collector.error_kind}` : ""}`),
+      basis: tr("Three consecutive collection failures are required before this source is marked unavailable.", "连续 3 次采集失败后，才会将该来源标记为不可用。"),
+      action: tr("Check the source process and its configured connection; Sentinel will keep retrying automatically.", "检查来源进程及其连接配置；Sentinel 会继续自动重试。"),
+    });
+  }
+  if (!diagnostics.length && ["warning", "critical", "degraded"].includes(String(resource.status))) {
+    diagnostics.push({
+      id: "network-unresolved",
+      level: resource.status === "critical" ? "critical" : resource.status === "warning" ? "warning" : "degraded",
+      subject: tr("Network", "网络"),
+      title: tr("The current status has no matching diagnostic evidence", "当前状态缺少对应的诊断证据"),
+      current: tr(`resource status ${resource.status}`, `资源状态 ${resource.status}`),
+      action: tr("Refresh once; if this remains, inspect collector sources below.", "刷新一次；若仍存在，请检查下方采集数据源。"),
+    });
+  }
+  return diagnostics;
 }
 
 function billingHistory(analysis: NetworkAnalysisData, remoteServers: Record<string, unknown>[], range: NetworkTimeRange): string {
@@ -259,10 +342,18 @@ export function renderNetworkDetail(projection: AgentProjection, snapshot: Netwo
 
 function sourceLabel(source: SourceProjection): string {
   const status = source.enabled ? source.status : "disabled";
-  const text = status === "ok" ? tr("online", "在线") : status === "disabled" ? tr("disabled", "已停用") : status;
+  const labels: Record<string, string> = {
+    ok: tr("online", "在线"),
+    disabled: tr("disabled", "已停用"),
+    waiting: tr("establishing baseline", "正在建立基线"),
+    baseline: tr("establishing baseline", "正在建立基线"),
+    error: tr("collection failed", "采集失败"),
+  };
+  const text = labels[status] ?? status;
   return `<li class="source-row"><span class="source-state source-state--${escapeHtml(status)}" aria-hidden="true"></span><span class="source-main"><strong>${escapeHtml(source.label)}</strong><small>${escapeHtml(source.kind)}</small></span><span class="source-status">${escapeHtml(text)}</span></li>`;
 }
 
-export function renderNetworkResourcePage(projection: AgentProjection, _resource: ResourceProjection, sources: SourceProjection[], snapshot: NetworkAnalysisSnapshot): string {
-  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("RESOURCE DETAIL", "资源详情")}</p><h2>${tr("Network", "网络")}</h2></div></div>${renderNetworkDetail(projection, snapshot)}<article class="sources-card sources-card--footer"><div class="sources-card__heading"><h3>${tr("Collector sources", "采集数据源")}</h3><span>${sources.length}</span></div><ul>${sources.map(sourceLabel).join("") || `<li class="empty">${tr("No configured sources", "尚未配置数据源")}</li>`}</ul></article></section>`;
+export function renderNetworkResourcePage(projection: AgentProjection, resource: ResourceProjection, sources: SourceProjection[], snapshot: NetworkAnalysisSnapshot): string {
+  const diagnostics = renderAttentionDiagnostics(networkDiagnostics(projection, resource, sources));
+  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("RESOURCE DETAIL", "资源详情")}</p><h2>${tr("Network", "网络")}</h2></div></div>${diagnostics}${renderNetworkDetail(projection, snapshot)}<article class="sources-card sources-card--footer"><div class="sources-card__heading"><h3>${tr("Collector sources", "采集数据源")}</h3><span>${sources.length}</span></div><ul>${sources.map(sourceLabel).join("") || `<li class="empty">${tr("No configured sources", "尚未配置数据源")}</li>`}</ul></article></section>`;
 }

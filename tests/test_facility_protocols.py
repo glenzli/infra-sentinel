@@ -17,6 +17,7 @@ from infra_sentinel.resources.facilities.protocols import (  # noqa: E402
     DEV_MESH_OBSERVER_ADAPTER,
     DEV_MESH_OBSERVER_PROTOCOL_VERSION,
     FacilityProtocolError,
+    FacilityTransportError,
     INFER_RUNTIME_ADAPTER,
     PCP_ADAPTER,
     _read_response_frame,
@@ -109,6 +110,22 @@ def snapshot(adapter, registration_value: Registration) -> dict[str, object]:
 
 
 class FacilityProtocolTests(unittest.TestCase):
+    def test_endpoint_and_socket_failures_are_classified_as_transient_transport(self) -> None:
+        root = Path("/tmp/infra-protocol")
+        pcp = registration("pcp.runtime.observer", "pcp")
+        selected = PCP_ADAPTER.select(pcp)
+        self.assertIsNotNone(selected)
+        with patch(
+            "infra_sentinel.resources.facilities.protocols.validate_private_socket",
+            side_effect=OSError("socket unavailable"),
+        ):
+            with self.assertRaises(FacilityTransportError):
+                PCP_ADAPTER.observe(
+                    DiscoveryPaths(root, root / "registrations", root / "sockets"),
+                    pcp,
+                    selected,  # type: ignore[arg-type]
+                )
+
     def test_provider_requests_are_independent(self) -> None:
         self.assertEqual(json.loads(_request(PCP_ADAPTER.request_schema)), {
             "schema": "pcp.runtime.observer.request",

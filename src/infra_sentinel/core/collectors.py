@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from infra_sentinel.core.model import MetricPoint
+from infra_sentinel.core.status_stability import StatusStabilizer
 
 
 @dataclass(frozen=True)
@@ -107,6 +108,8 @@ class CollectorRegistry:
 
     def __init__(self, collectors: Iterable[Collector] = ()) -> None:
         self._collectors: dict[str, Collector] = {}
+        self._availability: dict[str, StatusStabilizer] = {}
+        self._last_available: dict[str, CollectorRun] = {}
         for collector in collectors:
             self.register(collector)
 
@@ -117,6 +120,12 @@ class CollectorRegistry:
         if capability.id in self._collectors:
             raise ValueError(f"duplicate collector id: {capability.id}")
         self._collectors[capability.id] = collector
+        self._availability[capability.id] = StatusStabilizer(
+            "available",
+            {"available": 0, "error": 1},
+            worsen_after=3,
+            recover_after=2,
+        )
 
     def capabilities(self) -> list[dict[str, Any]]:
         return [collector.capability.as_dict() for collector in self._collectors.values()]
@@ -124,14 +133,25 @@ class CollectorRegistry:
     def collect(self, context: CollectorContext) -> tuple[CollectorRun, ...]:
         runs: list[CollectorRun] = []
         for collector in self._collectors.values():
+            capability = collector.capability
+            availability = self._availability[capability.id]
             try:
                 result = collector.collect(context)
             except Exception as exc:
-                runs.append(CollectorRun(
-                    capability=collector.capability,
-                    status="error",
-                    error_kind=type(exc).__name__,
-                ))
+                decision = availability.observe("error")
+                if decision.status == "error":
+                    runs.append(CollectorRun(
+                        capability=capability,
+                        status="error",
+                        error_kind=type(exc).__name__,
+                    ))
+                else:
+                    previous = self._last_available.get(capability.id)
+                    runs.append(CollectorRun(
+                        capability=capability,
+                        status=previous.status if previous is not None else "waiting",
+                        snapshot=previous.snapshot if previous is not None else None,
+                    ))
                 continue
             if isinstance(result, Collection):
                 points = result.points
@@ -141,12 +161,34 @@ class CollectorRegistry:
                 points = tuple(result)
                 status = "ok"
                 snapshot = None
-            runs.append(CollectorRun(
-                capability=collector.capability,
-                status=status,
-                points=points,
-                snapshot=snapshot,
-            ))
+            if status == "error":
+                decision = availability.observe("error")
+                if decision.status == "error":
+                    run = CollectorRun(capability=capability, status="error")
+                else:
+                    previous = self._last_available.get(capability.id)
+                    run = CollectorRun(
+                        capability=capability,
+                        status=previous.status if previous is not None else "waiting",
+                        snapshot=previous.snapshot if previous is not None else None,
+                    )
+            else:
+                decision = availability.observe("available")
+                if decision.status == "error":
+                    run = CollectorRun(capability=capability, status="error")
+                else:
+                    run = CollectorRun(
+                        capability=capability,
+                        status=status,
+                        points=points,
+                        snapshot=snapshot,
+                    )
+                    self._last_available[capability.id] = CollectorRun(
+                        capability=capability,
+                        status=status,
+                        snapshot=snapshot,
+                    )
+            runs.append(run)
         return tuple(runs)
 
 

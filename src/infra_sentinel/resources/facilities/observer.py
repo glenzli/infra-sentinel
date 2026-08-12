@@ -20,8 +20,10 @@ from infra_sentinel.resources.facilities.protocols import (
     FacilityObservation,
     FacilityProtocolAdapter,
     FacilityProtocolError,
+    FacilityTransportError,
     select_adapter,
 )
+from infra_sentinel.core.status_stability import StatusDecision, StatusStabilizer
 from infra_sentinel.resources.facilities.discovery import (
     DISCOVERY_VERSION,
     DiscoveryError,
@@ -35,6 +37,15 @@ from infra_sentinel.resources.facilities.discovery import (
 
 POLL_SECONDS = 15.0
 RECONCILE_SECONDS = 5.0
+FACILITY_STATUS_RANKS = {
+    "starting": 0,
+    "stopping": 0,
+    "healthy": 0,
+    "degraded": 1,
+    "unavailable": 2,
+    "unreachable": 2,
+}
+DISCOVERY_STATUS_RANKS = {"healthy": 0, "error": 1}
 
 
 @dataclass
@@ -46,6 +57,8 @@ class _ObservedFacility:
     last_success_epoch: float | None
     next_poll_epoch: float
     error_kind: str | None = None
+    stability: StatusStabilizer | None = None
+    confirmation: StatusDecision | None = None
 
     @property
     def id(self) -> str:
@@ -71,6 +84,12 @@ class _ObservedFacility:
                 payload["console_url"] = observation.console_url
         if self.error_kind:
             payload["error_kind"] = self.error_kind
+        if self.confirmation and self.confirmation.pending_status:
+            payload["confirmation"] = {
+                "candidate_status": self.confirmation.pending_status,
+                "consecutive": self.confirmation.pending_count,
+                "required": self.confirmation.required_count,
+            }
         return payload
 
 
@@ -91,6 +110,13 @@ class FacilityMonitor:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._discovery_error: str | None = None
+        self._discovery_stability = StatusStabilizer(
+            "healthy",
+            DISCOVERY_STATUS_RANKS,
+            worsen_after=3,
+            recover_after=2,
+        )
+        self._discovery_confirmation: StatusDecision | None = None
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -166,20 +192,113 @@ class FacilityMonitor:
             raise FacilityProtocolError("selected protocol offer changed during observation")
         return current
 
+    @staticmethod
+    def _stability(prior: _ObservedFacility | None) -> StatusStabilizer:
+        if prior is not None and prior.stability is not None:
+            return prior.stability
+        initial = prior.status if prior is not None else "starting"
+        return StatusStabilizer(initial, FACILITY_STATUS_RANKS, worsen_after=3, recover_after=2)
+
+    @staticmethod
+    def _confirmed_record(
+        registration: Registration,
+        selection: AdapterSelection,
+        prior: _ObservedFacility | None,
+        observation: FacilityObservation,
+        current_epoch: float,
+    ) -> _ObservedFacility:
+        stability = FacilityMonitor._stability(prior)
+        initial_observation = prior is None or prior.observation is None
+        prior_observation = prior.observation if prior else None
+        decision = stability.observe(
+            observation.status,
+            immediate=(initial_observation and observation.status in {"healthy", "starting", "stopping"}),
+        )
+        accepted = decision.status == observation.status
+        retained_snapshot = dict(prior_observation.snapshot) if prior_observation is not None else None
+        if retained_snapshot is not None:
+            retained_snapshot["captured_at"] = observation.observed_at
+            retained_snapshot["sequence"] = observation.sequence
+            retained_snapshot["status"] = {
+                "state": decision.status,
+                "reason_codes": retained_snapshot.get("status", {}).get("reason_codes", []),
+            }
+        return _ObservedFacility(
+            registration=registration,
+            selection=selection,
+            status=decision.status,
+            observation=(
+                observation
+                if accepted or prior_observation is None
+                else FacilityObservation(
+                    label=prior_observation.label,
+                    status=decision.status,
+                    observed_at=observation.observed_at,
+                    sequence=observation.sequence,
+                    snapshot=retained_snapshot or prior_observation.snapshot,
+                    console_url=prior_observation.console_url,
+                )
+            ),
+            last_success_epoch=current_epoch,
+            next_poll_epoch=current_epoch + POLL_SECONDS,
+            error_kind=None if accepted else (prior.error_kind if prior else None),
+            stability=stability,
+            confirmation=decision,
+        )
+
+    @staticmethod
+    def _failed_record(
+        registration: Registration,
+        selection: AdapterSelection,
+        prior: _ObservedFacility | None,
+        same_selection: bool,
+        current_epoch: float,
+        error: Exception,
+    ) -> _ObservedFacility:
+        stable_prior = prior if same_selection else None
+        stability = FacilityMonitor._stability(stable_prior)
+        transient = isinstance(error, FacilityTransportError)
+        decision = stability.observe("unreachable", immediate=not transient)
+        accepted = decision.status == "unreachable"
+        return _ObservedFacility(
+            registration=registration,
+            selection=selection,
+            status=decision.status,
+            observation=stable_prior.observation if stable_prior else None,
+            last_success_epoch=stable_prior.last_success_epoch if stable_prior else None,
+            next_poll_epoch=current_epoch + POLL_SECONDS,
+            error_kind=type(error).__name__ if accepted else None,
+            stability=stability,
+            confirmation=decision,
+        )
+
     def refresh_once(self, now: float | None = None) -> None:
         current_epoch = time.time() if now is None else now
-        try:
-            registrations = self._registrations()
-            discovery_error = None
-        except (OSError, DiscoveryError) as error:
-            registrations = {}
-            discovery_error = type(error).__name__
-            self.logger.warning("Infra Discovery unavailable error=%s", error)
-
         with self._lock:
             previous = dict(self._records)
-        updated: dict[str, _ObservedFacility] = {}
-        for facility_id, registration in registrations.items():
+            confirmed_discovery_error = self._discovery_error
+        try:
+            registrations = self._registrations()
+            discovery_candidate = None
+        except (OSError, DiscoveryError) as error:
+            registrations = None
+            discovery_candidate = type(error).__name__
+            self.logger.warning("Infra Discovery unavailable error=%s", error)
+
+        discovery_decision = self._discovery_stability.observe(
+            "error" if discovery_candidate else "healthy"
+        )
+        if discovery_decision.status == "error":
+            discovery_error = discovery_candidate or confirmed_discovery_error
+        else:
+            discovery_error = None
+
+        # A failed directory read says nothing about whether the last observed
+        # facilities stopped.  Keep the last-good set until discovery can be
+        # read again; a successful empty scan still removes registrations
+        # immediately, as required by the lease-free Discovery contract.
+        updated: dict[str, _ObservedFacility] = dict(previous) if registrations is None else {}
+        for facility_id, registration in (registrations or {}).items():
             prior = previous.get(facility_id)
             selection = select_adapter(registration, self.adapters)
             if selection is None:
@@ -201,13 +320,12 @@ class FacilityMonitor:
                     raise FacilityProtocolError(
                         "provider snapshot sequence did not advance within its generation"
                     )
-                record = _ObservedFacility(
-                    registration=registration,
-                    selection=selection,
-                    status=observation.status,
-                    observation=observation,
-                    last_success_epoch=current_epoch,
-                    next_poll_epoch=current_epoch + POLL_SECONDS,
+                record = self._confirmed_record(
+                    registration,
+                    selection,
+                    prior if same_selection else None,
+                    observation,
+                    current_epoch,
                 )
             except (DiscoveryError, FacilityProtocolError) as error:
                 self.logger.warning(
@@ -216,41 +334,41 @@ class FacilityMonitor:
                     selection.adapter.protocol,
                     error,
                 )
-                record = _ObservedFacility(
-                    registration=registration,
-                    selection=selection,
-                    status="unreachable",
-                    observation=prior.observation if same_selection else None,
-                    last_success_epoch=prior.last_success_epoch if same_selection else None,
-                    next_poll_epoch=current_epoch + POLL_SECONDS,
-                    error_kind=type(error).__name__,
+                record = self._failed_record(
+                    registration,
+                    selection,
+                    prior,
+                    same_selection,
+                    current_epoch,
+                    error,
                 )
             updated[facility_id] = record
 
         with self._lock:
             self._records = updated
             self._discovery_error = discovery_error
+            self._discovery_confirmation = discovery_decision
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             items = [record.projection() for record in self._records.values()]
             discovery_error = self._discovery_error
+            discovery_confirmation = self._discovery_confirmation
         items.sort(key=lambda item: (str(item.get("label") or "").lower(), str(item.get("id") or "")))
         healthy = sum(1 for item in items if item["status"] == "healthy")
         attention = sum(1 for item in items if item["status"] not in {"healthy", "starting"})
         if any(item["status"] in {"unavailable", "unreachable"} for item in items):
             status = "critical"
-        elif attention:
+        elif attention or discovery_error:
             status = "degraded"
         elif items and healthy == len(items):
             status = "healthy"
         elif items:
             status = "starting"
-        elif discovery_error:
-            status = "degraded"
-            attention = 1
         else:
             status = "disabled"
+        if discovery_error:
+            attention += 1
         projection: dict[str, Any] = {
             "schema": f"infra.discovery.registration@{DISCOVERY_VERSION}",
             "status": status,
@@ -261,4 +379,10 @@ class FacilityMonitor:
         }
         if discovery_error:
             projection["error_kind"] = discovery_error
+        if discovery_confirmation and discovery_confirmation.pending_status:
+            projection["confirmation"] = {
+                "candidate_status": discovery_confirmation.pending_status,
+                "consecutive": discovery_confirmation.pending_count,
+                "required": discovery_confirmation.required_count,
+            }
         return projection

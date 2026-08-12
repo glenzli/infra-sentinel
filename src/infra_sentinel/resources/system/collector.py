@@ -14,6 +14,7 @@ from typing import Any
 
 from infra_sentinel.core.collectors import Collection, CollectorCapability, CollectorContext
 from infra_sentinel.core.model import MetricPoint
+from infra_sentinel.core.status_stability import StatusDecision, StatusStabilizer
 from infra_sentinel.resources.system.disk_health import DiskHealthSnapshot
 from infra_sentinel.resources.system.contract import (
     CPU_UTILIZATION, DISK_CAPACITY, DISK_PROCESS_ATTRIBUTION, DISK_THROUGHPUT,
@@ -31,6 +32,7 @@ SYSTEM_RESOURCE_SCHEMA = "20260812.1"
 SOURCE_ID = "local-system"
 RESOURCE_ID = "system"
 DEFAULT_PERSIST_INTERVAL_SECONDS = 300
+SYSTEM_STATUS_RANKS = {"healthy": 0, "warning": 1, "critical": 2}
 
 @dataclass(frozen=True)
 class _Interval:
@@ -198,6 +200,13 @@ class SystemResourceCollector:
         self._window_started: float | None = None
         self._intervals: list[_Interval] = []
         self._last_status: str | None = None
+        self._health_stability = StatusStabilizer(
+            "healthy",
+            SYSTEM_STATUS_RANKS,
+            worsen_after=3,
+            recover_after=2,
+        )
+        self._confirmed_reasons: list[str] = []
         self._transitions: list[dict[str, Any]] = []
 
     @staticmethod
@@ -277,6 +286,26 @@ class SystemResourceCollector:
             "thermal_state": reading.thermal_state or "unavailable",
         })
 
+    def _stable_health(
+        self,
+        candidate_status: str,
+        candidate_reasons: list[str],
+    ) -> tuple[str, list[str], StatusDecision]:
+        worsening = SYSTEM_STATUS_RANKS.get(candidate_status, 0) > SYSTEM_STATUS_RANKS.get(
+            self._health_stability.status,
+            0,
+        )
+        direct_reason = (
+            "disk_space_critical" in candidate_reasons
+            or "disk_health_critical" in candidate_reasons
+            or (candidate_status == "warning" and "disk_space_low" in candidate_reasons)
+        )
+        immediate = worsening and direct_reason
+        decision = self._health_stability.observe(candidate_status, immediate=immediate)
+        if decision.status == candidate_status:
+            self._confirmed_reasons = list(candidate_reasons)
+        return decision.status, list(self._confirmed_reasons), decision
+
     def _points(self, reading: HostReading) -> tuple[MetricPoint, ...]:
         if self._window_started is None:
             self._window_started = reading.epoch
@@ -349,7 +378,8 @@ class SystemResourceCollector:
         interval = self._interval(reading)
         if interval is not None:
             self._intervals.append(interval)
-        status, reasons = _health(reading)
+        candidate_status, candidate_reasons = _health(reading)
+        status, reasons, health_confirmation = self._stable_health(candidate_status, candidate_reasons)
         self._transition(reading, status, reasons)
         points = self._points(reading)
         self._previous = reading
@@ -409,6 +439,13 @@ class SystemResourceCollector:
                 else "aggregate-host-counters-only"
             ),
         }
+        if health_confirmation.pending_status:
+            snapshot["health_confirmation"] = {
+                "candidate_status": health_confirmation.pending_status,
+                "candidate_reasons": candidate_reasons,
+                "consecutive": health_confirmation.pending_count,
+                "required": health_confirmation.required_count,
+            }
         return Collection(points=points, status="ok" if quality == "ok" else "degraded", snapshot=snapshot)
 
     def drain_transitions(self) -> tuple[dict[str, Any], ...]:
