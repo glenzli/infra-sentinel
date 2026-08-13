@@ -5,7 +5,7 @@
 Infra Sentinel 是一个本地优先的个人 AI Infra 可观测面板。它目前覆盖可计量资源、上游服务状态，以及参与接入的本地设施健康状态：
 
 - **网络**：本机 Mihomo 流量、域名与代理路径归因、Linux VPS 账单量、Xray 用户逻辑流量；
-- **AI 用量**：OpenCode 与 Codex 的本地 Token 记录、模型构成、消耗速率和 Agent 活动；
+- **AI 用量**：OpenCode 与 Codex 的本地 Token 记录，以及 Infer Runtime 经来源去重的当日文本 Token 聚合；模型构成、消耗速率和 Agent 活动；
 - **本机系统**：整机 CPU、内存压力与 Swap、磁盘容量、物理磁盘吞吐与 IOPS、温度压力；
 - **上游服务**：低频、只读观测 OpenAI、Claude 与 DeepSeek 的官方 API 状态；
 - **本地设施**：自动发现兼容的 runtime 与服务，按各自协议投影受限健康状态。
@@ -83,6 +83,15 @@ AI 模块只读取客户端已经保存在本机的聚合元数据。每个 Prov
 
 OpenCode 的自然日统计与 Codex 的本机基线窗口可能不同，界面会直接展示每个来源的窗口覆盖。AI 汇总用于本机趋势分析，不是 ChatGPT、Codex 或任意 API Provider 的账户账单。
 
+### Infer Runtime
+
+- 可选读取已发现的 Infer Runtime 设施提供的、当前主机自然日已结算文本 Token 聚合；
+- 仅保留 Runtime 明确声明为 `execution_origin: "other"` 的行；`codex` 行仍由权威的 Codex Collector 统计，避免重复计数；
+- 每次 Runtime 刷新都完整替换当天本地模型快照，而不是把轮询结果重复相加；较早的本地日历史会保留；
+- 不将零 Token 的构建行、音频或视觉等非文本工作负载放入 Token 面板；这些运行细节仍留在 Infer Runtime Console。
+
+这属于本地运行观测，不是供应商账单。未发布所需来源安全每日聚合的 Runtime 仍会作为设施显示，但不会进入 AI Token 汇总。
+
 ## 本机系统模块
 
 系统 Collector 消费平台无关的能力合同，不假设每个系统都能提供相同计数。当前经过验证的 macOS backend 会观测整机 CPU 使用率、原生内存压力、压缩内存与 Swap、磁盘剩余空间、物理磁盘字节与操作次数、保守的磁盘健康证据、温度压力；同时利用进程累计计数提供“按 App 的磁盘 I/O”尽力归因。同一 `.app` 包内的 helper 会归入父 App，只投影和存储有界的 App 标签及读写计数；文件名、路径、进程参数、PID、窗口标题和用户内容都不会落盘。
@@ -113,8 +122,8 @@ Network、AI 用量与本机系统资源都使用同一套观测结构：
 
 ## 本地设施发现
 
-接入服务发布由 [Infra Protocol](https://github.com/glenzli/infra-protocol) 定义的短时、仅当前用户可读租约。
-Sentinel 不扫描端口、不按进程名猜测，只对具体协议版本和 binding 做精确交集，然后连接所选服务。
+接入服务发布由 [Infra Protocol](https://github.com/glenzli/infra-protocol) 定义、仅当前用户可读的注册信息。
+注册信息只是候选入口，并不代表服务存活：Sentinel 不扫描端口、不按进程名猜测，只对具体协议版本和 binding 做精确交集，再通过服务自身的只读请求验证所选本地服务。
 Discovery 不携带指标、Console URL、通用请求信封，也不会赋予启停、配置或维护权限。
 
 当前已验证的接入包括

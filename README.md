@@ -5,7 +5,7 @@
 Infra Sentinel is a local-first observability dashboard for personal AI infrastructure. It currently covers metered resources, upstream service status, and the health of participating local facilities:
 
 - **Network**: local Mihomo traffic, domain and proxy-route attribution, Linux VPS billable traffic, and Xray per-user logical traffic;
-- **AI usage**: local Token records from OpenCode and Codex, model composition, consumption rate, and Agent activity;
+- **AI usage**: local Token records from OpenCode and Codex, plus origin-safe daily text-Token aggregates from Infer Runtime; model composition, consumption rate, and Agent activity;
 - **Local system**: host CPU, memory pressure and swap, disk capacity, physical disk throughput and IOPS, and thermal pressure;
 - **Upstream services**: low-frequency, read-only observation of the official OpenAI, Claude, and DeepSeek API status feeds;
 - **Local facilities**: automatically discovered, protocol-bounded health projections for compatible runtimes and services.
@@ -86,6 +86,15 @@ The AI module reads only aggregate metadata already stored by local clients. Eve
 
 OpenCode calendar-day totals and Codex local-baseline windows may differ. The interface shows the observation coverage for every source directly. AI summaries are local trend measurements, not account billing for ChatGPT, Codex, or any API Provider.
 
+### Infer Runtime
+
+- Optionally consumes the discovered Infer Runtime facility's current host-local-day settled text-Token aggregate;
+- Retains only rows explicitly declared by Runtime as `execution_origin: "other"`; `codex` rows remain with the authoritative Codex collector to prevent double counting;
+- Replaces the current day's local model snapshot on every Runtime refresh, rather than adding each poll; older local daily rows remain available as history;
+- Does not project zero-Token build rows or non-text workloads such as audio and vision into the Token panel. Those operational details stay in Infer Runtime Console.
+
+This is local operational telemetry, not a provider invoice. Runtime builds that do not publish the required origin-safe daily aggregate remain visible as facilities but are not included in AI Token totals.
+
 ## Local system module
 
 The system collector consumes a platform-neutral capability contract rather than assuming every host exposes the same counters. The verified macOS backend observes aggregate CPU utilization, native memory-pressure state, compressed memory and swap, disk free space, physical disk bytes and operations, conservative disk-health evidence, and thermal state. It also provides best-effort disk-I/O attribution by App using cumulative process counters. Helpers inside one `.app` bundle are grouped together; only bounded App labels and read/write counters are projected or stored. File names, paths, process arguments, PIDs, window titles, and user content are never persisted.
@@ -116,11 +125,12 @@ Historical queries run through a dedicated read-only channel and do not wait for
 
 ## Local facility discovery
 
-Participating services publish a short-lived, owner-only lease defined by
-[Infra Protocol](https://github.com/glenzli/infra-protocol). Sentinel discovers these leases without
-scanning ports or guessing process names, intersects exact protocol versions and bindings, and
-connects to the selected service. Discovery carries no metrics, Console URL, request envelope, or
-control authority.
+Participating services publish owner-only registrations defined by
+[Infra Protocol](https://github.com/glenzli/infra-protocol). A registration is a candidate entry
+point, not a liveness claim: Sentinel discovers registrations without scanning ports or guessing
+process names, intersects exact protocol versions and bindings, then verifies the selected local
+service through its own read-only request. Discovery carries no metrics, Console URL, request
+envelope, or control authority.
 
 Current verified integrations are
 [Paged Context Protocol (PCP)](https://github.com/glenzli/paged-context-protocol) and
