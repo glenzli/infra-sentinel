@@ -18,7 +18,7 @@ from infra_sentinel.resources.ai.infer_runtime import InferRuntimeUsageCollector
 EPOCH = datetime(2026, 8, 13, 12, 0).astimezone().timestamp()
 
 
-def facilities(*models: dict[str, object], version: str = "20260813.2") -> dict[str, object]:
+def facilities(*models: dict[str, object], version: str = "20260813.3") -> dict[str, object]:
     return {
         "items": [{
             "id": "infer-runtime:local",
@@ -96,12 +96,13 @@ class InferRuntimeUsageTests(unittest.TestCase):
                 checkpoint_path=Path(temporary) / "infer-runtime-usage-daily.json",
                 clock=lambda: EPOCH,
             )
-            unsupported = collector.collect(CollectorContext({"epoch": EPOCH}, {}, facilities(
-                model("deepseek-v4-flash", "other", input_tokens=1, output_tokens=1, total_tokens=2, cost_usd=0.01),
-                version="20260813.1",
-            )))
-            self.assertEqual(unsupported.status, "unavailable")
-            self.assertFalse(unsupported.snapshot["available"])  # type: ignore[index]
+            for version in ("20260813.1", "20260813.2"):
+                unsupported = collector.collect(CollectorContext({"epoch": EPOCH}, {}, facilities(
+                    model("deepseek-v4-flash", "other", input_tokens=1, output_tokens=1, total_tokens=2, cost_usd=0.01),
+                    version=version,
+                )))
+                self.assertEqual(unsupported.status, "unavailable")
+                self.assertFalse(unsupported.snapshot["available"])  # type: ignore[index]
 
             originless = {
                 "id": "gpt-5.6-sol", "input_tokens": 1, "output_tokens": 1,
@@ -127,6 +128,33 @@ class InferRuntimeUsageTests(unittest.TestCase):
             groups = result.snapshot["details"]  # type: ignore[index]
             self.assertEqual(groups[0]["metrics"][2]["unit"], "usd")
             self.assertEqual(groups[1]["metrics"][0]["value"], 0.03)
+
+    def test_current_snapshot_removes_legacy_zero_token_models(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / "infer-runtime-usage-daily.json"
+            checkpoint.write_text(json.dumps({
+                "schema": "20260813.1",
+                "days": {
+                    "2026-08-13": {
+                        "other:luna": {
+                            "id": "luna", "execution_origin": "other",
+                            "input_tokens": 4, "output_tokens": 2, "total_tokens": 6, "cost_usd": 0.03,
+                        },
+                        "other:sha256:legacy-build": {
+                            "id": "sha256:legacy-build", "execution_origin": "other",
+                            "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cost_usd": 0,
+                        },
+                    },
+                },
+            }), encoding="utf-8")
+            collector = InferRuntimeUsageCollector(checkpoint_path=checkpoint, clock=lambda: EPOCH)
+            result = collector.collect(CollectorContext({"epoch": EPOCH}, {}, facilities(
+                model("luna", "other", input_tokens=5, output_tokens=2, total_tokens=7, cost_usd=0.035),
+            )))
+            self.assertEqual(result.snapshot["usage"]["today"]["tokens"], 7)  # type: ignore[index]
+            self.assertEqual([item["id"] for item in result.snapshot["models"]], ["luna"])  # type: ignore[index]
+            stored = json.loads(checkpoint.read_text(encoding="utf-8"))
+            self.assertEqual(set(stored["days"]["2026-08-13"]), {"other:luna"})
 
     def test_non_current_runtime_day_is_rejected_instead_of_rewriting_history(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -226,7 +226,7 @@ class FacilityProtocolTests(unittest.TestCase):
         value["extensions"]["infer-runtime"] = {  # type: ignore[index]
             "usage_daily": {
                 "schema": "infer-runtime.usage.daily",
-                "schema_version": "20260813.2",
+                "schema_version": "20260813.3",
                 "calendar": "host_local",
                 "days": [{
                     "date": "2026-08-13",
@@ -253,9 +253,10 @@ class FacilityProtocolTests(unittest.TestCase):
             ("gpt-5.6-sol", "codex"), ("deepseek-v4-flash", "other"),
         ])
 
-        value["extensions"]["infer-runtime"]["usage_daily"]["schema_version"] = "20260813.1"  # type: ignore[index]
-        unsupported = INFER_RUNTIME_ADAPTER._normalize(value, infer, "20260810.1")
-        self.assertNotIn("extensions", unsupported.snapshot)
+        for version in ("20260813.1", "20260813.2"):
+            value["extensions"]["infer-runtime"]["usage_daily"]["schema_version"] = version  # type: ignore[index]
+            unsupported = INFER_RUNTIME_ADAPTER._normalize(value, infer, "20260810.1")
+            self.assertNotIn("extensions", unsupported.snapshot)
 
     def test_headline_must_reference_a_published_metric(self) -> None:
         pcp = registration("pcp.runtime.observer", "pcp")
