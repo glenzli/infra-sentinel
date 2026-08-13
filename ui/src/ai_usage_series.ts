@@ -102,24 +102,23 @@ function dailyHistory(
   return { intervals, availableSources };
 }
 
-function allocateModels(
-  models: Map<string, number>,
-  intervalTotal: number,
-  remainingModels: Map<string, number> | undefined,
-): Map<string, number> {
-  if (!remainingModels?.size) return new Map(models);
-  const allocated = new Map<string, number>();
+function addNormalizedModels(
+  destination: Map<string, number>,
+  sourceModels: Map<string, number>,
+  authoritativeTotal: number,
+): void {
+  const rawTotal = [...sourceModels.values()].reduce((sum, value) => sum + value, 0);
+  const scale = rawTotal > authoritativeTotal && rawTotal > 0 ? authoritativeTotal / rawTotal : 1;
   let attributed = 0;
-  for (const [model, value] of models) {
-    if (model === "__unattributed__") continue;
-    const accepted = Math.min(value, remainingModels.get(model) ?? 0);
+  for (const [model, value] of sourceModels) {
+    const accepted = Math.floor(value * scale);
     if (!accepted) continue;
-    allocated.set(model, accepted);
-    remainingModels.set(model, Math.max(0, (remainingModels.get(model) ?? 0) - accepted));
+    destination.set(model, (destination.get(model) ?? 0) + accepted);
     attributed += accepted;
   }
-  if (attributed < intervalTotal) allocated.set("__unattributed__", intervalTotal - attributed);
-  return allocated;
+  if (attributed < authoritativeTotal) {
+    destination.set("__unattributed__", (destination.get("__unattributed__") ?? 0) + authoritativeTotal - attributed);
+  }
 }
 
 function addResidual(
@@ -176,11 +175,24 @@ function resolvedIntervals(
     todayBySource.set(interval.source, rows);
   }
   for (const [source, target] of targets) {
+    // Daily views show a completed historical day plus the current local day.
+    // The latter is still open, so use the provider snapshot directly: it is
+    // the only source that can account for threads whose model changed after
+    // earlier interval samples were recorded.
+    if (window.bucketSeconds === 86_400) {
+      past.push({
+        epoch: todayStart,
+        source,
+        total: target.tokens,
+        models: new Map(target.models),
+      });
+      todayBySource.delete(source);
+      continue;
+    }
     const candidates = (todayBySource.get(source) ?? [])
       .filter((interval) => window.bucketSeconds === 86_400 || !target.startedEpoch || interval.epoch >= target.startedEpoch)
       .sort((left, right) => left.epoch - right.epoch);
     const accepted: UsageInterval[] = [];
-    const remainingModels = target.models.size ? new Map(target.models) : undefined;
     let acceptedTotal = 0;
     for (const interval of candidates) {
       const remaining = Math.max(0, target.tokens - acceptedTotal);
@@ -188,13 +200,15 @@ function resolvedIntervals(
       // still missing from this provider window. Drop the whole replay instead
       // of truncating it into a fake interval spike.
       if (!interval.total || interval.total > remaining) continue;
-      accepted.push({
-        ...interval,
-        models: allocateModels(interval.models, interval.total, remainingModels),
-      });
+      // Metric points retain the model that was reported at the time of the
+      // increment.  Do not re-allocate old intervals using the current
+      // snapshot: a thread can be reclassified to a different model later.
+      accepted.push(interval);
       acceptedTotal += interval.total;
     }
-    addResidual(accepted, target, acceptedTotal, remainingModels, window.untilEpoch, source);
+    // The only un-attributed component is the currently unpersisted tail, not
+    // a retrospective reclassification of already observed model increments.
+    addResidual(accepted, target, acceptedTotal, undefined, window.untilEpoch, source);
     past.push(...accepted);
     todayBySource.delete(source);
   }
@@ -232,15 +246,7 @@ function totalsForProviderWindow(
         sourceModels.set(id, (sourceModels.get(id) ?? 0) + number(modelWindow.tokens));
       }
     }
-    const rawModelTotal = [...sourceModels.values()].reduce((sum, value) => sum + value, 0);
-    const scale = rawModelTotal > total && rawModelTotal > 0 ? total / rawModelTotal : 1;
-    let attributed = 0;
-    for (const [model, value] of sourceModels) {
-      const accepted = Math.floor(value * scale);
-      models.set(model, (models.get(model) ?? 0) + accepted);
-      attributed += accepted;
-    }
-    if (attributed < total) models.set("__unattributed__", (models.get("__unattributed__") ?? 0) + total - attributed);
+    addNormalizedModels(models, sourceModels, total);
   }
   for (const [source, value] of fallbackSources) {
     if (normalizedSources.has(source)) continue;
