@@ -220,6 +220,43 @@ class FacilityProtocolTests(unittest.TestCase):
         with self.assertRaises(FacilityProtocolError):
             INFER_RUNTIME_ADAPTER._normalize(value, infer, "20260810.1")
 
+    def test_infer_daily_usage_projects_only_the_frozen_origin_contract(self) -> None:
+        infer = registration("infer-runtime.status", "infer-runtime")
+        value = snapshot(INFER_RUNTIME_ADAPTER, infer)
+        value["extensions"]["infer-runtime"] = {  # type: ignore[index]
+            "usage_daily": {
+                "schema": "infer-runtime.usage.daily",
+                "schema_version": "20260813.2",
+                "calendar": "host_local",
+                "days": [{
+                    "date": "2026-08-13",
+                    "models": [
+                        {
+                            "id": "gpt-5.6-sol", "execution_origin": "codex",
+                            "input_tokens": 10, "output_tokens": 2, "total_tokens": 12, "cost_usd": 0.1,
+                        },
+                        {
+                            "id": "deepseek-v4-flash", "execution_origin": "other",
+                            "input_tokens": 4, "output_tokens": 1, "total_tokens": 5, "cost_usd": 0.01,
+                        },
+                        {
+                            "id": "originless", "input_tokens": 2, "output_tokens": 1,
+                            "total_tokens": 3, "cost_usd": 0.01,
+                        },
+                    ],
+                }],
+            },
+        }
+        observed = INFER_RUNTIME_ADAPTER._normalize(value, infer, "20260810.1")
+        models = observed.snapshot["extensions"]["infer-runtime"]["usage_daily"]["days"][0]["models"]
+        self.assertEqual([(row["id"], row["execution_origin"]) for row in models], [
+            ("gpt-5.6-sol", "codex"), ("deepseek-v4-flash", "other"),
+        ])
+
+        value["extensions"]["infer-runtime"]["usage_daily"]["schema_version"] = "20260813.1"  # type: ignore[index]
+        unsupported = INFER_RUNTIME_ADAPTER._normalize(value, infer, "20260810.1")
+        self.assertNotIn("extensions", unsupported.snapshot)
+
     def test_headline_must_reference_a_published_metric(self) -> None:
         pcp = registration("pcp.runtime.observer", "pcp")
         value = snapshot(PCP_ADAPTER, pcp)

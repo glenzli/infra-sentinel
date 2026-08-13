@@ -8,7 +8,7 @@ collector failure local: other sources still produce usable observations.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from infra_sentinel.core.model import MetricPoint
@@ -41,6 +41,9 @@ class CollectorContext:
 
     local_sample: dict[str, Any]
     remote_state: dict[str, Any]
+    # Facility adapters own socket validation.  Collectors receive only their
+    # private, redacted projection and never make a second provider request.
+    facilities: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

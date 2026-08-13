@@ -68,6 +68,7 @@ from infra_sentinel.resources.network.mihomo import (
 )
 from infra_sentinel.resources.network.metrics import network_collector_registry
 from infra_sentinel.resources.ai.codex import CodexUsageCollector, discover_codex_state_database
+from infra_sentinel.resources.ai.infer_runtime import InferRuntimeUsageCollector
 from infra_sentinel.resources.ai.opencode import OpenCodeUsageCollector, discover_opencode, discover_opencode_desktop_database
 from infra_sentinel.core.timing import annotate_sample_timing, sample_is_realtime
 from infra_sentinel.resources.network.remote import RemoteFleetMonitor
@@ -783,7 +784,8 @@ def handle_sample(
         **remote_state,
         "daily_usage_guards": billing_alerts.snapshots(remote_state, config.remote_billing_policies),
     }
-    collector_runs = collector_registry.collect(CollectorContext(sample, remote_state))
+    facility_snapshot = facility_monitor.snapshot()
+    collector_runs = collector_registry.collect(CollectorContext(sample, remote_state, facility_snapshot))
     for run in collector_runs:
         if run.status == "error":
             logger.warning("metric collector failed id=%s kind=%s", run.capability.id, run.error_kind)
@@ -813,7 +815,7 @@ def handle_sample(
         session_snapshot,
         collector_runs,
         metric_store.summary(),
-        facility_monitor.snapshot(),
+        facility_snapshot,
         upstream_snapshot,
         alerts.level,
     )
@@ -900,6 +902,9 @@ def main() -> int:
         collector_registry.register(CodexUsageCollector(
             checkpoint_path=config.state_dir / "codex-usage-day.json",
             database_finder=lambda: discover_codex_state_database(config.integrations.codex_database),
+        ))
+        collector_registry.register(InferRuntimeUsageCollector(
+            checkpoint_path=config.state_dir / "infer-runtime-usage-daily.json",
         ))
         system_collector = SystemResourceCollector()
         collector_registry.register(system_collector)

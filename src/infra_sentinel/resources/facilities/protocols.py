@@ -8,12 +8,14 @@ Protocol application schema.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 import ipaddress
 import json
+import math
 from pathlib import Path
+import re
 import socket
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 from urllib.parse import urlsplit
 
 from infra_sentinel.resources.facilities.discovery import (
@@ -32,6 +34,10 @@ DEV_MESH_OBSERVER_PROTOCOL_VERSION = "20260812.1"
 NORMALIZED_SNAPSHOT_SCHEMA = "infra-sentinel.facility-observation"
 NORMALIZED_SNAPSHOT_VERSION = "20260810.1"
 MAX_U64 = (1 << 64) - 1
+MAX_SAFE_JSON_INTEGER = (1 << 53) - 1
+INFER_RUNTIME_USAGE_DAILY_SCHEMA = "infer-runtime.usage.daily"
+INFER_RUNTIME_USAGE_DAILY_VERSION = "20260813.2"
+_INFER_MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+\-]{0,127}$")
 
 
 class FacilityProtocolError(ValueError):
@@ -100,6 +106,91 @@ def _decode_json(data: bytes) -> dict[str, Any]:
     except (UnicodeError, json.JSONDecodeError) as error:
         raise FacilityProtocolError("provider response is not strict UTF-8 JSON") from error
     return _object(value, "provider response")
+
+
+def _normalize_infer_runtime_usage_daily(extension: dict[str, Any]) -> dict[str, Any] | None:
+    """Project the only Infer extension consumed by the AI usage collector.
+
+    This is deliberately an optional extension to the Infer status protocol.
+    Older Runtime builds stay observable as facilities, but their model usage is
+    not eligible for Token projection until it contains the immutable
+    ``execution_origin`` fact.  That is the fail-closed boundary which prevents
+    a Codex-backed attempt from being counted twice.
+    """
+    raw_usage = extension.get("usage_daily")
+    if not isinstance(raw_usage, dict):
+        return None
+    if (
+        raw_usage.get("schema") != INFER_RUNTIME_USAGE_DAILY_SCHEMA
+        or raw_usage.get("schema_version") != INFER_RUNTIME_USAGE_DAILY_VERSION
+        or raw_usage.get("calendar") != "host_local"
+    ):
+        return None
+    raw_days = raw_usage.get("days")
+    if not isinstance(raw_days, list) or len(raw_days) > 1:
+        return None
+    normalized_days: list[dict[str, Any]] = []
+    for raw_day in raw_days:
+        if not isinstance(raw_day, dict) or set(raw_day) != {"date", "models"}:
+            return None
+        day = raw_day.get("date")
+        models = raw_day.get("models")
+        if not isinstance(day, str) or not isinstance(models, list) or len(models) > 128:
+            return None
+        try:
+            date.fromisoformat(day)
+        except ValueError:
+            return None
+        normalized_models: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for raw_model in models:
+            if not isinstance(raw_model, dict):
+                return None
+            # An old ledger row without origin is intentionally invisible.  Do
+            # not infer it from an identifier, provider, or display name.
+            if set(raw_model) != {
+                "id", "execution_origin", "input_tokens", "output_tokens", "total_tokens", "cost_usd",
+            }:
+                continue
+            identifier = raw_model.get("id")
+            origin = raw_model.get("execution_origin")
+            if not isinstance(identifier, str) or not _INFER_MODEL_ID.fullmatch(identifier):
+                return None
+            if origin not in {"codex", "other"}:
+                continue
+            values: dict[str, int] = {}
+            for field in ("input_tokens", "output_tokens", "total_tokens"):
+                value = raw_model.get(field)
+                if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= MAX_SAFE_JSON_INTEGER:
+                    return None
+                values[field] = value
+            cost = raw_model.get("cost_usd")
+            if (
+                isinstance(cost, bool)
+                or not isinstance(cost, (int, float))
+                or not math.isfinite(float(cost))
+                or float(cost) < 0
+            ):
+                return None
+            identity = (str(origin), identifier)
+            if identity in seen:
+                return None
+            seen.add(identity)
+            normalized_models.append({
+                "id": identifier,
+                "execution_origin": origin,
+                **values,
+                "cost_usd": float(cost),
+            })
+        normalized_days.append({"date": day, "models": normalized_models})
+    return {
+        "usage_daily": {
+            "schema": INFER_RUNTIME_USAGE_DAILY_SCHEMA,
+            "schema_version": INFER_RUNTIME_USAGE_DAILY_VERSION,
+            "calendar": "host_local",
+            "days": normalized_days,
+        }
+    }
 
 
 def _exchange_line(
@@ -199,6 +290,7 @@ class FacilityProtocolAdapter:
     allowed_issue_codes: frozenset[str] | None = None
     required_issue_subject_id: str | None = None
     require_scalar_metric_values: bool = False
+    normalize_extension: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None
 
     def select(self, registration: Registration) -> AdapterSelection | None:
         matches = registration.compatible_offers(
@@ -399,7 +491,10 @@ class FacilityProtocolAdapter:
             raise FacilityProtocolError("provider redaction declaration is incomplete")
 
         extensions = _object(raw.get("extensions"), "snapshot.extensions")
-        _object(extensions.get(self.extension_key), f"snapshot.extensions.{self.extension_key}")
+        provider_extension = _object(
+            extensions.get(self.extension_key),
+            f"snapshot.extensions.{self.extension_key}",
+        )
 
         console_url: str | None = None
         if "links" in raw:
@@ -416,6 +511,10 @@ class FacilityProtocolAdapter:
             "metrics": display_metrics,
             "issues": issues,
         }
+        if self.normalize_extension is not None:
+            normalized_extension = self.normalize_extension(provider_extension)
+            if normalized_extension is not None:
+                normalized_snapshot["extensions"] = {self.extension_key: normalized_extension}
         return FacilityObservation(
             self.label,
             str(state),
@@ -461,6 +560,7 @@ INFER_RUNTIME_ADAPTER = FacilityProtocolAdapter(
         "credentials", "filesystem_paths", "job_identifiers", "job_metadata",
         "payloads", "raw_errors", "usage_ledger",
     }),
+    normalize_extension=_normalize_infer_runtime_usage_daily,
 )
 
 DEV_MESH_OBSERVER_ADAPTER = FacilityProtocolAdapter(

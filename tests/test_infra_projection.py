@@ -218,6 +218,22 @@ class InfraProjectionTests(unittest.TestCase):
         self.assertEqual(projection["ai_usage"]["aggregate"]["cumulative"]["tokens"], 500)
         self.assertEqual({item["id"] for item in projection["sources"]}, {"local-mihomo", "opencode", "codex"})
 
+    def test_infer_runtime_uses_the_existing_generic_ai_resource(self) -> None:
+        infer = CollectorRun(
+            capability=CollectorCapability(
+                "ai.infer-runtime.daily-settlement", "infer-runtime", "ai.infer-runtime", "ai_usage", (),
+            ),
+            status="ok",
+            snapshot=self.ai_snapshot("infer-runtime", "Infer Runtime", today=42, cumulative=84),
+        )
+        projection = build_infra_projection(
+            sample(), {"kernel": {}, "vps": {}},
+            {"enabled": False, "status": "disabled", "servers": []}, "none", (infer,),
+        )
+        self.assertEqual(projection["ai_usage"]["aggregate"]["today"]["tokens"], 42)
+        self.assertEqual(projection["ai_usage"]["aggregate"]["cumulative"]["tokens"], 84)
+        self.assertEqual(projection["sources"][-1]["id"], "infer-runtime")
+
     def test_future_ai_provider_is_projected_without_a_provider_specific_branch(self) -> None:
         future = CollectorRun(
             capability=CollectorCapability("ai.future.usage", "future-agent", "ai.future-agent", "ai_usage", ("ai.tokens.total",)),
