@@ -3,9 +3,10 @@
 Infer publishes one absolute current-local-day snapshot through its already
 discovered facility status socket.  This owner keeps a compact local history
 and replaces a day's model identities on each newer snapshot; it never turns a
-poll into an additive counter.  Only rows whose immutable Runtime ledger fact
-is ``execution_origin == "other"`` are retained.  Codex-backed work already
-has a more authoritative Codex collector and therefore remains excluded.
+poll into an additive counter.  Each model row retains its immutable Runtime
+``execution_origin`` fact.  Runtime attempts made through Codex App Server are
+ephemeral and are not necessarily represented by the local Codex task
+collector, so both ``codex`` and ``other`` origins remain visible here.
 """
 
 from __future__ import annotations
@@ -83,7 +84,8 @@ class InferRuntimeUsageCollector:
             for identity, raw_model in raw_models.items():
                 if not isinstance(identity, str) or not isinstance(raw_model, dict):
                     continue
-                if raw_model.get("execution_origin") != "other":
+                origin = raw_model.get("execution_origin")
+                if origin not in {"codex", "other"}:
                     continue
                 identifier = raw_model.get("id")
                 if not isinstance(identifier, str) or not identifier:
@@ -99,7 +101,7 @@ class InferRuntimeUsageCollector:
                     continue
                 models[identity] = {
                     "id": identifier,
-                    "execution_origin": "other",
+                    "execution_origin": origin,
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
                     "total_tokens": tokens,
@@ -151,7 +153,7 @@ class InferRuntimeUsageCollector:
         return usage
 
     @staticmethod
-    def _other_models(usage: dict[str, Any], fallback_day: str) -> tuple[str, dict[str, dict[str, Any]]]:
+    def _runtime_models(usage: dict[str, Any], fallback_day: str) -> tuple[str, dict[str, dict[str, Any]]]:
         raw_days = usage.get("days")
         if not isinstance(raw_days, list) or len(raw_days) > 1:
             raise ValueError("Infer daily usage has an unsupported day shape")
@@ -172,17 +174,18 @@ class InferRuntimeUsageCollector:
             # Protocol normalization has already rejected malformed facts.  The
             # second exact check keeps this persistence boundary fail-closed if
             # a caller supplies an unnormalized facility snapshot in tests.
-            if row.get("execution_origin") != "other":
+            origin = row.get("execution_origin")
+            if origin not in {"codex", "other"}:
                 continue
             identifier = row.get("id")
             if not isinstance(identifier, str) or not identifier:
                 raise ValueError("Infer model identity is invalid")
-            identity = f"other:{identifier}"
+            identity = f"{origin}:{identifier}"
             if identity in models:
                 raise ValueError("Infer daily usage duplicates a model identity")
             models[identity] = {
                 "id": identifier,
-                "execution_origin": "other",
+                "execution_origin": origin,
                 "input_tokens": max(0, int(row.get("input_tokens") or 0)),
                 "output_tokens": max(0, int(row.get("output_tokens") or 0)),
                 "total_tokens": max(0, int(row.get("total_tokens") or 0)),
@@ -199,31 +202,44 @@ class InferRuntimeUsageCollector:
         costs: dict[str, float] = {}
         token_details: dict[str, dict[str, int]] = {}
         for day, rows in sorted(history.items()):
-            day_models: list[dict[str, Any]] = []
+            day_totals: dict[str, int] = {}
             for row in rows.values():
                 identifier = str(row["id"])
                 tokens = max(0, int(row["total_tokens"]))
-                day_models.append({"id": identifier, "tokens": tokens})
+                day_totals[identifier] = day_totals.get(identifier, 0) + tokens
                 totals[identifier] = totals.get(identifier, 0) + tokens
                 costs[identifier] = costs.get(identifier, 0.0) + max(0.0, float(row["cost_usd"]))
                 detail = token_details.setdefault(identifier, {"input": 0, "output": 0})
                 detail["input"] += max(0, int(row["input_tokens"]))
                 detail["output"] += max(0, int(row["output_tokens"]))
-            daily.append(daily_usage(day, sum(model["tokens"] for model in day_models), day_models))
+            day_models = [
+                {"id": identifier, "tokens": tokens}
+                for identifier, tokens in sorted(day_totals.items())
+            ]
+            daily.append(daily_usage(day, sum(day_totals.values()), day_models))
         return daily, totals, costs, token_details
 
     def _snapshot_for(self, observed_at: str, current_day: str) -> dict[str, Any]:
         daily, cumulative_tokens, cumulative_costs, _ = self._summaries(self._history)
         current = self._history.get(current_day, {})
-        current_by_model = {str(row["id"]): row for row in current.values()}
+        current_by_model: dict[str, dict[str, Any]] = {}
+        for row in current.values():
+            identifier = str(row["id"])
+            aggregate = current_by_model.setdefault(identifier, {
+                "total_tokens": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0,
+            })
+            aggregate["total_tokens"] += int(row["total_tokens"])
+            aggregate["input_tokens"] += int(row["input_tokens"])
+            aggregate["output_tokens"] += int(row["output_tokens"])
+            aggregate["cost_usd"] += float(row["cost_usd"])
         today_tokens = sum(int(row["total_tokens"]) for row in current.values())
         all_models = sorted(
             set(cumulative_tokens) | set(current_by_model),
             key=lambda identifier: (-cumulative_tokens.get(identifier, 0), identifier),
         )
         today_detail = localized(
-            "Infer Runtime's current host-local-day settled aggregate; Codex-origin attempts are excluded.",
-            "Infer Runtime 当前主机自然日的已结算聚合；已排除 Codex 来源的尝试。",
+            "Infer Runtime's current host-local-day settled aggregate, including Codex App Server attempts that are not durable local Codex tasks.",
+            "Infer Runtime 当前主机自然日的已结算聚合，包含不会形成持久 Codex 本地任务的 Codex App Server 尝试。",
         )
         cumulative_detail = localized(
             "Sentinel's local daily history, replaced by each exact Runtime snapshot rather than re-added per poll.",
@@ -268,8 +284,8 @@ class InferRuntimeUsageCollector:
                     token_metric("output-tokens", localized("Output", "输出"), day_output, today_detail),
                     token_metric("settled-cost", localized("Cost", "费用"), day_cost, today_detail, unit="usd"),
                 ], note=localized(
-                    "Only execution_origin=other is retained. Codex-origin Runtime rows are excluded to avoid double counting the Codex local collector.",
-                    "仅保留 execution_origin=other。Codex 来源的 Runtime 行会被排除，避免与 Codex 本地采集重复计算。",
+                    "Both Runtime execution origins are retained. Codex App Server attempts use ephemeral threads and are not assumed to overlap the local Codex task collector.",
+                    "保留 Runtime 的两种执行来源。Codex App Server 尝试使用 ephemeral 线程，不假定会与 Codex 本地任务采集重叠。",
                 )),
                 detail_group("model-settlement", localized("Model settlement", "模型结算"), model_costs,
                     note=localized("Per-model settled cost for the current local day.", "当前本机自然日按模型的已结算费用。"),
@@ -285,7 +301,7 @@ class InferRuntimeUsageCollector:
         usage = self._usage_daily(context.facilities)
         if usage is None:
             return Collection(status="unavailable", snapshot={"available": False, "status": "unavailable"})
-        current_day, models = self._other_models(usage, _local_day(epoch))
+        current_day, models = self._runtime_models(usage, _local_day(epoch))
         if self._history.get(current_day) != models:
             self._history[current_day] = models
             self._write_history()

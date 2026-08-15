@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import ANY
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -54,7 +55,7 @@ def model(
 
 
 class InferRuntimeUsageTests(unittest.TestCase):
-    def test_only_other_origin_is_persisted_and_each_poll_replaces_the_current_day(self) -> None:
+    def test_both_origins_are_persisted_and_each_poll_replaces_the_current_day(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             checkpoint = Path(temporary) / "infer-runtime-usage-daily.json"
             collector = InferRuntimeUsageCollector(checkpoint_path=checkpoint, clock=lambda: EPOCH)
@@ -66,29 +67,49 @@ class InferRuntimeUsageTests(unittest.TestCase):
 
             snapshot = first.snapshot
             self.assertEqual(first.status, "ok")
-            self.assertEqual(snapshot["usage"]["today"]["tokens"], 30)  # type: ignore[index]
-            self.assertEqual(snapshot["usage"]["cumulative"]["tokens"], 30)  # type: ignore[index]
-            self.assertEqual({item["id"] for item in snapshot["models"]}, {"deepseek-v4-flash", "luna"})  # type: ignore[index]
+            self.assertEqual(snapshot["usage"]["today"]["tokens"], 129)  # type: ignore[index]
+            self.assertEqual(snapshot["usage"]["cumulative"]["tokens"], 129)  # type: ignore[index]
+            self.assertEqual({item["id"] for item in snapshot["models"]}, {"gpt-5.6-sol", "deepseek-v4-flash", "luna"})  # type: ignore[index]
             stored = json.loads(checkpoint.read_text(encoding="utf-8"))
-            self.assertEqual(set(stored["days"]["2026-08-13"]), {"other:deepseek-v4-flash", "other:luna"})
+            self.assertEqual(set(stored["days"]["2026-08-13"]), {"codex:gpt-5.6-sol", "other:deepseek-v4-flash", "other:luna"})
 
             repeated = collector.collect(CollectorContext({"epoch": EPOCH + 15}, {}, facilities(
                 model("gpt-5.6-sol", "codex", input_tokens=90, output_tokens=9, total_tokens=99, cost_usd=1.0),
                 model("deepseek-v4-flash", "other", input_tokens=17, output_tokens=3, total_tokens=20, cost_usd=0.02),
                 model("luna", "other", input_tokens=9, output_tokens=1, total_tokens=10, cost_usd=0.01),
             )))
-            self.assertEqual(repeated.snapshot["usage"]["today"]["tokens"], 30)  # type: ignore[index]
+            self.assertEqual(repeated.snapshot["usage"]["today"]["tokens"], 129)  # type: ignore[index]
 
             replacement = collector.collect(CollectorContext({"epoch": EPOCH + 30}, {}, facilities(
                 model("gpt-5.6-sol", "codex", input_tokens=100, output_tokens=10, total_tokens=110, cost_usd=1.1),
                 model("deepseek-v4-flash", "other", input_tokens=21, output_tokens=4, total_tokens=25, cost_usd=0.025),
             )))
-            self.assertEqual(replacement.snapshot["usage"]["today"]["tokens"], 25)  # type: ignore[index]
-            self.assertEqual(replacement.snapshot["usage"]["cumulative"]["tokens"], 25)  # type: ignore[index]
+            self.assertEqual(replacement.snapshot["usage"]["today"]["tokens"], 135)  # type: ignore[index]
+            self.assertEqual(replacement.snapshot["usage"]["cumulative"]["tokens"], 135)  # type: ignore[index]
             self.assertEqual(
                 replacement.snapshot["history"]["daily"],  # type: ignore[index]
-                [{"date": "2026-08-13", "tokens": 25, "models": [{"id": "deepseek-v4-flash", "tokens": 25}]}],
+                [{"date": "2026-08-13", "tokens": 135, "models": [
+                    {"id": "deepseek-v4-flash", "tokens": 25}, {"id": "gpt-5.6-sol", "tokens": 110},
+                ]}],
             )
+
+    def test_same_model_from_two_origins_is_upserted_separately_and_displayed_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / "infer-runtime-usage-daily.json"
+            collector = InferRuntimeUsageCollector(checkpoint_path=checkpoint, clock=lambda: EPOCH)
+            result = collector.collect(CollectorContext({"epoch": EPOCH}, {}, facilities(
+                model("gpt-5.6-luna", "codex", input_tokens=4, output_tokens=1, total_tokens=5, cost_usd=0),
+                model("gpt-5.6-luna", "other", input_tokens=2, output_tokens=1, total_tokens=3, cost_usd=0.01),
+            )))
+            self.assertEqual(result.snapshot["usage"]["today"]["tokens"], 8)  # type: ignore[index]
+            self.assertEqual(result.snapshot["models"], [  # type: ignore[index]
+                {"id": "gpt-5.6-luna", "today": ANY, "cumulative": ANY},
+            ])
+            self.assertEqual(result.snapshot["history"]["daily"], [  # type: ignore[index]
+                {"date": "2026-08-13", "tokens": 8, "models": [{"id": "gpt-5.6-luna", "tokens": 8}]},
+            ])
+            stored = json.loads(checkpoint.read_text(encoding="utf-8"))
+            self.assertEqual(set(stored["days"]["2026-08-13"]), {"codex:gpt-5.6-luna", "other:gpt-5.6-luna"})
 
     def test_missing_or_old_origin_contract_is_not_projected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
