@@ -1,7 +1,15 @@
 export type UiLocale = "en" | "zh";
 
 const STORAGE_KEY = "infra-sentinel.ui-locale";
+declare global {
+  interface Window {
+    __INFRA_SENTINEL_STATIC_DEMO_LOCALE?: UiLocale;
+  }
+}
+
 let locale: UiLocale = (() => {
+  const staticDemoLocale = window.__INFRA_SENTINEL_STATIC_DEMO_LOCALE;
+  if (staticDemoLocale === "en" || staticDemoLocale === "zh") return staticDemoLocale;
   const stored = window.localStorage.getItem(STORAGE_KEY);
   if (stored === "en" || stored === "zh") return stored;
   return navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";

@@ -8,6 +8,7 @@
 
 use crate::app_paths::{config_path, state_dir, support_dir, STATE_DIRECTORY_ENV};
 use crate::projection_cache::ProjectionCache;
+use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -18,7 +19,31 @@ use tauri::{AppHandle, Manager};
 
 const RESTART_DELAY: Duration = Duration::from_secs(2);
 const PROJECTION_STREAM_ENV: &str = "INFRA_SENTINEL_PROJECTION_STREAM";
+const STATIC_PROJECTION_ENV: &str = "INFRA_SENTINEL_STATIC_PROJECTION";
+const STATIC_DASHBOARD_ENV: &str = "INFRA_SENTINEL_STATIC_SHOW_DASHBOARD";
+const STATIC_LOCALE_ENV: &str = "INFRA_SENTINEL_STATIC_DEMO_LOCALE";
 const MAX_PROJECTION_FRAME_BYTES: usize = 2 * 1024 * 1024;
+
+fn static_projection_path_from(value: Option<OsString>) -> Option<PathBuf> {
+    value.filter(|value| !value.is_empty()).map(PathBuf::from)
+}
+
+fn static_projection_path() -> Option<PathBuf> {
+    static_projection_path_from(std::env::var_os(STATIC_PROJECTION_ENV))
+}
+
+fn should_show_static_dashboard(value: Option<OsString>) -> bool {
+    matches!(value.as_deref(), Some(value) if !value.is_empty() && value != "0")
+}
+
+fn static_demo_locale_from(value: Option<OsString>) -> Option<String> {
+    let locale = value?.to_string_lossy().into_owned();
+    matches!(locale.as_str(), "en" | "zh").then_some(locale)
+}
+
+pub fn static_demo_locale() -> Option<String> {
+    static_demo_locale_from(std::env::var_os(STATIC_LOCALE_ENV))
+}
 
 fn sidecar_file_name() -> &'static str {
     if cfg!(target_os = "windows") {
@@ -139,6 +164,18 @@ fn launch_once(
 }
 
 pub fn start(app: AppHandle, cache: ProjectionCache) -> Result<(), String> {
+    if let Some(path) = static_projection_path() {
+        cache
+            .load_checkpoint(&path)
+            .map_err(|error| format!("cannot load static demo Projection: {error}"))?;
+        if should_show_static_dashboard(std::env::var_os(STATIC_DASHBOARD_ENV)) {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+        return Ok(());
+    }
     let (support, state, config) = bootstrap_runtime(&app)?;
     let _ = cache.load_checkpoint(&state.join("projection.json"));
     let agent = packaged_agent_path()?;
@@ -154,8 +191,12 @@ pub fn start(app: AppHandle, cache: ProjectionCache) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{consume_projection_stream, development_config_template, sidecar_file_name};
+    use super::{
+        consume_projection_stream, development_config_template, should_show_static_dashboard,
+        sidecar_file_name, static_demo_locale_from, static_projection_path_from,
+    };
     use crate::projection_cache::{ProjectionCache, PROTOCOL_SCHEMA};
+    use std::ffi::OsString;
     use std::io::Cursor;
 
     #[test]
@@ -186,5 +227,33 @@ mod tests {
             cache.snapshot().and_then(|value| value["epoch"].as_i64()),
             Some(2)
         );
+    }
+
+    #[test]
+    fn static_projection_path_is_opt_in_and_accepts_a_single_explicit_path() {
+        assert_eq!(static_projection_path_from(None), None);
+        assert_eq!(static_projection_path_from(Some(OsString::new())), None);
+        assert_eq!(
+            static_projection_path_from(Some(OsString::from("/tmp/infra-demo/projection.json"))),
+            Some(std::path::PathBuf::from("/tmp/infra-demo/projection.json")),
+        );
+    }
+
+    #[test]
+    fn static_dashboard_requires_an_explicit_nonzero_environment_value() {
+        assert!(!should_show_static_dashboard(None));
+        assert!(!should_show_static_dashboard(Some(OsString::new())));
+        assert!(!should_show_static_dashboard(Some(OsString::from("0"))));
+        assert!(should_show_static_dashboard(Some(OsString::from("1"))));
+    }
+
+    #[test]
+    fn static_demo_locale_accepts_only_the_two_documented_ui_values() {
+        assert_eq!(static_demo_locale_from(None), None);
+        assert_eq!(
+            static_demo_locale_from(Some(OsString::from("en"))).as_deref(),
+            Some("en")
+        );
+        assert_eq!(static_demo_locale_from(Some(OsString::from("de"))), None);
     }
 }

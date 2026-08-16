@@ -14,6 +14,7 @@ the shorter question: **where should a change live?**
 | Entry point | Owns | Does not own |
 | --- | --- | --- |
 | `bin/` | Small executable/release wrappers | Product logic |
+| `scripts/` | Reproducible developer and documentation fixtures | Product runtime, user state, or live collection |
 | `src/infra_sentinel/app/agent.py` | Agent composition, sampling lifecycle, command loop, and Projection publication | Provider-specific parsing or UI rendering |
 | `src/infra_sentinel/` | Portable Agent semantics, resource adapters, metrics, and configuration | Native WebView or tray implementation |
 | `ui/src-tauri/src/main.rs` | Tauri desktop composition and native lifecycle | Sampling, accounting, or arbitrary local access |
@@ -52,10 +53,17 @@ Read [ui/SKELETON.md](ui/SKELETON.md) before changing the desktop app.
 - `ui/src/` is platform-neutral TypeScript: bridge types, view routing,
   analysis state, formatting/localization, and resource-specific views.
 - `ui/src-tauri/src/` is the native boundary: sidecar supervision, Projection
-  cache, menu bar, notifications, URL opening, and allowlisted IPC commands.
+  cache, menu bar, notifications, URL opening, static documentation-demo
+  startup, and allowlisted IPC commands.
 - The renderer must request new native behavior through the Tauri bridge; it
   must never reach into the Agent state directory or an external provider
   directly.
+
+`scripts/write_demo_projection.py` and
+`scripts/capture-demo-screenshots.sh` own the anonymous, reproducible README
+fixture. They may launch an already-built desktop shell with an explicit static
+Projection, but must not start the Agent, inspect live state, or contact a
+local or remote service.
 
 ## Change routing
 
@@ -70,6 +78,7 @@ Read [ui/SKELETON.md](ui/SKELETON.md) before changing the desktop app.
 | An AI usage adapter | `resources/ai/` | Its contract/collector tests; local estimates and provider-authoritative values must remain labeled as such |
 | A new WebView analysis or resource page | `ui/src/*_analysis.ts`, `ui/src/*_view.ts` | Projection types in `bridge.ts` and deterministic rendering behavior |
 | A native desktop capability | `ui/src-tauri/src/` | A narrow IPC operation and target build/run verification |
+| A documentation screenshot or deterministic presentation fixture | `scripts/` | Anonymous fixture validation and an opt-in native static-Projection path; never a production collection path |
 
 ## Guardrails
 
@@ -83,6 +92,9 @@ Read [ui/SKELETON.md](ui/SKELETON.md) before changing the desktop app.
   execution. Keep commands explicit and allowlisted.
 - Keep prompts, responses, credentials, raw payloads, and sensitive local
   paths out of persistent metrics and Projection data.
+- Keep documentation/demo fixtures anonymous and opt-in. A static Projection
+  must bypass Agent bootstrap and sidecar launch rather than reusing a user's
+  runtime state.
 
 ## Verification route
 

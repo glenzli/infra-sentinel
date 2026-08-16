@@ -16,9 +16,6 @@ htmlcov/
 build/
 *.egg-info/
 
-Codex Traffic Sentinel.app/
-Traffic Sentinel.app/
-Infra Sentinel.app/
 .build/
 dist/
 

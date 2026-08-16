@@ -10,7 +10,7 @@ or durable metrics.
 | Path | Owns | Must not own |
 | --- | --- | --- |
 | `src/` | Projection types and IPC client, view routing, resource pages, local analysis state, charts, formatting, localization, and CSS | Direct Agent-state reads, arbitrary local commands, sampling, or persistence |
-| `src-tauri/src/` | Sidecar supervision, Projection cache, native menu/notifications, external Console/status links, application paths, and allowlisted Tauri commands | Resource-specific accounting, data normalization, or renderer business rules |
+| `src-tauri/src/` | Sidecar supervision, Projection cache, native menu/notifications, external Console/status links, application paths, an opt-in static documentation-demo gate, and allowlisted Tauri commands | Resource-specific accounting, data normalization, renderer business rules, or a general-purpose test mode |
 
 `src/main.ts` is the renderer composition root: it routes between the overview,
 resource pages, facility detail, and settings. Keep page rendering in the
@@ -43,6 +43,20 @@ Do not turn that path into arbitrary file access, command execution, database
 queries, SSH, or unchecked URL launching. The renderer always consumes the
 versioned Projection produced by the Agent; it does not reconstruct resource
 state from local files.
+
+## Static documentation demos
+
+`../scripts/write_demo_projection.py` creates an anonymous fixture and
+`../scripts/capture-demo-screenshots.sh` starts an already-built desktop app
+for README captures. `src-tauri/src/agent_supervisor.rs` owns the narrow,
+explicit static-Projection gate: when it is enabled, it loads only the given
+fixture, skips Agent bootstrap and sidecar launch, and may show the dashboard
+for capture.
+
+This is not an IPC feature, persistent preference, fallback data source, or
+general development mode. Do not expose it to the renderer, reuse a user's
+state directory, or let it contact collectors, local facilities, remote hosts,
+or upstream providers.
 
 ## Verification route
 

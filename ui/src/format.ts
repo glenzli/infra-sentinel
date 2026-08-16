@@ -37,8 +37,15 @@ export function formatTokens(value: unknown): string {
 
 export function formatDuration(value: unknown): string {
   const seconds = Math.floor(number(value));
-  const hours = Math.floor(seconds / 3600);
+  const days = Math.floor(seconds / 86_400);
+  const hours = Math.floor((seconds % 86_400) / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
+  if (days) {
+    return tr(
+      `${days} ${days === 1 ? "day" : "days"} ${hours} h ${minutes} min`,
+      `${days} 天 ${hours} 小时 ${minutes} 分`,
+    );
+  }
   if (hours) return tr(`${hours} h ${minutes} min`, `${hours} 小时 ${minutes} 分`);
   return tr(`${minutes} min`, `${minutes} 分钟`);
 }
