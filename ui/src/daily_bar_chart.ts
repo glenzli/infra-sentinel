@@ -71,10 +71,10 @@ export function renderDailyBarChart(
   return `<article class="detail-panel daily-history-chart"><div class="detail-panel__heading"><h3>${escapeHtml(options.title)}</h3><span>${escapeHtml(options.detail)}</span></div>${legend}<div class="daily-bars-frame" style="--daily-bucket-count:${bucketCount}"><span class="daily-bars__axis">${escapeHtml(options.formatValue(maximum))}</span><div class="daily-bars__plot"><div class="daily-bars" role="img" aria-label="${escapeHtml(options.ariaLabel)}">${buckets.map((bucket) => {
     const title = tooltip(bucket, usable, options.formatValue);
     const empty = usable.every((item) => !(bucket.values.get(item.id) ?? 0));
-    return `<div class="daily-bar-day${empty ? " daily-bar-day--empty" : ""}" title="${escapeHtml(title)}"><div class="daily-bar-day__bars${stacked ? " daily-bar-day__bars--stacked" : ""}">${usable.map((item) => {
+    return `<button type="button" class="daily-bar-day${empty ? " daily-bar-day--empty" : ""}" data-tooltip="${escapeHtml(title)}" aria-label="${escapeHtml(title)}"><div class="daily-bar-day__bars${stacked ? " daily-bar-day__bars--stacked" : ""}">${usable.map((item) => {
       const value = bucket.values.get(item.id) ?? 0;
-      const height = value > 0 ? Math.max(4, (value / maximum) * 100) : 0;
+      const height = value > 0 ? Math.max(1, (value / maximum) * 100) : 0;
       return `<i style="--daily-bar-color:${item.color};height:${height}%"></i>`;
-    }).join("")}</div></div>`;
+    }).join("")}</div></button>`;
   }).join("")}</div></div><div class="daily-bars__labels" aria-hidden="true">${buckets.map((bucket, index) => `<span title="${escapeHtml(dayLabel(bucket.epoch))}">${showDayLabel(index, buckets.length) ? escapeHtml(dayLabel(bucket.epoch)) : ""}</span>`).join("")}</div></div><p class="panel-footnote">${escapeHtml(options.footnote)}</p></article>`;
 }

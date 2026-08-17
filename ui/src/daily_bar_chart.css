@@ -19,7 +19,7 @@
 .daily-bars__plot {
   background: linear-gradient(to bottom, transparent 49.5%, #edf0f3 50%, transparent 50.5%);
   height: 128px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .daily-bars {
@@ -30,8 +30,53 @@
 }
 
 .daily-bar-day {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  cursor: help;
   display: block;
   height: 100%;
+  padding: 0;
+  position: relative;
+  text-align: inherit;
+  width: 100%;
+}
+
+.daily-bar-day::after {
+  background: rgba(37, 42, 48, .94);
+  border-radius: 5px;
+  bottom: 8px;
+  color: #fff;
+  content: attr(data-tooltip);
+  font-size: 11px;
+  font-weight: 600;
+  left: 50%;
+  line-height: 1.4;
+  max-width: min(320px, 70vw);
+  opacity: 0;
+  padding: 6px 8px;
+  pointer-events: none;
+  position: absolute;
+  text-align: left;
+  transform: translate(-50%, 2px);
+  transition: opacity 80ms ease, transform 80ms ease, visibility 80ms step-end;
+  visibility: hidden;
+  white-space: normal;
+  width: max-content;
+  z-index: 3;
+}
+
+.daily-bar-day:hover::after,
+.daily-bar-day:focus::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  transition-delay: 0s;
+  visibility: visible;
+}
+
+.daily-bar-day:focus-visible {
+  outline: 2px solid #4d80cf;
+  outline-offset: 2px;
 }
 
 .daily-bars__labels {
