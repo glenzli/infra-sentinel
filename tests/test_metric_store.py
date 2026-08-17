@@ -69,6 +69,31 @@ class MetricStoreTests(unittest.TestCase):
         self.assertEqual({point.source_id for point in local}, {"local-mihomo"})
         self.assertEqual({point.source_id for point in remote}, {"vps:primary", "xray:primary"})
 
+    def test_xray_client_deltas_use_the_same_calendar_queries_as_other_network_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            store = MetricStore(Path(temporary))
+            yesterday = 1_786_406_400.0
+            today = yesterday + 86_400
+            store.write((
+                *xray_sample_metrics("primary", {
+                    "timestamp": "2026-08-11T00:05:00+08:00", "epoch": yesterday,
+                    "users": {"mac": {"up_bytes": 4, "down_bytes": 6}},
+                }),
+                *xray_sample_metrics("primary", {
+                    "timestamp": "2026-08-12T00:05:00+08:00", "epoch": today,
+                    "users": {"mac": {"up_bytes": 7, "down_bytes": 9}},
+                }),
+            ))
+
+            rows = store.query_points(
+                since_epoch=today, until_epoch=today + 86_399,
+                resource_id="network", metric="network.logical_bytes", source_id="xray:primary",
+                instrument="counter", bucket_seconds=DAILY_RESOLUTION_SECONDS,
+            )
+
+            self.assertEqual(sum(row["value"] for row in rows), 16)
+            self.assertEqual({row["dimensions"]["client"] for row in rows}, {"mac"})
+
     def test_remote_history_rebuild_replaces_polluted_window_from_exact_logs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             state_dir = Path(temporary)

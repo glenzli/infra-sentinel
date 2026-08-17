@@ -78,7 +78,7 @@ export class NetworkAnalysisController {
   private readonly loading = new Set<string>();
   private readonly errors = new Map<string, string>();
 
-  constructor(mode: NetworkViewMode = "billing", range: NetworkTimeRange = "30d") {
+  constructor(mode: NetworkViewMode = "billing", range: NetworkTimeRange = "today") {
     this.mode = mode;
     this.range = range;
   }

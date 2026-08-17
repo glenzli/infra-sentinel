@@ -230,7 +230,37 @@ function serviceTotals(points: Record<string, unknown>[]): Map<string, { label: 
   return totals;
 }
 
-function renderAttributionView(analysis: NetworkAnalysisData, users: Record<string, unknown>[], range: NetworkTimeRange): string {
+function xrayClientTotals(
+  points: Record<string, unknown>[],
+  remoteServers: Record<string, unknown>[],
+): Array<{ label: string; total: number }> {
+  const hostLabels = new Map(remoteServers.map((server) => [
+    `xray:${String(server.id ?? "")}`,
+    String(server.label ?? server.id ?? "VPS"),
+  ]));
+  const totals = new Map<string, { label: string; total: number }>();
+  for (const point of points) {
+    const sourceId = String(point.source_id ?? "xray:unknown");
+    const dimensions = asRecord(point.dimensions);
+    const client = String(dimensions.client ?? "unknown");
+    const key = `${sourceId}\u0000${client}`;
+    const row = totals.get(key) ?? {
+      label: `${hostLabels.get(sourceId) ?? sourceId.replace(/^xray:/, "")} / ${client}`,
+      total: 0,
+    };
+    row.total += number(point.value);
+    totals.set(key, row);
+  }
+  return [...totals.values()]
+    .filter((row) => row.total > 0)
+    .sort((left, right) => right.total - left.total || left.label.localeCompare(right.label));
+}
+
+function renderAttributionView(
+  analysis: NetworkAnalysisData,
+  remoteServers: Record<string, unknown>[],
+  range: NetworkTimeRange,
+): string {
   const services = serviceTotals(analysis.servicePoints);
   const attributed = [...services.values()].filter((row) => !row.unattributed).sort((left, right) => right.total - left.total);
   const localTotal = total(analysis.localPoints);
@@ -239,11 +269,12 @@ function renderAttributionView(analysis: NetworkAnalysisData, users: Record<stri
   const coverage = localTotal > 0 ? attributedTotal / localTotal : 0;
   const visible = attributed.slice(0, 8);
   const maximum = Math.max(...visible.map((row) => row.total), 1);
+  const xrayClients = xrayClientTotals(analysis.xrayPoints, remoteServers);
   return `<section class="network-view-panel">
     <div class="network-view-heading"><div><p>${tr("Attributed local traffic", "本机已归因流量")}</p><strong>${formatBytes(attributedTotal)}</strong></div><span>${rangeLabel(range)} · ${tr(`${(coverage * 100).toFixed(1)}% coverage`, `覆盖率 ${(coverage * 100).toFixed(1)}%`)}</span></div>
     <div class="network-attribution-grid">
       <article class="detail-panel traffic-total-chart"><div class="detail-panel__heading"><h3>${tr("Service attribution", "服务流量归因")}</h3><span>Mihomo</span></div><div class="traffic-total-bars">${visible.map((row, index) => `<div class="traffic-total-bar"><div><span><i class="chart-dot" style="background:${TRAFFIC_COLORS[index % TRAFFIC_COLORS.length]}"></i>${escapeHtml(row.label)}</span><strong>${formatBytes(row.total)}</strong></div><p><i style="background:${TRAFFIC_COLORS[index % TRAFFIC_COLORS.length]};width:${Math.max(1, (row.total / maximum) * 100)}%"></i></p></div>`).join("") || `<div class="chart-empty">${tr("Waiting for attributed service samples.", "等待已归因的服务采样。")}</div>`}</div><p class="panel-footnote">${tr(`Local total ${formatBytes(localTotal)} · unattributed ${formatBytes(unattributed)}`, `本机总量 ${formatBytes(localTotal)} · 未归因 ${formatBytes(unattributed)}`)}</p></article>
-      <article class="detail-panel"><div class="detail-panel__heading"><h3>${tr("Xray clients", "Xray 客户端")}</h3><span>${users.length}</span></div><ul class="traffic-list">${users.slice(0, 10).map((user) => `<li><span>${escapeHtml(user.label)}</span><strong>${formatBytes(user.total_bytes)}</strong></li>`).join("") || `<li class="empty">${tr("No Xray client counters available.", "暂无 Xray 客户端计数。")}</li>`}</ul><p class="panel-footnote">${tr("Client counters use the current Xray baseline; the time selector applies to local service attribution above.", "客户端计数采用当前 Xray 基线；时间范围仅作用于上方本地服务归因。")}</p></article>
+      <article class="detail-panel"><div class="detail-panel__heading"><h3>${tr("Xray client traffic", "Xray 客户端流量")}</h3><span>${rangeLabel(range)} · ${xrayClients.length}</span></div><ul class="traffic-list">${xrayClients.slice(0, 10).map((client) => `<li><span>${escapeHtml(client.label)}</span><strong>${formatBytes(client.total)}</strong></li>`).join("") || `<li class="empty">${tr("No Xray client traffic in this range.", "所选范围内暂无 Xray 客户端流量。")}</li>`}</ul><p class="panel-footnote">${tr("Xray traffic is derived from recorded interval deltas and uses the same selected time range as the other network measurements.", "Xray 流量由已记录的间隔增量聚合，与其他网络指标使用同一所选时间范围。")}</p></article>
     </div>
   </section>`;
 }
@@ -326,7 +357,6 @@ export function renderNetworkDetail(projection: AgentProjection, snapshot: Netwo
   const session = asRecord(state.session);
   const remoteServers = asArray(session.remote_servers);
   const usageChecks = new Map(asArray(asRecord(state.vps).daily_usage_guards).map((usage) => [String(usage.source_id ?? ""), usage]));
-  const users = asArray(asRecord(state.xray_stats).users);
   const trend = asRecord(session.trend);
   const content = snapshot.loading && !snapshot.data.servicePoints.length && !snapshot.data.vpsPoints.length && !snapshot.data.xrayPoints.length
     ? loadingPanel(tr("Loading recorded network metrics…", "正在读取已记录的网络指标…"))
@@ -335,7 +365,7 @@ export function renderNetworkDetail(projection: AgentProjection, snapshot: Netwo
       : snapshot.mode === "billing"
         ? renderBillingView(snapshot.data, remoteServers, usageChecks, snapshot.range)
         : snapshot.mode === "attribution"
-          ? renderAttributionView(snapshot.data, users, snapshot.range)
+          ? renderAttributionView(snapshot.data, remoteServers, snapshot.range)
           : renderEfficiencyView(snapshot.data, remoteServers, snapshot.range, trend);
   return `<section class="network-detail">${renderCurrentSummary(snapshot.data, usageChecks, snapshot.range, snapshot.loading, snapshot.ready)}${renderControls(snapshot)}${content}</section>`;
 }
