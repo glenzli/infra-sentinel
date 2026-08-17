@@ -87,7 +87,7 @@ function horizontalBars(
   title: string, detail: string, totals: Map<string, number>, colors: string[],
   labelFor: (identifier: string) => string = (identifier) => identifier,
 ): string {
-  const ranked = [...totals.entries()].sort((left, right) => right[1] - left[1]).slice(0, 8);
+  const ranked = [...totals.entries()].filter(([, value]) => value > 0).sort((left, right) => right[1] - left[1]).slice(0, 8);
   const maximum = Math.max(...ranked.map(([, value]) => value), 1);
   return `<article class="detail-panel ai-ranked-panel"><div class="detail-panel__heading"><h3>${escapeHtml(title)}</h3><span>${escapeHtml(detail)}</span></div><div class="ai-ranked-bars">${ranked.map(([label, value], index) => `<div class="ai-ranked-bar"><div><span><i class="chart-dot" style="background:${colors[index % colors.length]}"></i>${escapeHtml(labelFor(label))}</span><strong>${formatTokens(value)}</strong></div><p><i style="background:${colors[index % colors.length]};width:${Math.max(1, value / maximum * 100)}%"></i></p></div>`).join("") || `<div class="chart-empty">${tr("Waiting for recorded Token increments.", "等待已记录的 Token 增量。")}</div>`}</div></article>`;
 }

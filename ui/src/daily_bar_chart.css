@@ -30,6 +30,12 @@
 }
 
 .daily-bar-day {
+  display: block;
+  height: 100%;
+  position: relative;
+}
+
+.daily-bar-day__trigger {
   appearance: none;
   background: transparent;
   border: 0;
@@ -37,17 +43,15 @@
   display: block;
   height: 100%;
   padding: 0;
-  position: relative;
   text-align: inherit;
   width: 100%;
 }
 
-.daily-bar-day::after {
+.daily-bar-tooltip {
   background: rgba(37, 42, 48, .94);
   border-radius: 5px;
   bottom: 8px;
   color: #fff;
-  content: attr(data-tooltip);
   font-size: 11px;
   font-weight: 600;
   left: 50%;
@@ -66,15 +70,21 @@
   z-index: 3;
 }
 
-.daily-bar-day:hover::after,
-.daily-bar-day:focus::after {
+.daily-bar-tooltip strong { display: block; white-space: nowrap; }
+.daily-bar-tooltip ul { display: grid; gap: 2px; list-style: none; margin: 4px 0 0; padding: 0; }
+.daily-bar-tooltip li { align-items: baseline; display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr) auto; }
+.daily-bar-tooltip li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.daily-bar-tooltip li b { font-weight: 700; }
+
+.daily-bar-day:hover .daily-bar-tooltip,
+.daily-bar-day:focus-within .daily-bar-tooltip {
   opacity: 1;
   transform: translate(-50%, 0);
   transition-delay: 0s;
   visibility: visible;
 }
 
-.daily-bar-day:focus-visible {
+.daily-bar-day__trigger:focus-visible {
   outline: 2px solid #4d80cf;
   outline-offset: 2px;
 }

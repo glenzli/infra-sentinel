@@ -30,11 +30,15 @@ function dayLabel(epoch: number): string {
   return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
-function tooltip(bucket: DailyBarBucket, series: DailyBarSeries[], formatValue: (value: number) => string): string {
+function tooltip(bucket: DailyBarBucket, series: DailyBarSeries[], formatValue: (value: number) => string): { label: string; markup: string } {
   const visible = series.filter((item) => (bucket.values.get(item.id) ?? 0) > 0);
   const total = visible.reduce((sum, item) => sum + (bucket.values.get(item.id) ?? 0), 0);
+  const heading = `${dayLabel(bucket.epoch)} · ${tr("shown total", "图示合计")} ${formatValue(total)}`;
   const rows = visible.map((item) => `${item.label} ${formatValue(bucket.values.get(item.id) ?? 0)}`);
-  return [dayLabel(bucket.epoch), `${tr("shown total", "图示合计")} ${formatValue(total)}`, ...rows].join(" · ");
+  return {
+    label: [heading, ...rows].join(" · "),
+    markup: `<strong>${escapeHtml(heading)}</strong><ul>${visible.map((item) => `<li><span>${escapeHtml(item.label)}</span><b>${escapeHtml(formatValue(bucket.values.get(item.id) ?? 0))}</b></li>`).join("")}</ul>`,
+  };
 }
 
 function niceMaximum(value: number): number {
@@ -69,12 +73,12 @@ export function renderDailyBarChart(
     : "";
   const bucketCount = Math.max(1, buckets.length);
   return `<article class="detail-panel daily-history-chart"><div class="detail-panel__heading"><h3>${escapeHtml(options.title)}</h3><span>${escapeHtml(options.detail)}</span></div>${legend}<div class="daily-bars-frame" style="--daily-bucket-count:${bucketCount}"><span class="daily-bars__axis">${escapeHtml(options.formatValue(maximum))}</span><div class="daily-bars__plot"><div class="daily-bars" role="img" aria-label="${escapeHtml(options.ariaLabel)}">${buckets.map((bucket) => {
-    const title = tooltip(bucket, usable, options.formatValue);
+    const hint = tooltip(bucket, usable, options.formatValue);
     const empty = usable.every((item) => !(bucket.values.get(item.id) ?? 0));
-    return `<button type="button" class="daily-bar-day${empty ? " daily-bar-day--empty" : ""}" data-tooltip="${escapeHtml(title)}" aria-label="${escapeHtml(title)}"><div class="daily-bar-day__bars${stacked ? " daily-bar-day__bars--stacked" : ""}">${usable.map((item) => {
+    return `<div class="daily-bar-day${empty ? " daily-bar-day--empty" : ""}"><button type="button" class="daily-bar-day__trigger" aria-label="${escapeHtml(hint.label)}"><span class="daily-bar-day__bars${stacked ? " daily-bar-day__bars--stacked" : ""}">${usable.map((item) => {
       const value = bucket.values.get(item.id) ?? 0;
-      const height = value > 0 ? Math.max(1, (value / maximum) * 100) : 0;
+      const height = value > 0 ? Math.max(0.2, (value / maximum) * 100) : 0;
       return `<i style="--daily-bar-color:${item.color};height:${height}%"></i>`;
-    }).join("")}</div></button>`;
+    }).join("")}</span></button><div class="daily-bar-tooltip" aria-hidden="true">${hint.markup}</div></div>`;
   }).join("")}</div></div><div class="daily-bars__labels" aria-hidden="true">${buckets.map((bucket, index) => `<span title="${escapeHtml(dayLabel(bucket.epoch))}">${showDayLabel(index, buckets.length) ? escapeHtml(dayLabel(bucket.epoch)) : ""}</span>`).join("")}</div></div><p class="panel-footnote">${escapeHtml(options.footnote)}</p></article>`;
 }
