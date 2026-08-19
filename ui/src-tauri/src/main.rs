@@ -21,6 +21,8 @@ fn main() {
     builder
         .manage(projection_cache.clone())
         .setup(move |app| {
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             menu_bar::install(app.handle(), projection_cache.clone())
                 .map_err(std::io::Error::other)?;
             agent_supervisor::start(app.handle().clone(), projection_cache.clone())
