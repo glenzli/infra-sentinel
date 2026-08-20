@@ -3,6 +3,7 @@ import { AnalysisTimeRange, analysisTimeWindow } from "./analysis_time";
 
 export type NetworkViewMode = "billing" | "attribution" | "efficiency";
 export type NetworkTimeRange = AnalysisTimeRange;
+export type NetworkHistoryVisual = "bars" | "calendar";
 
 export type NetworkAnalysisData = {
   servicePoints: Record<string, unknown>[];
@@ -15,6 +16,7 @@ export type NetworkAnalysisData = {
 export type NetworkAnalysisSnapshot = {
   mode: NetworkViewMode;
   range: NetworkTimeRange;
+  historyVisual: NetworkHistoryVisual;
   data: NetworkAnalysisData;
   ready: boolean;
   loading: boolean;
@@ -73,6 +75,7 @@ function pointsFrom(result: Awaited<ReturnType<typeof requestAgentCommand>>): Re
 export class NetworkAnalysisController {
   private mode: NetworkViewMode;
   private range: NetworkTimeRange;
+  private historyVisual: NetworkHistoryVisual = "bars";
   private generation = 0;
   private readonly cache = new Map<string, CacheEntry>();
   private readonly loading = new Set<string>();
@@ -95,11 +98,16 @@ export class NetworkAnalysisController {
     this.generation += 1;
   }
 
+  selectHistoryVisual(visual: NetworkHistoryVisual): void {
+    this.historyVisual = visual;
+  }
+
   snapshot(): NetworkAnalysisSnapshot {
     const key = this.key();
     return {
       mode: this.mode,
       range: this.range,
+      historyVisual: this.historyVisual,
       data: this.cache.get(key)?.data ?? emptyData(),
       ready: this.cache.has(key),
       loading: this.loading.has(key),

@@ -3,10 +3,12 @@ import { AnalysisTimeRange, AnalysisTimeWindow, analysisTimeWindow } from "./ana
 
 export type AiViewMode = "overview" | "models" | "activity";
 export type AiTimeRange = AnalysisTimeRange;
+export type AiHistoryVisual = "bars" | "calendar";
 
 export type AiAnalysisSnapshot = {
   mode: AiViewMode;
   range: AiTimeRange;
+  historyVisual: AiHistoryVisual;
   points: Record<string, unknown>[];
   window: AnalysisTimeWindow;
   loading: boolean;
@@ -19,6 +21,7 @@ type CacheEntry = { fetchedAt: number; points: Record<string, unknown>[]; window
 export class AiAnalysisController {
   private mode: AiViewMode = "overview";
   private range: AiTimeRange = "today";
+  private historyVisual: AiHistoryVisual = "bars";
   private readonly cache = new Map<AiTimeRange, CacheEntry>();
   private readonly loading = new Set<AiTimeRange>();
   private readonly errors = new Map<AiTimeRange, string>();
@@ -33,10 +36,15 @@ export class AiAnalysisController {
     this.range = range;
   }
 
+  selectHistoryVisual(visual: AiHistoryVisual): void {
+    this.historyVisual = visual;
+  }
+
   snapshot(): AiAnalysisSnapshot {
     return {
       mode: this.mode,
       range: this.range,
+      historyVisual: this.historyVisual,
       points: this.cache.get(this.range)?.points ?? [],
       window: this.cache.get(this.range)?.window ?? analysisTimeWindow(this.range),
       loading: this.loading.has(this.range),

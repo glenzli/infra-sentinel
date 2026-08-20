@@ -3,7 +3,8 @@ import { AgentProjection, ResourceProjection, SourceProjection } from "./bridge"
 import { asArray, asRecord, formatBytes, number } from "./format";
 import { tr } from "./i18n";
 import { DailyBarBucket, DailyBarSeries, renderDailyBarChart } from "./daily_bar_chart";
-import { NetworkAnalysisData, NetworkAnalysisSnapshot, NetworkTimeRange, NetworkViewMode, networkPathTotals } from "./network_analysis";
+import { renderDailyActivityCalendar } from "./daily_activity_calendar";
+import { NetworkAnalysisData, NetworkAnalysisSnapshot, NetworkHistoryVisual, NetworkTimeRange, NetworkViewMode, networkPathTotals } from "./network_analysis";
 import { AttentionDiagnostic, renderAttentionDiagnostics } from "./attention_diagnostics";
 
 const TRAFFIC_COLORS = ["#3178dc", "#2f9461", "#2e9298", "#9468c9", "#c77b2c"];
@@ -51,9 +52,10 @@ function renderControls(snapshot: NetworkAnalysisSnapshot): string {
     ["30d", tr("30 days", "30 天")],
     ["recorded", tr("Recorded", "记录累计")],
   ];
+  const visual = snapshot.mode === "billing" && snapshot.range === "recorded" ? `<div class="network-history-picker"><span>${tr("History view", "历史视图")}</span><div role="group" aria-label="${tr("History visualization", "历史图表")}"><button type="button" class="network-history-visual${snapshot.historyVisual === "bars" ? " is-active" : ""}" data-network-history-visual="bars">${tr("Bars", "柱状")}</button><button type="button" class="network-history-visual${snapshot.historyVisual === "calendar" ? " is-active" : ""}" data-network-history-visual="calendar">${tr("Activity", "活动日历")}</button></div></div>` : "";
   return `<section class="network-analysis-toolbar">
     <div class="network-mode-tabs" role="tablist" aria-label="${tr("Network observation", "网络观测维度")}">${modes.map(([mode, label, detail]) => `<button type="button" role="tab" aria-selected="${mode === snapshot.mode}" class="network-mode-tab${mode === snapshot.mode ? " is-active" : ""}" data-network-mode="${mode}"><strong>${label}</strong><small>${detail}</small></button>`).join("")}</div>
-    <div class="network-range-picker"><span>${tr("Time range", "时间范围")}</span><div role="group" aria-label="${tr("Network time range", "网络时间范围")}">${ranges.map(([range, label]) => `<button type="button" class="network-range${range === snapshot.range ? " is-active" : ""}" data-network-range="${range}">${label}</button>`).join("")}</div></div>
+    <div class="network-toolbar-options"><div class="network-range-picker"><span>${tr("Time range", "时间范围")}</span><div role="group" aria-label="${tr("Network time range", "网络时间范围")}">${ranges.map(([range, label]) => `<button type="button" class="network-range${range === snapshot.range ? " is-active" : ""}" data-network-range="${range}">${label}</button>`).join("")}</div></div>${visual}</div>
   </section>`;
 }
 
@@ -154,7 +156,7 @@ function networkDiagnostics(
   return diagnostics;
 }
 
-function billingHistory(analysis: NetworkAnalysisData, remoteServers: Record<string, unknown>[], range: NetworkTimeRange): string {
+function billingHistory(analysis: NetworkAnalysisData, remoteServers: Record<string, unknown>[], range: NetworkTimeRange, visual: NetworkHistoryVisual): string {
   const hostLabels = new Map(remoteServers.map((server) => [String(server.id ?? ""), String(server.label ?? server.id ?? "VPS")]));
   const sourceTotals = totalsBySource(analysis.vpsPoints);
   const valuesByBucket = new Map<number, Map<string, number>>();
@@ -187,6 +189,16 @@ function billingHistory(analysis: NetworkAnalysisData, remoteServers: Record<str
     }
     return { epoch, values: normalized };
   });
+  if (range === "recorded" && visual === "calendar") {
+    return renderDailyActivityCalendar(series, buckets, {
+      title: tr("Daily VPS billing activity", "VPS 每日账单活动"),
+      detail: tr("Latest year of recorded history", "最近一年的已记录历史"),
+      ariaLabel: tr("Daily VPS billable traffic activity", "VPS 每日计费流量活动"),
+      formatValue: formatBytes,
+      endEpoch: Math.max(...buckets.map((bucket) => bucket.epoch), Date.now() / 1_000),
+      footnote: tr("Each cell is one day. Darker cells mean relatively higher billable traffic; hover or focus a cell for its host breakdown. Daily notice and critical levels remain independent per host.", "每格代表一天；颜色越深表示该日相对账单流量越高，悬停或点选可查看主机构成。每日提醒与严重阈值仍由每台主机独立判断。"),
+    });
+  }
   return renderDailyBarChart(series, buckets, {
     title: tr("VPS billable usage", "VPS 账单用量"),
     detail: `${rangeLabel(range)} · ${tr("all configured hosts", "全部已配置主机")}`,
@@ -202,11 +214,12 @@ function renderBillingView(
   remoteServers: Record<string, unknown>[],
   usageChecks: Map<string, Record<string, unknown>>,
   range: NetworkTimeRange,
+  visual: NetworkHistoryVisual,
 ): string {
   const recordedByHost = totalsBySource(analysis.vpsPoints);
   return `<section class="network-view-panel">
     <div class="network-view-heading"><div><p>${tr("Selected range", "所选范围")}</p><strong>${formatBytes(total(analysis.vpsPoints))}</strong></div><span>${rangeLabel(range)} · ${tr("billable VPS traffic", "VPS 计费流量")}</span></div>
-    ${billingHistory(analysis, remoteServers, range)}
+    ${billingHistory(analysis, remoteServers, range, visual)}
     <article class="detail-panel"><div class="detail-panel__heading"><h3>${tr("Host billing checks", "主机用量检测")}</h3><span>${remoteServers.length}</span></div><ul class="traffic-list network-host-list">${remoteServers.map((server) => {
       const id = String(server.id ?? "");
       const usage = usageChecks.get(id);
@@ -363,7 +376,7 @@ export function renderNetworkDetail(projection: AgentProjection, snapshot: Netwo
     : snapshot.error
       ? errorPanel(snapshot.error)
       : snapshot.mode === "billing"
-        ? renderBillingView(snapshot.data, remoteServers, usageChecks, snapshot.range)
+        ? renderBillingView(snapshot.data, remoteServers, usageChecks, snapshot.range, snapshot.historyVisual)
         : snapshot.mode === "attribution"
           ? renderAttributionView(snapshot.data, remoteServers, snapshot.range)
           : renderEfficiencyView(snapshot.data, remoteServers, snapshot.range, trend);

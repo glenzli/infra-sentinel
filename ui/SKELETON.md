@@ -25,7 +25,7 @@ the matching `*_analysis.ts` module.
 | Shared formatting, localization, visual primitives | `src/format.ts`, `src/i18n.ts`, `src/icons.ts`, or `src/styles.css` |
 | Network, AI, or system time-range state | The matching `*_analysis.ts` module |
 | Network, AI, system, facility, or upstream-status presentation | The matching `*_view.ts` and scoped CSS module |
-| Reusable daily chart behavior | `src/daily_bar_chart.ts` and its CSS |
+| Reusable daily chart behavior | `src/daily_bar_chart.ts` for quantitative bars and `src/daily_activity_calendar.ts` for recorded-history heatmaps, with their scoped CSS |
 | Overview-only composition | `src/overview_view.ts` |
 | Native menu, notification, URL, sidecar, cache, or app-path behavior | The matching module under `src-tauri/src/` |
 

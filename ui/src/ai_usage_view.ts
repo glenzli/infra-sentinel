@@ -3,7 +3,8 @@ import { AgentProjection, ResourceProjection, SourceProjection } from "./bridge"
 import { asArray, asRecord, formatTokens, number } from "./format";
 import { currentLocale, tr } from "./i18n";
 import { DailyBarBucket, DailyBarSeries, renderDailyBarChart } from "./daily_bar_chart";
-import { AiAnalysisSnapshot, AiTimeRange, AiViewMode } from "./ai_analysis";
+import { renderDailyActivityCalendar } from "./daily_activity_calendar";
+import { AiAnalysisSnapshot, AiHistoryVisual, AiTimeRange, AiViewMode } from "./ai_analysis";
 import { AnalysisTimeWindow } from "./analysis_time";
 import { AttentionDiagnostic, renderAttentionDiagnostics } from "./attention_diagnostics";
 import {
@@ -57,7 +58,8 @@ function renderControls(snapshot: AiAnalysisSnapshot): string {
     ["today", tr("Today", "今日")], ["7d", tr("7 days", "7 天")],
     ["30d", tr("30 days", "30 天")], ["recorded", tr("All", "全部")],
   ];
-  return `<section class="ai-analysis-toolbar"><div class="ai-mode-tabs" role="tablist" aria-label="${tr("AI usage observation", "AI 用量观测维度")}">${modes.map(([mode, label, detail]) => `<button type="button" role="tab" aria-selected="${mode === snapshot.mode}" class="ai-mode-tab${mode === snapshot.mode ? " is-active" : ""}" data-ai-mode="${mode}"><strong>${label}</strong><small>${detail}</small></button>`).join("")}</div>${snapshot.mode === "activity" ? `<span class="ai-current-context">${tr("Current provider snapshot", "当前来源快照")}</span>` : `<div class="ai-range-picker"><span>${tr("Time range", "时间范围")}</span><div role="group">${ranges.map(([range, label]) => `<button type="button" class="ai-range${range === snapshot.range ? " is-active" : ""}" data-ai-range="${range}">${label}</button>`).join("")}</div></div>`}</section>`;
+  const visual = snapshot.range === "recorded" ? `<div class="ai-history-picker"><span>${tr("History view", "历史视图")}</span><div role="group" aria-label="${tr("History visualization", "历史图表")}"><button type="button" class="ai-history-visual${snapshot.historyVisual === "bars" ? " is-active" : ""}" data-ai-history-visual="bars">${tr("Bars", "柱状")}</button><button type="button" class="ai-history-visual${snapshot.historyVisual === "calendar" ? " is-active" : ""}" data-ai-history-visual="calendar">${tr("Activity", "活动日历")}</button></div></div>` : "";
+  return `<section class="ai-analysis-toolbar"><div class="ai-mode-tabs" role="tablist" aria-label="${tr("AI usage observation", "AI 用量观测维度")}">${modes.map(([mode, label, detail]) => `<button type="button" role="tab" aria-selected="${mode === snapshot.mode}" class="ai-mode-tab${mode === snapshot.mode ? " is-active" : ""}" data-ai-mode="${mode}"><strong>${label}</strong><small>${detail}</small></button>`).join("")}</div>${snapshot.mode === "activity" ? `<span class="ai-current-context">${tr("Current provider snapshot", "当前来源快照")}</span>` : `<div class="ai-toolbar-options"><div class="ai-range-picker"><span>${tr("Time range", "时间范围")}</span><div role="group">${ranges.map(([range, label]) => `<button type="button" class="ai-range${range === snapshot.range ? " is-active" : ""}" data-ai-range="${range}">${label}</button>`).join("")}</div></div>${visual}</div>`}</section>`;
 }
 
 function shortStartedAt(value: unknown): string {
@@ -94,7 +96,7 @@ function horizontalBars(
 
 function dailyHistory(
   intervals: UsageInterval[], dimension: "source" | "model", range: AiTimeRange,
-  window: AnalysisTimeWindow, undatedTotal = 0,
+  window: AnalysisTimeWindow, visual: AiHistoryVisual, undatedTotal = 0,
 ): string {
   const totals = dimension === "source" ? aggregateBySource(intervals) : aggregateByModel(intervals);
   const visible = [...totals.entries()].sort((left, right) => right[1] - left[1]).slice(0, 5).map(([id]) => id);
@@ -117,6 +119,18 @@ function dailyHistory(
     days.set(epoch, values);
   }
   const buckets: DailyBarBucket[] = completeDailyBuckets(days, range, window).map(([epoch, values]) => ({ epoch, values }));
+  if (range === "recorded" && visual === "calendar") {
+    return renderDailyActivityCalendar(series, [...days.entries()].map(([epoch, values]) => ({ epoch, values })), {
+      title: dimension === "source" ? tr("Daily Agent activity", "按 Agent 的每日活动") : tr("Daily model activity", "按模型的每日活动"),
+      detail: tr("Latest year of recorded history", "最近一年的已记录历史"),
+      ariaLabel: tr("Daily recorded Token activity", "每日已记录 Token 活动"),
+      formatValue: formatTokens,
+      endEpoch: window.untilEpoch,
+      footnote: undatedTotal > 0
+        ? tr(`${formatTokens(undatedTotal)} is included in the range total but has no reliable calendar date, so it is not placed into the calendar.`, `所选总量中另有 ${formatTokens(undatedTotal)} 无可靠日期，因此不强行放入活动日历。`)
+        : tr("Each cell is one day. Darker cells mean relatively higher daily usage; hover or focus a cell for its recorded breakdown.", "每格代表一天；颜色越深表示该日相对用量越高，悬停或点选可查看已记录的构成。"),
+    });
+  }
   return renderDailyBarChart(series, buckets, {
     title: dimension === "source" ? tr("Daily usage by Agent", "按 Agent 的每日用量") : tr("Daily usage by model", "按模型的每日用量"),
     detail: `${rangeLabel(range)}${days.size > 30 ? ` · ${tr("chart shows latest 30 days", "图表展示最近 30 天")}` : ""}`,
@@ -159,16 +173,16 @@ function rateTrend(intervals: UsageInterval[], dimension: "source" | "model", wi
   return `<article class="trend-panel"><div class="detail-panel__heading"><h3>${dimension === "source" ? tr("Agent Token rate", "Agent Token 速率") : tr("Model Token rate", "模型 Token 速率")}</h3><span>${tr("Token / min", "Token / 分钟")}</span></div><div class="traffic-chart-frame"><span class="chart-axis-label chart-axis-label--peak">${formatTokens(maximum)}</span><span class="chart-axis-label chart-axis-label--mid">${formatTokens(maximum / 2)}</span><span class="chart-axis-label chart-axis-label--zero">0</span><svg class="traffic-chart" viewBox="0 0 100 100" preserveAspectRatio="none"><path class="chart-grid chart-grid--reference" d="M0 10H100"/><path class="chart-grid" d="M0 51H100M0 92H100"/>${seriesIds.map((id, index) => `<polyline class="chart-line" style="stroke:${colors[index % colors.length]}" points="${points(id)}"/>`).join("")}</svg></div><div class="traffic-chart__timeline"><span>${escapeHtml(startLabel)}</span><span>${tr("Now", "现在")}</span></div><div class="chart-legend">${seriesIds.map((id, index) => `<span><i class="chart-dot" style="background:${colors[index % colors.length]}"></i>${escapeHtml(dimension === "model" ? modelLabel(id) : id)}</span>`).join("")}</div></article>`;
 }
 
-function renderOverview(usage: ProjectedUsage, range: AiTimeRange, window: AnalysisTimeWindow): string {
+function renderOverview(usage: ProjectedUsage, range: AiTimeRange, window: AnalysisTimeWindow, visual: AiHistoryVisual): string {
   const sources = usage.sourceTotals;
   const selectedTotal = [...sources.values()].reduce((sum, value) => sum + value, 0);
-  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Selected range total", "所选时段总量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><span>${rangeLabel(range)} · ${sources.size} ${tr("Agents", "个 Agent")}</span></div>${horizontalBars(tr("Usage by Agent", "按 Agent 的用量"), rangeLabel(range), sources, SOURCE_COLORS)}${range === "today" ? rateTrend(usage.intervals, "source", window) : dailyHistory(usage.intervals, "source", range, window, usage.undatedTotal)}</section>`;
+  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Selected range total", "所选时段总量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><span>${rangeLabel(range)} · ${sources.size} ${tr("Agents", "个 Agent")}</span></div>${horizontalBars(tr("Usage by Agent", "按 Agent 的用量"), rangeLabel(range), sources, SOURCE_COLORS)}${range === "today" ? rateTrend(usage.intervals, "source", window) : dailyHistory(usage.intervals, "source", range, window, visual, usage.undatedTotal)}</section>`;
 }
 
-function renderModels(usage: ProjectedUsage, range: AiTimeRange, window: AnalysisTimeWindow): string {
+function renderModels(usage: ProjectedUsage, range: AiTimeRange, window: AnalysisTimeWindow, visual: AiHistoryVisual): string {
   const models = usage.modelTotals;
   const selectedTotal = [...models.values()].reduce((sum, value) => sum + value, 0);
-  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Model total in range", "所选时段模型量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><span>${rangeLabel(range)} · ${tr("mass-conserving", "总量守恒")}</span></div>${horizontalBars(tr("Model composition", "模型构成"), rangeLabel(range), models, MODEL_COLORS, modelLabel)}${range === "today" ? rateTrend(usage.intervals, "model", window) : dailyHistory(usage.intervals, "model", range, window, usage.undatedTotal)}</section>`;
+  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Model total in range", "所选时段模型量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><span>${rangeLabel(range)} · ${tr("mass-conserving", "总量守恒")}</span></div>${horizontalBars(tr("Model composition", "模型构成"), rangeLabel(range), models, MODEL_COLORS, modelLabel)}${range === "today" ? rateTrend(usage.intervals, "model", window) : dailyHistory(usage.intervals, "model", range, window, visual, usage.undatedTotal)}</section>`;
 }
 
 function providerDetails(source: Record<string, unknown>): string {
@@ -190,8 +204,8 @@ function analysisBody(snapshot: AiAnalysisSnapshot, providerSources: Record<stri
   if (snapshot.error) return `<article class="detail-panel ai-analysis-state ai-analysis-state--error"><strong>${tr("Recorded metrics unavailable", "暂时无法读取历史指标")}</strong><p>${escapeHtml(snapshot.error)}</p></article>`;
   const usage = projectUsage(snapshot.points, providerSources, snapshot.range, snapshot.window);
   return snapshot.mode === "overview"
-    ? renderOverview(usage, snapshot.range, snapshot.window)
-    : renderModels(usage, snapshot.range, snapshot.window);
+    ? renderOverview(usage, snapshot.range, snapshot.window, snapshot.historyVisual)
+    : renderModels(usage, snapshot.range, snapshot.window, snapshot.historyVisual);
 }
 
 function sourceRow(source: SourceProjection): string {

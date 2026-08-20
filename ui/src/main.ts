@@ -5,9 +5,9 @@ import { AgentProjection, OverallStatus, openConsole, openExternalStatus, readPr
 import { formatDuration } from "./format";
 import { tr } from "./i18n";
 import { renderNetworkResourcePage } from "./network_view";
-import { NetworkAnalysisController, NetworkTimeRange, NetworkViewMode } from "./network_analysis";
+import { NetworkAnalysisController, NetworkHistoryVisual, NetworkTimeRange, NetworkViewMode } from "./network_analysis";
 import { renderAiUsageResourcePage } from "./ai_usage_view";
-import { AiAnalysisController, AiTimeRange, AiViewMode } from "./ai_analysis";
+import { AiAnalysisController, AiHistoryVisual, AiTimeRange, AiViewMode } from "./ai_analysis";
 import { renderOverview } from "./overview_view";
 import { loadSettings, renderSettings } from "./settings_view";
 import { renderFacilityDetailPage } from "./facility_view";
@@ -138,6 +138,13 @@ function renderProjection(projection: AgentProjection): void {
       if (latestProjection) renderProjection(latestProjection);
     }
   }));
+  root.querySelectorAll<HTMLButtonElement>("[data-ai-history-visual]").forEach((button) => button.addEventListener("click", () => {
+    const visual = button.dataset.aiHistoryVisual as AiHistoryVisual;
+    if (visual === "bars" || visual === "calendar") {
+      aiAnalysis.selectHistoryVisual(visual);
+      if (latestProjection) renderProjection(latestProjection);
+    }
+  }));
   root.querySelectorAll<HTMLButtonElement>("[data-network-mode]").forEach((button) => button.addEventListener("click", () => {
     const mode = button.dataset.networkMode as NetworkViewMode;
     if (mode === "billing" || mode === "attribution" || mode === "efficiency") {
@@ -149,6 +156,13 @@ function renderProjection(projection: AgentProjection): void {
     const range = button.dataset.networkRange as NetworkTimeRange;
     if (range === "today" || range === "7d" || range === "30d" || range === "recorded") {
       networkAnalysis.selectRange(range);
+      if (latestProjection) renderProjection(latestProjection);
+    }
+  }));
+  root.querySelectorAll<HTMLButtonElement>("[data-network-history-visual]").forEach((button) => button.addEventListener("click", () => {
+    const visual = button.dataset.networkHistoryVisual as NetworkHistoryVisual;
+    if (visual === "bars" || visual === "calendar") {
+      networkAnalysis.selectHistoryVisual(visual);
       if (latestProjection) renderProjection(latestProjection);
     }
   }));
