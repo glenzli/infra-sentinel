@@ -52,10 +52,10 @@ function renderControls(snapshot: NetworkAnalysisSnapshot): string {
     ["30d", tr("30 days", "30 天")],
     ["recorded", tr("Recorded", "记录累计")],
   ];
-  const visual = snapshot.mode === "billing" && snapshot.range === "recorded" ? `<div class="network-history-picker"><span>${tr("History view", "历史视图")}</span><div role="group" aria-label="${tr("History visualization", "历史图表")}"><button type="button" class="network-history-visual${snapshot.historyVisual === "bars" ? " is-active" : ""}" data-network-history-visual="bars">${tr("Bars", "柱状")}</button><button type="button" class="network-history-visual${snapshot.historyVisual === "calendar" ? " is-active" : ""}" data-network-history-visual="calendar">${tr("Activity", "活动日历")}</button></div></div>` : "";
+  const visual = snapshot.mode === "billing" && snapshot.range === "recorded" ? `<div class="network-history-picker" role="group" aria-label="${tr("History visualization", "历史图表")}"><button type="button" class="network-history-visual${snapshot.historyVisual === "bars" ? " is-active" : ""}" data-network-history-visual="bars">${tr("Bars", "柱状")}</button><button type="button" class="network-history-visual${snapshot.historyVisual === "calendar" ? " is-active" : ""}" data-network-history-visual="calendar">${tr("Activity", "活动日历")}</button></div>` : "";
   return `<section class="network-analysis-toolbar">
     <div class="network-mode-tabs" role="tablist" aria-label="${tr("Network observation", "网络观测维度")}">${modes.map(([mode, label, detail]) => `<button type="button" role="tab" aria-selected="${mode === snapshot.mode}" class="network-mode-tab${mode === snapshot.mode ? " is-active" : ""}" data-network-mode="${mode}"><strong>${label}</strong><small>${detail}</small></button>`).join("")}</div>
-    <div class="network-toolbar-options"><div class="network-range-picker"><span>${tr("Time range", "时间范围")}</span><div role="group" aria-label="${tr("Network time range", "网络时间范围")}">${ranges.map(([range, label]) => `<button type="button" class="network-range${range === snapshot.range ? " is-active" : ""}" data-network-range="${range}">${label}</button>`).join("")}</div></div>${visual}</div>
+    <div class="network-range-picker"><span>${tr("Time range", "时间范围")}</span><div role="group" aria-label="${tr("Network time range", "网络时间范围")}">${ranges.map(([range, label]) => `<button type="button" class="network-range${range === snapshot.range ? " is-active" : ""}" data-network-range="${range}">${label}</button>`).join("")}</div>${visual}</div>
   </section>`;
 }
 
