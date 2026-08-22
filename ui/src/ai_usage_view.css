@@ -13,6 +13,7 @@
 .ai-range-picker { align-items: end; display: grid; gap: 5px; justify-items: end; }.ai-history-picker, .ai-measure-picker { background: #edf0f3; border-radius: 8px; display: flex; justify-content: end; padding: 3px; }
 .ai-range-picker > span, .ai-current-context { color: #858b93; font-size: 10px; font-weight: 680; }.ai-range-picker > div { background: #edf0f3; border-radius: 8px; display: flex; padding: 3px; }
 .ai-range, .ai-history-visual, .ai-measure { background: transparent; border: 0; border-radius: 6px; color: #6c737c; cursor: pointer; font-size: 11px; font-weight: 680; padding: 6px 9px; white-space: nowrap; }.ai-range.is-active, .ai-history-visual.is-active, .ai-measure.is-active { background: #fff; box-shadow: 0 1px 3px rgba(32, 33, 36, .13); color: #202124; }
+.ai-history-visual-row { align-items: center; display: flex; gap: 8px; justify-content: flex-end; margin: 0 0 -2px; }.ai-history-visual-row > span { color: #858b93; font-size: 10px; font-weight: 680; }
 
 .ai-view-panel { display: grid; gap: 12px; }
 .ai-view-heading { align-items: baseline; background: #f2f5f8; border: 1px solid #e5e9ee; border-radius: 10px; display: flex; justify-content: space-between; min-height: 22px; padding: 7px 15px; }
