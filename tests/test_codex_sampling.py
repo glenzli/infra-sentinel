@@ -95,6 +95,22 @@ class CodexJsonlSamplingTests(unittest.TestCase):
         self.assertAlmostEqual(estimate.models[0].cost_usd, 0.000368)
         self.assertAlmostEqual(estimate.total_cost_usd, 0.000368)
 
+    def test_gpt_5_5_uses_its_published_input_cached_input_and_output_reference(self) -> None:
+        estimate = estimate_standard_api_cost({
+            "gpt-5.5": {
+                "input_tokens": 1_000_000,
+                "cached_input_tokens": 400_000,
+                "cache_write_input_tokens": 200_000,
+                "output_tokens": 1_000_000,
+                "total_tokens": 2_000_000,
+            },
+        })
+
+        # GPT-5.5 had no separate cache-write price: such observed tokens stay
+        # on the normal input leg instead of being treated as a zero-cost tier.
+        self.assertEqual(estimate.priced_tokens, 2_000_000)
+        self.assertAlmostEqual(estimate.total_cost_usd, 33.2)
+
     def test_checkpoint_is_incremental_and_retains_aggregate_after_visible_file_disappears(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "sessions"

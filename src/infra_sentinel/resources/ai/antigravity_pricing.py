@@ -31,13 +31,14 @@ class TextTokenPrice:
 # experimental exception is Antigravity's observed `gemini-3.7-flash-exp-b`,
 # which is explicitly treated as a same-rate Flash approximation so it is not
 # silently presented as free usage. It remains a reference, never a plan bill.
-# `gemini-3.1-pro-low` is the Antigravity local alias for the documented Gemini
-# 3.1 Pro Preview <=200k-context tier.
+# `gemini-3.1-pro-low` and `gemini-pro-default` are Antigravity local aliases
+# for the documented Gemini 3.1 Pro Preview <=200k-context tier.
 ANTIGRAVITY_TEXT_PRICE_REFERENCES: Mapping[str, TextTokenPrice] = {
     "gemini-3.7-flash": TextTokenPrice(0.75, 0.075, 3.75),
     "gemini-3.7-flash-exp-b": TextTokenPrice(0.75, 0.075, 3.75),
     "gemini-3.6-flash": TextTokenPrice(0.75, 0.075, 3.75),
     "gemini-3.1-pro-low": TextTokenPrice(2.00, 0.20, 12.00),
+    "gemini-pro-default": TextTokenPrice(2.00, 0.20, 12.00),
     "claude-opus-4-6-thinking": TextTokenPrice(5.00, 0.50, 25.00),
 }
 

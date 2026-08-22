@@ -8,7 +8,7 @@ import { renderNetworkResourcePage } from "./network_view";
 import { NetworkAnalysisController, NetworkHistoryVisual, NetworkTimeRange, NetworkViewMode } from "./network_analysis";
 import { renderAiUsageResourcePage } from "./ai_usage_view";
 import { renderAiUsageMethodologyPage } from "./ai_methodology_view";
-import { AiAnalysisController, AiHistoryVisual, AiTimeRange, AiViewMode } from "./ai_analysis";
+import { AiAnalysisController, AiHistoryVisual, AiModelMeasure, AiTimeRange, AiViewMode } from "./ai_analysis";
 import { renderOverview } from "./overview_view";
 import { loadSettings, renderSettings } from "./settings_view";
 import { renderFacilityDetailPage } from "./facility_view";
@@ -153,6 +153,13 @@ function renderProjection(projection: AgentProjection): void {
     const visual = button.dataset.aiHistoryVisual as AiHistoryVisual;
     if (visual === "bars" || visual === "calendar") {
       aiAnalysis.selectHistoryVisual(visual);
+      if (latestProjection) renderProjection(latestProjection);
+    }
+  }));
+  root.querySelectorAll<HTMLButtonElement>("[data-ai-model-measure]").forEach((button) => button.addEventListener("click", () => {
+    const measure = button.dataset.aiModelMeasure as AiModelMeasure;
+    if (measure === "tokens" || measure === "value") {
+      aiAnalysis.selectModelMeasure(measure);
       if (latestProjection) renderProjection(latestProjection);
     }
   }));

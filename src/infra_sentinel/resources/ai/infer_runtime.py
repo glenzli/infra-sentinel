@@ -24,9 +24,11 @@ from infra_sentinel.resources.ai.contract import (
     detail_group,
     localized,
     model_usage,
+    pricing_day,
     token_metric,
     usage_window,
 )
+from infra_sentinel.resources.ai.codex_pricing import estimate_standard_api_cost
 from infra_sentinel.resources.facilities.protocols import (
     INFER_RUNTIME_USAGE_DAILY_SCHEMA,
     INFER_RUNTIME_USAGE_DAILY_VERSION,
@@ -219,6 +221,85 @@ class InferRuntimeUsageCollector:
             daily.append(daily_usage(day, sum(day_totals.values()), day_models))
         return daily, totals, costs, token_details
 
+    @staticmethod
+    def _pricing_history(history: dict[str, dict[str, dict[str, Any]]]) -> list[dict[str, Any]] | None:
+        """Keep Runtime execution origins honest at the price boundary.
+
+        Runtime's own cost value is authoritative only for ``other`` attempts.
+        A ``codex`` attempt is explicitly a Codex subscription execution, so
+        Runtime correctly leaves it unpriced; Sentinel may instead provide the
+        same clearly-labelled standard API text reference it uses for local
+        Codex samples. A zero ``cost_usd`` cannot distinguish a free request
+        from an unavailable price, so it remains unpriced until Runtime
+        publishes an explicit availability fact.
+        """
+        pricing: list[dict[str, Any]] = []
+        for day, rows in sorted(history.items()):
+            codex_compositions: dict[str, dict[str, int]] = {}
+            direct_models: dict[str, dict[str, float | int]] = {}
+            other_unpriced_tokens = 0
+            for row in rows.values():
+                identifier = str(row["id"])
+                tokens = max(0, int(row["total_tokens"]))
+                if row["execution_origin"] == "codex":
+                    composition = codex_compositions.setdefault(identifier, {
+                        "input_tokens": 0,
+                        "cached_input_tokens": 0,
+                        "cache_write_input_tokens": 0,
+                        "output_tokens": 0,
+                        "total_tokens": 0,
+                    })
+                    composition["input_tokens"] += max(0, int(row["input_tokens"]))
+                    composition["output_tokens"] += max(0, int(row["output_tokens"]))
+                    composition["total_tokens"] += tokens
+                    continue
+
+                cost = max(0.0, float(row["cost_usd"]))
+                if cost <= 0:
+                    other_unpriced_tokens += tokens
+                    continue
+                aggregate = direct_models.setdefault(identifier, {
+                    "cost_usd": 0.0,
+                    "priced_tokens": 0,
+                    "unpriced_tokens": 0,
+                })
+                aggregate["cost_usd"] = float(aggregate["cost_usd"]) + cost
+                aggregate["priced_tokens"] = int(aggregate["priced_tokens"]) + tokens
+
+            codex_reference = estimate_standard_api_cost(codex_compositions)
+            model_rows: dict[str, dict[str, float | int]] = {
+                identifier: dict(row) for identifier, row in direct_models.items()
+            }
+            for estimate in codex_reference.models:
+                aggregate = model_rows.setdefault(estimate.model, {
+                    "cost_usd": 0.0,
+                    "priced_tokens": 0,
+                    "unpriced_tokens": 0,
+                })
+                aggregate["cost_usd"] = float(aggregate["cost_usd"]) + estimate.cost_usd
+                aggregate["priced_tokens"] = int(aggregate["priced_tokens"]) + estimate.tokens
+
+            priced_tokens = codex_reference.priced_tokens + sum(
+                int(row["priced_tokens"]) for row in direct_models.values()
+            )
+            if priced_tokens <= 0:
+                continue
+            cost_usd = codex_reference.total_cost_usd + sum(
+                float(row["cost_usd"]) for row in direct_models.values()
+            )
+            pricing.append(pricing_day(
+                day,
+                kind="runtime-origin-aware-price-reference",
+                cost_usd=cost_usd,
+                priced_tokens=priced_tokens,
+                unpriced_tokens=codex_reference.unpriced_tokens + other_unpriced_tokens,
+                models=[
+                    {"id": identifier, **row}
+                    for identifier, row in sorted(model_rows.items())
+                ],
+            ))
+        return pricing or None
+
     def _snapshot_for(self, observed_at: str, current_day: str) -> dict[str, Any]:
         daily, cumulative_tokens, cumulative_costs, _ = self._summaries(self._history)
         current = self._history.get(current_day, {})
@@ -294,6 +375,7 @@ class InferRuntimeUsageCollector:
             confidence="high",
             privacy="settled-aggregate-model-usage-only",
             daily_history=daily,
+            pricing_history=self._pricing_history(self._history),
         )
 
     def collect(self, context: CollectorContext) -> Collection:

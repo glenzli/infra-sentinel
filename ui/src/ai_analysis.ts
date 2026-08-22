@@ -4,11 +4,13 @@ import { AnalysisTimeRange, AnalysisTimeWindow, analysisTimeWindow } from "./ana
 export type AiViewMode = "overview" | "models" | "activity";
 export type AiTimeRange = AnalysisTimeRange;
 export type AiHistoryVisual = "bars" | "calendar";
+export type AiModelMeasure = "tokens" | "value";
 
 export type AiAnalysisSnapshot = {
   mode: AiViewMode;
   range: AiTimeRange;
   historyVisual: AiHistoryVisual;
+  modelMeasure: AiModelMeasure;
   providerPanels: ReadonlyMap<string, boolean>;
   points: Record<string, unknown>[];
   window: AnalysisTimeWindow;
@@ -23,6 +25,7 @@ export class AiAnalysisController {
   private mode: AiViewMode = "overview";
   private range: AiTimeRange = "today";
   private historyVisual: AiHistoryVisual = "bars";
+  private modelMeasure: AiModelMeasure = "tokens";
   private readonly cache = new Map<AiTimeRange, CacheEntry>();
   private readonly loading = new Set<AiTimeRange>();
   private readonly errors = new Map<AiTimeRange, string>();
@@ -42,6 +45,10 @@ export class AiAnalysisController {
     this.historyVisual = visual;
   }
 
+  selectModelMeasure(measure: AiModelMeasure): void {
+    this.modelMeasure = measure;
+  }
+
   setProviderPanelOpen(sourceId: string, open: boolean): void {
     this.providerPanels.set(sourceId, open);
   }
@@ -51,6 +58,7 @@ export class AiAnalysisController {
       mode: this.mode,
       range: this.range,
       historyVisual: this.historyVisual,
+      modelMeasure: this.modelMeasure,
       providerPanels: this.providerPanels,
       points: this.cache.get(this.range)?.points ?? [],
       window: this.cache.get(this.range)?.window ?? analysisTimeWindow(this.range),

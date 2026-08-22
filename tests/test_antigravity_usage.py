@@ -201,9 +201,9 @@ class AntigravityUsageTests(unittest.TestCase):
             "gemini-3.7-flash-exp-b": {"input_tokens": 1_000_000},
             "gemini-pro-default": {"input_tokens": 1_000_000},
         })
-        self.assertAlmostEqual(estimate.total_cost_usd, 7.75)
-        self.assertEqual(estimate.priced_tokens, 3_000_000)
-        self.assertEqual(estimate.unpriced_tokens, 1_000_000)
+        self.assertAlmostEqual(estimate.total_cost_usd, 9.75)
+        self.assertEqual(estimate.priced_tokens, 4_000_000)
+        self.assertEqual(estimate.unpriced_tokens, 0)
     def test_collector_deltas_only_new_local_generation_metadata(self) -> None:
         epoch = datetime(2026, 8, 22, 12).timestamp()
         with tempfile.TemporaryDirectory() as temporary:

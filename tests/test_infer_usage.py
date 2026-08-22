@@ -92,6 +92,10 @@ class InferRuntimeUsageTests(unittest.TestCase):
                     {"id": "deepseek-v4-flash", "tokens": 25}, {"id": "gpt-5.6-sol", "tokens": 110},
                 ]}],
             )
+            reference = replacement.snapshot["pricing"]["daily"]  # type: ignore[index]
+            self.assertEqual(reference[0]["reference"]["kind"], "runtime-origin-aware-price-reference")
+            self.assertEqual(reference[0]["reference"]["priced_tokens"], 135)
+            self.assertAlmostEqual(reference[0]["reference"]["cost_usd"], 0.025 + (100 * 5 + 10 * 30) / 1_000_000)
 
     def test_same_model_from_two_origins_is_upserted_separately_and_displayed_once(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -110,6 +114,21 @@ class InferRuntimeUsageTests(unittest.TestCase):
             ])
             stored = json.loads(checkpoint.read_text(encoding="utf-8"))
             self.assertEqual(set(stored["days"]["2026-08-13"]), {"codex:gpt-5.6-luna", "other:gpt-5.6-luna"})
+            reference = result.snapshot["pricing"]["daily"][0]["reference"]  # type: ignore[index]
+            self.assertEqual(reference["priced_tokens"], 8)
+            self.assertAlmostEqual(reference["cost_usd"], 0.01 + (4 * 0.20 + 1 * 1.20) / 1_000_000)
+
+    def test_other_zero_cost_is_not_mistaken_for_a_provider_price(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            collector = InferRuntimeUsageCollector(
+                checkpoint_path=Path(temporary) / "infer-runtime-usage-daily.json",
+                clock=lambda: EPOCH,
+            )
+            result = collector.collect(CollectorContext({"epoch": EPOCH}, {}, facilities(
+                model("opaque-provider-model", "other", input_tokens=4, output_tokens=2, total_tokens=6, cost_usd=0),
+            )))
+            self.assertFalse(result.snapshot["pricing"]["daily_available"])  # type: ignore[index]
+            self.assertEqual(result.snapshot["pricing"]["daily"], [])  # type: ignore[index]
 
     def test_missing_or_old_origin_contract_is_not_projected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

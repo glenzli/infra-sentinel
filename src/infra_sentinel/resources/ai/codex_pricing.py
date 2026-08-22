@@ -23,7 +23,10 @@ class StandardTextPrice:
 
     input_per_million: float
     cached_input_per_million: float
-    cache_write_per_million: float
+    # A few older models have no separately published cache-write rate. In
+    # that case the observed field stays on the ordinary input leg rather than
+    # being presented as free usage.
+    cache_write_per_million: float | None
     output_per_million: float
 
 
@@ -34,6 +37,8 @@ STANDARD_TEXT_PRICES: Mapping[str, StandardTextPrice] = {
     "gpt-5.6-sol": StandardTextPrice(5.00, 0.50, 6.25, 30.00),
     "gpt-5.6-terra": StandardTextPrice(2.00, 0.20, 2.50, 12.00),
     "gpt-5.6-luna": StandardTextPrice(0.20, 0.02, 0.25, 1.20),
+    # GPT-5.5 has no separately published cache-write tier.
+    "gpt-5.5": StandardTextPrice(5.00, 0.50, None, 30.00),
 }
 
 
@@ -71,13 +76,13 @@ def estimate_standard_api_cost(model_compositions: Mapping[str, Mapping[str, int
         input_tokens = _tokens(raw.get("input_tokens"))
         cached_tokens = min(input_tokens, _tokens(raw.get("cached_input_tokens")))
         remaining_input = input_tokens - cached_tokens
-        cache_write_tokens = min(remaining_input, _tokens(raw.get("cache_write_input_tokens")))
+        cache_write_tokens = min(remaining_input, _tokens(raw.get("cache_write_input_tokens"))) if price.cache_write_per_million is not None else 0
         uncached_input = remaining_input - cache_write_tokens
         output_tokens = _tokens(raw.get("output_tokens"))
         cost = (
             uncached_input * price.input_per_million
             + cached_tokens * price.cached_input_per_million
-            + cache_write_tokens * price.cache_write_per_million
+            + cache_write_tokens * (price.cache_write_per_million or 0)
             + output_tokens * price.output_per_million
         ) / 1_000_000
         estimates.append(ModelCostEstimate(model=model, tokens=tokens, cost_usd=cost))

@@ -9,6 +9,7 @@ export type PriceReference = {
   sources: string[];
   byModel: Map<string, number>;
   byDay: Map<number, number>;
+  byDayModel: Map<number, Map<string, number>>;
 };
 
 type SampleRate = { costUsd: number; pricedTokens: number };
@@ -51,6 +52,13 @@ function addValue<Key>(target: Map<Key, number>, key: Key, value: number): void 
   if (value > 0) target.set(key, (target.get(key) ?? 0) + value);
 }
 
+function addDayModelValue(target: Map<number, Map<string, number>>, day: number, model: string, value: number): void {
+  if (value <= 0 || !model) return;
+  const models = target.get(day) ?? new Map<string, number>();
+  addValue(models, model, value);
+  target.set(day, models);
+}
+
 /**
  * Project daily source references onto the selected local Token window.
  *
@@ -72,6 +80,7 @@ export function projectPriceReference(
   const labels = new Set<string>();
   const byModel = new Map<string, number>();
   const byDay = new Map<number, number>();
+  const byDayModel = new Map<number, Map<string, number>>();
   const codexRates = new Map<string, SampleRate>();
 
   for (const source of providerSources) {
@@ -101,9 +110,20 @@ export function projectPriceReference(
       unpricedTokens += number(reference.unpriced_tokens);
       labels.add(String(source.label ?? sourceId));
       addValue(byDay, epoch, cost);
+      let attributedCost = 0;
       for (const model of asArray(reference.models)) {
         const id = canonicalModelId(model.id);
-        if (id) addValue(byModel, id, number(model.cost_usd));
+        const modelCost = number(model.cost_usd);
+        if (!id || modelCost <= 0) continue;
+        attributedCost += modelCost;
+        addValue(byModel, id, modelCost);
+        addDayModelValue(byDayModel, epoch, id, modelCost);
+      }
+      // Preserve a source-level price whose provider did not attach model rows.
+      const unattributed = Math.max(0, cost - attributedCost);
+      if (unattributed > 0) {
+        addValue(byModel, "__priced_unattributed__", unattributed);
+        addDayModelValue(byDayModel, epoch, "__priced_unattributed__", unattributed);
       }
     }
   }
@@ -126,11 +146,16 @@ export function projectPriceReference(
     for (const interval of usage.intervals) {
       if (interval.source !== "codex") continue;
       let intervalCost = 0;
+      const day = localDayEpoch(interval.epoch);
       for (const [rawId, tokens] of interval.models) {
-        const sample = codexRates.get(canonicalModelId(rawId));
-        if (sample?.pricedTokens) intervalCost += tokens * sample.costUsd / sample.pricedTokens;
+        const id = canonicalModelId(rawId);
+        const sample = codexRates.get(id);
+        if (!sample?.pricedTokens) continue;
+        const modelCost = tokens * sample.costUsd / sample.pricedTokens;
+        intervalCost += modelCost;
+        addDayModelValue(byDayModel, day, id, modelCost);
       }
-      addValue(byDay, localDayEpoch(interval.epoch), intervalCost);
+      addValue(byDay, day, intervalCost);
     }
     if (codexPriced > 0) {
       costUsd += codexCost;
@@ -139,5 +164,5 @@ export function projectPriceReference(
       labels.add("Codex");
     }
   }
-  return pricedTokens > 0 ? { costUsd, pricedTokens, unpricedTokens, sources: [...labels], byModel, byDay } : undefined;
+  return pricedTokens > 0 ? { costUsd, pricedTokens, unpricedTokens, sources: [...labels], byModel, byDay, byDayModel } : undefined;
 }
