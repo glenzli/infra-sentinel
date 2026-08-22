@@ -136,3 +136,12 @@
   min-height: 0;
   width: 100%;
 }
+
+.daily-bars__plot { position: relative; }
+.daily-bars__overlay { bottom: 0; height: 100%; left: 2px; pointer-events: none; position: absolute; right: 2px; width: calc(100% - 4px); z-index: 2; }
+.daily-bars__overlay polyline { fill: none; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; vector-effect: non-scaling-stroke; }
+.daily-bars__overlay-axis { color: #a66d1f; font-size: 9px; position: absolute; right: 0; top: -6px; }
+.daily-bars__overlay-legend { color: #80591e; }
+.daily-bars__overlay-legend i { border-radius: 999px; display: inline-block; height: 2px; margin: 0 5px 3px 1px; vertical-align: middle; width: 12px; }
+.daily-bar-tooltip__overlay { border-top: 1px solid rgba(255,255,255,.18); margin-top: 3px; padding-top: 3px; }
+.daily-bars { position: relative; z-index: 3; }

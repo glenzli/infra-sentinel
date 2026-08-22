@@ -1,24 +1,19 @@
-.ai-methodology { display: grid; gap: 12px; }
+.ai-methodology { display: grid; gap: 14px; }
 .methodology-page-heading { align-items: center; }
-.methodology-intro, .methodology-card { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
-.methodology-intro { align-items: baseline; display: flex; gap: 11px; padding: 11px 14px; }
-.methodology-intro strong { color: #38434d; font-size: 12px; white-space: nowrap; }
-.methodology-intro p, .methodology-note { color: var(--muted); font-size: 11px; line-height: 1.45; margin: 0; }
-.methodology-grid { display: grid; grid-template-columns: minmax(250px, .9fr) minmax(300px, 1.1fr); gap: 12px; }
-.methodology-card { padding: 14px 15px; }
-.methodology-card--coverage { grid-row: span 2; }
-.methodology-card__heading { align-items: baseline; display: flex; justify-content: space-between; gap: 12px; }
-.methodology-card__heading h3 { font-size: 13px; margin: 0; }
-.methodology-card__heading > span { color: var(--muted); font-size: 10px; white-space: nowrap; }
-.methodology-source-list { display: grid; gap: 0; margin-top: 9px; }
-.methodology-source-list article { display: grid; gap: 2px; padding: 8px 0; border-top: 1px solid var(--border); }
-.methodology-source-list article:first-child { border-top: 0; padding-top: 0; }
-.methodology-source-list strong { font-size: 11px; }
-.methodology-source-list span, .methodology-source-list small { color: var(--muted); font-size: 10px; line-height: 1.35; }
-.methodology-price-values { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
-.methodology-price-values div { display: grid; gap: 3px; border-left: 2px solid var(--blue-soft); padding-left: 8px; }
-.methodology-price-values span { color: var(--muted); font-size: 10px; }
-.methodology-price-values strong { font-size: 14px; letter-spacing: -.015em; }
-.methodology-note { margin-top: 9px; }
-@media (max-width: 920px) { .methodology-grid { grid-template-columns: 1fr; } .methodology-card--coverage { grid-row: auto; } }
-@media (max-width: 620px) { .methodology-intro { align-items: start; flex-direction: column; gap: 4px; } .methodology-price-values { grid-template-columns: 1fr; } }
+.methodology-hero, .methodology-guidance, .methodology-card, .methodology-boundary { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.methodology-hero { align-items: center; background: linear-gradient(110deg, #fbfcfd, #f4f8fb); display: flex; justify-content: space-between; min-height: 78px; padding: 16px 18px; }
+.methodology-hero > div { display: grid; gap: 3px; }.methodology-hero p, .methodology-card__heading p, .methodology-boundary > span { color: #6e7984; font-size: 9px; font-weight: 750; letter-spacing: .08em; margin: 0; text-transform: uppercase; }
+.methodology-hero h3 { font-size: 17px; letter-spacing: -.025em; margin: 0; }.methodology-hero span { color: var(--muted); font-size: 11px; line-height: 1.45; max-width: 680px; }
+.methodology-hero > b { background: #e7f4ea; border: 1px solid #cde6d3; border-radius: 999px; color: #27713f; font-size: 11px; padding: 5px 10px; }
+.methodology-guidance { align-items: center; background: #fffaf0; border-color: #eed9ad; display: flex; gap: 10px; padding: 10px 13px; }
+.methodology-guidance > i { align-items: center; background: #fff0cd; border-radius: 50%; color: #a5671d; display: inline-flex; font-size: 16px; font-style: normal; font-weight: 800; height: 26px; justify-content: center; width: 26px; }.methodology-guidance div { display: grid; gap: 2px; }.methodology-guidance strong { color: #5f4b2a; font-size: 11px; }.methodology-guidance span { color: #856d47; font-size: 10px; line-height: 1.4; }
+.methodology-grid { display: grid; gap: 12px; grid-template-columns: minmax(300px, 1.05fr) minmax(360px, .95fr); }.methodology-pricing-stack { display: grid; gap: 12px; }
+.methodology-card { overflow: hidden; padding: 14px 15px; }.methodology-card--coverage { background: #fcfdfd; }.methodology-card--pricing { position: relative; }.methodology-card--pricing::before { background: #c7792d; content: ""; height: 3px; left: 0; position: absolute; right: 0; top: 0; }.methodology-card--antigravity::before { background: #4a8fc8; }
+.methodology-card__heading { align-items: start; display: flex; justify-content: space-between; gap: 12px; }.methodology-card__heading > div { display: grid; gap: 3px; }.methodology-card__heading h3 { font-size: 13px; margin: 0; }.methodology-card__heading > span { background: #f0f3f5; border-radius: 999px; color: #6f7881; font-size: 9px; font-weight: 700; padding: 4px 7px; white-space: nowrap; }
+.methodology-source-list { display: grid; margin-top: 10px; }.methodology-source-list article { align-items: center; border-top: 1px solid #e9edf0; display: grid; gap: 7px; grid-template-columns: minmax(0, 1fr) auto; padding: 10px 0; }.methodology-source-list article:first-child { border-top: 0; padding-top: 0; }.methodology-source-list strong { font-size: 11px; }.methodology-source-list p, .methodology-source-history { color: var(--muted); font-size: 9px; line-height: 1.35; margin: 2px 0 0; }.methodology-source-history { grid-column: 1 / -1; margin: -3px 0 0; }
+.methodology-source-window { display: flex; gap: 10px; }.methodology-source-window span { display: grid; gap: 1px; justify-items: end; }.methodology-source-window small { color: #8a929b; font-size: 8px; }.methodology-source-window b { font-size: 10px; }
+.methodology-price-values { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin-top: 12px; }.methodology-price-values div { border-left: 2px solid #f0d6a2; display: grid; gap: 3px; padding-left: 8px; }.methodology-card--antigravity .methodology-price-values div { border-left-color: #c9e1f3; }.methodology-price-values span { color: var(--muted); font-size: 9px; }.methodology-price-values strong { font-size: 14px; letter-spacing: -.015em; }
+.methodology-note { color: var(--muted); font-size: 10px; line-height: 1.45; margin: 9px 0 0; }.methodology-note--warning { background: #fff8e8; border-radius: 6px; color: #87662d; padding: 6px 8px; }
+.methodology-boundary { align-items: baseline; background: #f6f8fa; display: flex; gap: 10px; padding: 10px 13px; }.methodology-boundary p { color: #727b85; font-size: 10px; line-height: 1.45; margin: 0; }
+@media (max-width: 920px) { .methodology-grid { grid-template-columns: 1fr; } }
+@media (max-width: 620px) { .methodology-hero { align-items: start; flex-direction: column; gap: 10px; }.methodology-price-values { grid-template-columns: 1fr; }.methodology-source-list article { grid-template-columns: 1fr; }.methodology-source-window span { justify-items: start; }.methodology-boundary { align-items: start; flex-direction: column; gap: 4px; } }

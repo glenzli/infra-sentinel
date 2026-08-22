@@ -193,17 +193,17 @@ class AntigravityUsageTests(unittest.TestCase):
         self.assertAlmostEqual(estimate.total_cost_usd, 0.0002625)
         self.assertEqual(estimate.priced_tokens, 640)
         self.assertEqual(estimate.unpriced_tokens, 10)
-    def test_explicit_claude_and_gemini_aliases_are_priced_without_guessing_other_aliases(self) -> None:
+
+    def test_explicit_claude_and_gemini_aliases_and_experimental_flash_reference_are_priced_without_guessing_other_aliases(self) -> None:
         estimate = estimate_antigravity_text_api_cost({
             "claude-opus-4-6-thinking": {"input_tokens": 1_000_000},
             "gemini-3.1-pro-low": {"input_tokens": 1_000_000},
+            "gemini-3.7-flash-exp-b": {"input_tokens": 1_000_000},
             "gemini-pro-default": {"input_tokens": 1_000_000},
         })
-        self.assertAlmostEqual(estimate.total_cost_usd, 7.0)
-        self.assertEqual(estimate.priced_tokens, 2_000_000)
+        self.assertAlmostEqual(estimate.total_cost_usd, 7.75)
+        self.assertEqual(estimate.priced_tokens, 3_000_000)
         self.assertEqual(estimate.unpriced_tokens, 1_000_000)
-
-
     def test_collector_deltas_only_new_local_generation_metadata(self) -> None:
         epoch = datetime(2026, 8, 22, 12).timestamp()
         with tempfile.TemporaryDirectory() as temporary:

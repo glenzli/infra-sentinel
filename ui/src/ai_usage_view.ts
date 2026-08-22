@@ -5,12 +5,13 @@ import { currentLocale, tr } from "./i18n";
 import { DailyBarBucket, DailyBarSeries, renderDailyBarChart } from "./daily_bar_chart";
 import { renderDailyActivityCalendar } from "./daily_activity_calendar";
 import { AiAnalysisSnapshot, AiHistoryVisual, AiTimeRange, AiViewMode } from "./ai_analysis";
-import { AnalysisTimeWindow, localDayEpoch } from "./analysis_time";
+import { AnalysisTimeWindow } from "./analysis_time";
 import { AttentionDiagnostic, renderAttentionDiagnostics } from "./attention_diagnostics";
 import {
   ProjectedUsage, UsageInterval, aggregateByModel, aggregateBySource, canonicalModelId, completeDailyBuckets,
   completeRateEpochs, projectUsage,
 } from "./ai_usage_series";
+import { PriceReference, projectPriceReference } from "./ai_price_reference";
 
 const MODEL_COLORS = ["#3178dc", "#9168c6", "#329260", "#c7792d", "#278d94", "#7b8794"];
 const SOURCE_COLORS = ["#3178dc", "#9168c6", "#329260", "#c7792d"];
@@ -40,6 +41,11 @@ function formatMetric(value: unknown, unit: unknown = "tokens"): string {
     }).format(amount);
   }
   return formatTokens(value);
+}
+
+function formatReferenceUsd(value: number): string {
+  const digits = value > 0 && value < 0.01 ? 4 : 2;
+  return `US$${value.toFixed(digits)}`;
 }
 
 function rangeLabel(range: AiTimeRange): string {
@@ -79,15 +85,19 @@ function shortStartedAt(value: unknown): string {
 function horizontalBars(
   title: string, detail: string, totals: Map<string, number>, colors: string[],
   labelFor: (identifier: string) => string = (identifier) => identifier,
+  estimates?: Map<string, number>,
 ): string {
   const ranked = [...totals.entries()].filter(([, value]) => value > 0).sort((left, right) => right[1] - left[1]).slice(0, 8);
   const maximum = Math.max(...ranked.map(([, value]) => value), 1);
-  return `<article class="detail-panel ai-ranked-panel"><div class="detail-panel__heading"><h3>${escapeHtml(title)}</h3><span>${escapeHtml(detail)}</span></div><div class="ai-ranked-bars">${ranked.map(([label, value], index) => `<div class="ai-ranked-bar"><div><span><i class="chart-dot" style="background:${colors[index % colors.length]}"></i>${escapeHtml(labelFor(label))}</span><strong>${formatTokens(value)}</strong></div><p><i style="background:${colors[index % colors.length]};width:${Math.max(.2, value / maximum * 100)}%"></i></p></div>`).join("") || `<div class="chart-empty">${tr("Waiting for recorded Token increments.", "等待已记录的 Token 增量。")}</div>`}</div></article>`;
+  return `<article class="detail-panel ai-ranked-panel"><div class="detail-panel__heading"><h3>${escapeHtml(title)}</h3><span>${escapeHtml(detail)}</span></div><div class="ai-ranked-bars">${ranked.map(([label, value], index) => {
+    const estimate = estimates?.get(label) ?? 0;
+    return `<div class="ai-ranked-bar"><div><span><i class="chart-dot" style="background:${colors[index % colors.length]}"></i>${escapeHtml(labelFor(label))}</span><span class="ai-ranked-bar__value"><strong>${formatTokens(value)}</strong>${estimate > 0 ? `<small>≈ ${formatReferenceUsd(estimate)}</small>` : ""}</span></div><p><i style="background:${colors[index % colors.length]};width:${Math.max(.2, value / maximum * 100)}%"></i></p></div>`;
+  }).join("") || `<div class="chart-empty">${tr("Waiting for recorded Token increments.", "等待已记录的 Token 增量。")}</div>`}</div></article>`;
 }
 
 function dailyHistory(
   intervals: UsageInterval[], dimension: "source" | "model", range: AiTimeRange,
-  window: AnalysisTimeWindow, visual: AiHistoryVisual, undatedTotal = 0,
+  window: AnalysisTimeWindow, visual: AiHistoryVisual, undatedTotal = 0, reference?: PriceReference,
 ): string {
   const totals = dimension === "source" ? aggregateBySource(intervals) : aggregateByModel(intervals);
   const visible = [...totals.entries()].sort((left, right) => right[1] - left[1]).slice(0, 5).map(([id]) => id);
@@ -126,12 +136,15 @@ function dailyHistory(
     title: dimension === "source" ? tr("Daily usage by Agent", "按 Agent 的每日用量") : tr("Daily usage by model", "按模型的每日用量"),
     detail: `${rangeLabel(range)}${days.size > 30 ? ` · ${tr("chart shows latest 30 days", "图表展示最近 30 天")}` : ""}`,
     ariaLabel: tr("Daily recorded Token usage", "每日已记录 Token 用量"), formatValue: formatTokens, mode: "stacked",
+    overlay: reference?.byDay.size ? {
+      label: tr("≈ cost / day", "≈ 每日估算"), color: "#c7792d", values: reference.byDay, formatValue: formatReferenceUsd,
+    } : undefined,
     footnote: undatedTotal > 0
       ? tr(
         `${formatTokens(undatedTotal)} is included in the range total but has no reliable calendar date, so it is not placed into a daily bar.`,
         `所选总量中另有 ${formatTokens(undatedTotal)} 无可靠日期，因此不强行放入每日柱状图。`,
       )
-      : tr("Each bar is one recorded daily total. Colors are additive components of that total.", "每根柱是一个已记录的每日总量，颜色表示总量中的组成部分。"),
+      : tr("Each bar is one recorded daily total. Colors are additive components of that total; the thin line is the available local price estimate.", "每根柱是一个已记录的每日总量，颜色表示总量中的组成；细线是可用本地参考价的估算。"),
   });
 }
 
@@ -164,128 +177,23 @@ function rateTrend(intervals: UsageInterval[], dimension: "source" | "model", wi
   return `<article class="trend-panel"><div class="detail-panel__heading"><h3>${dimension === "source" ? tr("Agent Token rate", "Agent Token 速率") : tr("Model Token rate", "模型 Token 速率")}</h3><span>${tr("Token / min", "Token / 分钟")}</span></div><div class="traffic-chart-frame"><span class="chart-axis-label chart-axis-label--peak">${formatTokens(maximum)}</span><span class="chart-axis-label chart-axis-label--mid">${formatTokens(maximum / 2)}</span><span class="chart-axis-label chart-axis-label--zero">0</span><svg class="traffic-chart" viewBox="0 0 100 100" preserveAspectRatio="none"><path class="chart-grid chart-grid--reference" d="M0 10H100"/><path class="chart-grid" d="M0 51H100M0 92H100"/>${seriesIds.map((id, index) => `<polyline class="chart-line" style="stroke:${colors[index % colors.length]}" points="${points(id)}"/>`).join("")}</svg></div><div class="traffic-chart__timeline"><span>${escapeHtml(startLabel)}</span><span>${tr("Now", "现在")}</span></div><div class="chart-legend">${seriesIds.map((id, index) => `<span><i class="chart-dot" style="background:${colors[index % colors.length]}"></i>${escapeHtml(dimension === "model" ? modelLabel(id) : id)}</span>`).join("")}</div></article>`;
 }
 
-type RangeReference = {
-  costUsd: number;
-  pricedTokens: number;
-  unpricedTokens: number;
-  sources: string[];
-};
-
-type SampleRate = { costUsd: number; pricedTokens: number };
-
-function referenceEpoch(day: unknown): number | undefined {
-  const date = String(day ?? "");
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return undefined;
-  const epoch = new Date(`${date}T00:00:00`).getTime() / 1_000;
-  return Number.isFinite(epoch) ? epoch : undefined;
-}
-
-function selectedCodexModels(usage: ProjectedUsage, providerSources: Record<string, unknown>[], range: AiTimeRange): Map<string, number> {
-  if (range === "today" || range === "recorded") {
-    const source = providerSources.find((candidate) => candidate.source_id === "codex");
-    const window = range === "today" ? "today" : "cumulative";
-    const models = new Map<string, number>();
-    for (const model of asArray(source?.models)) {
-      const id = canonicalModelId(model.id);
-      const tokens = number(asRecord(model[window]).tokens);
-      if (id && tokens > 0) models.set(id, tokens);
-    }
-    return models;
-  }
-  const models = new Map<string, number>();
-  for (const interval of usage.intervals) {
-    if (interval.source !== "codex") continue;
-    for (const [rawId, tokens] of interval.models) {
-      const id = canonicalModelId(rawId);
-      models.set(id, (models.get(id) ?? 0) + tokens);
-    }
-  }
-  return models;
-}
-
-function selectedPriceReference(providerSources: Record<string, unknown>[], usage: ProjectedUsage, range: AiTimeRange, window: AnalysisTimeWindow): RangeReference | undefined {
-  const since = localDayEpoch(window.sinceEpoch);
-  const until = localDayEpoch(window.untilEpoch);
-  let costUsd = 0;
-  let pricedTokens = 0;
-  let unpricedTokens = 0;
-  const labels = new Set<string>();
-  const codexRates = new Map<string, SampleRate>();
-
-  for (const source of providerSources) {
-    const sourceId = String(source.source_id ?? "");
-    const pricing = asRecord(source.pricing);
-    for (const row of asArray(pricing.daily)) {
-      const epoch = referenceEpoch(row.date);
-      if (epoch === undefined || epoch < since || epoch > until) continue;
-      const reference = asRecord(row.reference);
-      const kind = String(reference.kind ?? "");
-      if (sourceId === "codex" && kind === "sampled-standard-api-projection") {
-        for (const model of asArray(reference.models)) {
-          const id = canonicalModelId(model.id);
-          if (!id) continue;
-          const rate = codexRates.get(id) ?? { costUsd: 0, pricedTokens: 0 };
-          rate.costUsd += number(model.cost_usd);
-          rate.pricedTokens += number(model.priced_tokens);
-          codexRates.set(id, rate);
-        }
-        continue;
-      }
-      const tokens = number(reference.priced_tokens);
-      if (!kind || tokens <= 0) continue;
-      costUsd += number(reference.cost_usd);
-      pricedTokens += tokens;
-      unpricedTokens += number(reference.unpriced_tokens);
-      labels.add(String(source.label ?? sourceId));
-    }
-  }
-
-  if (codexRates.size) {
-    let codexPriced = 0;
-    let codexCost = 0;
-    let codexUnpriced = 0;
-    for (const [id, tokens] of selectedCodexModels(usage, providerSources, range)) {
-      const sample = codexRates.get(id);
-      if (!sample || sample.pricedTokens <= 0) {
-        codexUnpriced += tokens;
-        continue;
-      }
-      codexPriced += tokens;
-      codexCost += tokens * sample.costUsd / sample.pricedTokens;
-    }
-    if (codexPriced > 0) {
-      costUsd += codexCost;
-      pricedTokens += codexPriced;
-      unpricedTokens += codexUnpriced;
-      labels.add("Codex");
-    }
-  }
-  return pricedTokens > 0 ? { costUsd, pricedTokens, unpricedTokens, sources: [...labels] } : undefined;
-}
-
-function referencePriceTag(providerSources: Record<string, unknown>[], usage: ProjectedUsage, range: AiTimeRange, window: AnalysisTimeWindow): string {
-  const estimate = selectedPriceReference(providerSources, usage, range, window);
-  if (!estimate) return "";
-  const sources = estimate.sources.join(" / ");
-  const title = tr(
-    `Local price reference for ${sources}. OpenCode uses provider-reported stored cost; Antigravity uses explicit text-model mappings; Codex projects sampled model prices over matching local model totals. Infer Runtime is excluded. Not an invoice.`,
-    `${sources} 的本地价格参考：OpenCode 使用已记录的供应商成本；Antigravity 使用明确的文本模型映射；Codex 将抽样模型价格投影到同名模型的本地总量。暂不包含 Infer Runtime；不是账单。`,
-  );
-  return `<span class="ai-reference-price" title="${escapeHtml(title)}">${tr("API reference", "API 参考")} ≈ US$${estimate.costUsd.toFixed(2)}</span>`;
+function referencePriceTag(reference: PriceReference | undefined): string {
+  if (!reference) return "";
+  return `<span class="ai-reference-price" aria-label="${escapeHtml(tr("Local price estimate, not an invoice", "本地参考估算，不是账单"))}">≈ ${formatReferenceUsd(reference.costUsd)}</span>`;
 }
 
 function renderOverview(usage: ProjectedUsage, providerSources: Record<string, unknown>[], range: AiTimeRange, window: AnalysisTimeWindow, visual: AiHistoryVisual): string {
   const sources = usage.sourceTotals;
   const selectedTotal = [...sources.values()].reduce((sum, value) => sum + value, 0);
-  const priceTag = referencePriceTag(providerSources, usage, range, window);
-  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Selected range total", "所选时段总量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)} · ${sources.size} ${tr("Agents", "个 Agent")}</span>${priceTag}</aside></div>${horizontalBars(tr("Usage by Agent", "按 Agent 的用量"), rangeLabel(range), sources, SOURCE_COLORS)}${range === "today" ? rateTrend(usage.intervals, "source", window) : dailyHistory(usage.intervals, "source", range, window, visual, usage.undatedTotal)}</section>`;
+  const reference = projectPriceReference(providerSources, usage, range, window);
+  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Selected range total", "所选时段总量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)} · ${sources.size} ${tr("Agents", "个 Agent")}</span>${referencePriceTag(reference)}</aside></div>${horizontalBars(tr("Usage by Agent", "按 Agent 的用量"), rangeLabel(range), sources, SOURCE_COLORS)}${range === "today" ? rateTrend(usage.intervals, "source", window) : dailyHistory(usage.intervals, "source", range, window, visual, usage.undatedTotal, reference)}</section>`;
 }
 
 function renderModels(usage: ProjectedUsage, providerSources: Record<string, unknown>[], range: AiTimeRange, window: AnalysisTimeWindow, visual: AiHistoryVisual): string {
   const models = usage.modelTotals;
   const selectedTotal = [...models.values()].reduce((sum, value) => sum + value, 0);
-  const priceTag = referencePriceTag(providerSources, usage, range, window);
-  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Model total in range", "所选时段模型量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)}</span>${priceTag}</aside></div>${horizontalBars(tr("Model composition", "模型构成"), rangeLabel(range), models, MODEL_COLORS, modelLabel)}${range === "today" ? rateTrend(usage.intervals, "model", window) : dailyHistory(usage.intervals, "model", range, window, visual, usage.undatedTotal)}</section>`;
+  const reference = projectPriceReference(providerSources, usage, range, window);
+  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Model total in range", "所选时段模型量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)}</span>${referencePriceTag(reference)}</aside></div>${horizontalBars(tr("Model composition", "模型构成"), rangeLabel(range), models, MODEL_COLORS, modelLabel, reference?.byModel)}${range === "today" ? rateTrend(usage.intervals, "model", window) : dailyHistory(usage.intervals, "model", range, window, visual, usage.undatedTotal, reference)}</section>`;
 }
 
 function providerDetails(source: Record<string, unknown>, providerPanels: ReadonlyMap<string, boolean>): string {
