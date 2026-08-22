@@ -83,16 +83,23 @@ function aiUsageCard(projection: AgentProjection, resource: ResourceProjection):
   const aggregate = asRecord(aiUsage.aggregate);
   const today = asRecord(aggregate.today);
   const cumulative = asRecord(aggregate.cumulative);
-  const cards = providers.map((provider) => {
+  const rankedSources = (window: "today" | "cumulative") => providers.map((provider) => {
     const usage = asRecord(provider.usage);
-    const providerToday = asRecord(usage.today);
-    const providerCumulative = asRecord(usage.cumulative);
-    const value = providerToday.available ? providerToday.tokens : providerCumulative.tokens;
-    const scope = providerToday.available ? tr("today", "今日") : tr("cumulative", "累计");
-    return `<span><small>${escapeHtml(provider.label)} · ${scope}</small><strong>${formatTokens(value)}</strong><em>${escapeHtml(String(provider.collection_method ?? ""))}</em></span>`;
-  }).join("");
-  const sourceNames = providers.map((provider) => String(provider.label ?? provider.source_id ?? "")).filter(Boolean).join(" · ");
-  return `<button class="resource-card resource-card--ai-usage resource-card--${escapeHtml(resource.status)}" type="button" data-resource-id="ai_usage"><div class="resource-card__heading"><span class="resource-card__identity"><span class="resource-card__state source-state source-state--${escapeHtml(resource.status)}" aria-hidden="true"></span><p>${tr("AI usage", "AI 用量")}</p></span><span class="pill pill--${escapeHtml(resource.status)}">${escapeHtml(sourceNames)}</span></div><div class="ai-overview__rollup"><span><small>${tr("Observed today", "今日已观测")}</small><strong>${formatTokens(today.tokens)}</strong></span><span><small>${tr("Local history total", "本机历史总量")}</small><strong>${formatTokens(cumulative.tokens)}</strong></span></div><div class="ai-overview__sources">${cards}</div><div class="network-overview__footer ai-overview__footer"><span>${tr("Local rollup · not billing", "本机汇总 · 非账单")}</span><span>${sourceSummary(resource)}</span><span>${tr("Details", "详情")} →</span></div></button>`;
+    const usageWindow = asRecord(usage[window]);
+    return {
+      label: String(provider.label ?? provider.source_id ?? tr("Unknown source", "未知来源")),
+      value: Number(usageWindow.tokens ?? 0),
+      available: Boolean(usageWindow.available),
+    };
+  }).filter((provider) => provider.available && Number.isFinite(provider.value) && provider.value > 0)
+    .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label))
+    .slice(0, 2);
+  const ranking = (window: "today" | "cumulative") => {
+    const ranked = rankedSources(window);
+    if (!ranked.length) return `<p class="ai-overview__ranking-empty">${tr("No measured usage", "暂无可用量")}</p>`;
+    return `<ol class="ai-overview__ranking">${ranked.map((provider) => `<li><small>${escapeHtml(provider.label)}</small><strong>${formatTokens(provider.value)}</strong></li>`).join("")}</ol>`;
+  };
+  return `<button class="resource-card resource-card--ai-usage resource-card--${escapeHtml(resource.status)}" type="button" data-resource-id="ai_usage"><div class="resource-card__heading"><span class="resource-card__identity"><span class="resource-card__state source-state source-state--${escapeHtml(resource.status)}" aria-hidden="true"></span><p>${tr("AI usage", "AI 用量")}</p></span><span class="pill pill--${escapeHtml(resource.status)}">${escapeHtml(statusLabel(resource.status))}</span></div><div class="ai-overview__rollup"><section><small>${tr("Observed today", "今日已观测")}</small><strong>${formatTokens(today.tokens)}</strong>${ranking("today")}</section><section><small>${tr("Local history total", "本机历史总量")}</small><strong>${formatTokens(cumulative.tokens)}</strong>${ranking("cumulative")}</section></div><div class="network-overview__footer ai-overview__footer"><span>${tr("Local rollup · not billing", "本机汇总 · 非账单")}</span><span>${sourceSummary(resource)}</span><span>${tr("Details", "详情")} →</span></div></button>`;
 }
 
 function resourceCard(resource: ResourceProjection): string {

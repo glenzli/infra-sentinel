@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 from datetime import datetime, timezone
 from contextlib import closing
+from unittest.mock import patch
 import json
 import sqlite3
 import sys
@@ -41,6 +43,29 @@ class CodexUsageTests(unittest.TestCase):
             database = Path(temporary) / "codex.sqlite"
             database.touch()
             self.assertEqual(discover_codex_state_database(database), database)
+
+    def test_newest_codex_store_wins_over_a_migrated_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            root_store = home / ".codex" / "state_5.sqlite"
+            migrated_store = home / ".codex" / "sqlite" / "state_5.sqlite"
+            root_store.parent.mkdir(parents=True)
+            migrated_store.parent.mkdir(parents=True)
+            root_store.touch()
+            migrated_store.touch()
+            os.utime(root_store, ns=(1, 1))
+            os.utime(migrated_store, ns=(2, 2))
+            with patch("infra_sentinel.resources.ai.codex.Path.home", return_value=home):
+                self.assertEqual(discover_codex_state_database(), migrated_store)
+
+    def test_snapshot_labels_shared_codex_app_and_cli_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "state_5.sqlite"
+            create_state_database(database, [("gpt-5.6-sol", 100, "user", "cli", 1_000_000)])
+            snapshot = CodexUsageCollector(database_finder=lambda: database, poll_seconds=10).collect(
+                CollectorContext({"epoch": 1_000.0}, {})
+            ).snapshot
+        self.assertEqual(snapshot["collection_method"], "Codex App / CLI local state")
 
     def test_state_stats_aggregate_tokens_models_and_safe_topology(self) -> None:
         epoch = datetime(2026, 8, 9, 12, tzinfo=timezone.utc).timestamp()
@@ -174,6 +199,52 @@ class CodexUsageTests(unittest.TestCase):
         total_point = next(point for point in later.points if point.dimensions.get("scope") == "local-state")
         self.assertEqual(total_point.value, 25)
         self.assertEqual(later.snapshot["usage"]["today"]["tokens"], 25)  # type: ignore[index]
+
+    def test_visible_jsonl_sample_is_detail_only_and_never_changes_sqlite_total(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            epoch = datetime(2026, 8, 21, 12, tzinfo=timezone.utc).timestamp()
+            database = root / "state_5.sqlite"
+            sessions = root / "sessions"
+            sessions.mkdir()
+            checkpoint = root / "codex-session-events.json"
+            create_state_database(database, [("gpt-5.6-sol", 100, "user", "vscode", int(epoch * 1000))])
+            (sessions / "rollout.jsonl").write_text("\n".join([
+                json.dumps({"type": "turn_context", "timestamp": "2026-08-21T12:00:00Z", "payload": {"model": "gpt-5.6-sol"}}),
+                json.dumps({"type": "event_msg", "timestamp": "2026-08-21T12:00:01Z", "payload": {"type": "token_count", "info": {"last_token_usage": {
+                    "input_tokens": 80, "cached_input_tokens": 40, "cache_write_input_tokens": 0,
+                    "output_tokens": 20, "reasoning_output_tokens": 10, "total_tokens": 100,
+                }}}}),
+            ]) + "\n", encoding="utf-8")
+            collector = CodexUsageCollector(
+                database_finder=lambda: database,
+                checkpoint_path=root / "codex-usage-day.json",
+                session_checkpoint_path=checkpoint,
+                session_root_finder=lambda: sessions,
+            )
+            result = collector.collect(CollectorContext({"epoch": epoch}, {}))
+
+            persisted = checkpoint.read_text(encoding="utf-8")
+
+        self.assertEqual(result.snapshot["usage"]["cumulative"]["tokens"], 100)  # type: ignore[index]
+        self.assertEqual(result.snapshot["usage"]["today"]["tokens"], 0)  # type: ignore[index]
+        groups = {group["id"]: group for group in result.snapshot["details"]}  # type: ignore[index]
+        sample = groups["visible-rollout-sample"]
+        self.assertEqual(sample["metrics"][0]["value"], 1)
+        self.assertEqual(sample["metrics"][1]["value"], 100)
+        self.assertIn("不会改写 SQLite", sample["note"]["zh"])
+        estimate = groups["standard-api-estimate"]
+        self.assertEqual(estimate["metrics"][0]["id"], "standard-api-total")
+        self.assertGreater(estimate["metrics"][0]["value"], 0)
+        self.assertEqual(estimate["metrics"][1]["id"], "standard-api-priced-sample-tokens")
+        self.assertEqual(estimate["metrics"][1]["value"], 100)
+        self.assertIn("不是账单", estimate["note"]["zh"])
+        self.assertEqual(result.snapshot["history"], {"daily_available": False, "daily": []})
+        self.assertTrue(result.snapshot["pricing"]["daily_available"])
+        reference = result.snapshot["pricing"]["daily"][0]["reference"]
+        self.assertEqual(reference["kind"], "sampled-standard-api-projection")
+        self.assertGreater(reference["cost_usd"], 0)
+        self.assertIn("gpt-5.6-sol", persisted)
 
     def test_missing_database_is_unavailable(self) -> None:
         collector = CodexUsageCollector(database_finder=lambda: None)

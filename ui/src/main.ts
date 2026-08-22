@@ -7,6 +7,7 @@ import { tr } from "./i18n";
 import { renderNetworkResourcePage } from "./network_view";
 import { NetworkAnalysisController, NetworkHistoryVisual, NetworkTimeRange, NetworkViewMode } from "./network_analysis";
 import { renderAiUsageResourcePage } from "./ai_usage_view";
+import { renderAiUsageMethodologyPage } from "./ai_methodology_view";
 import { AiAnalysisController, AiHistoryVisual, AiTimeRange, AiViewMode } from "./ai_analysis";
 import { renderOverview } from "./overview_view";
 import { loadSettings, renderSettings } from "./settings_view";
@@ -15,7 +16,7 @@ import { renderUpstreamStatusResourcePage } from "./upstream_status_view";
 import { renderSystemResourcePage } from "./system_resource_view";
 import { SystemResourceAnalysisController, SystemTimeRange } from "./system_resource_analysis";
 
-type AppView = "overview" | "system" | "network" | "ai_usage" | "upstream_status" | "facility" | "settings";
+type AppView = "overview" | "system" | "network" | "ai_usage" | "ai_methodology" | "upstream_status" | "facility" | "settings";
 
 function appRoot(): HTMLDivElement {
   const root = document.querySelector<HTMLDivElement>("#app");
@@ -82,6 +83,8 @@ function renderProjection(projection: AgentProjection): void {
       ? `${controls}${renderSystemResourcePage(system, projection.infra.system, systemAnalysis.snapshot())}`
     : activeView === "ai_usage" && aiUsage
       ? `${controls}${renderAiUsageResourcePage(projection, aiUsage, aiSources, aiAnalysis.snapshot())}`
+      : activeView === "ai_methodology" && aiUsage
+        ? renderAiUsageMethodologyPage(projection, aiUsage)
     : activeView === "upstream_status" && upstreamStatus
       ? `${controls}${renderUpstreamStatusResourcePage(upstreamStatus, projection.infra.upstream_status)}`
     : activeView === "facility"
@@ -124,6 +127,14 @@ function renderProjection(projection: AgentProjection): void {
     if (!url) return;
     try { await openExternalStatus(url); } catch (error) { window.alert(`${tr("Cannot open official status page", "无法打开官方状态页")}：${String(error)}`); }
   }));
+  root.querySelectorAll<HTMLButtonElement>("[data-ai-methodology]").forEach((button) => button.addEventListener("click", () => {
+    activeView = "ai_methodology";
+    if (latestProjection) renderProjection(latestProjection);
+  }));
+  root.querySelectorAll<HTMLButtonElement>("[data-ai-methodology-back]").forEach((button) => button.addEventListener("click", () => {
+    activeView = "ai_usage";
+    if (latestProjection) renderProjection(latestProjection);
+  }));
   root.querySelectorAll<HTMLButtonElement>("[data-ai-mode]").forEach((button) => button.addEventListener("click", () => {
     const mode = button.dataset.aiMode as AiViewMode;
     if (mode === "overview" || mode === "models" || mode === "activity") {
@@ -144,6 +155,10 @@ function renderProjection(projection: AgentProjection): void {
       aiAnalysis.selectHistoryVisual(visual);
       if (latestProjection) renderProjection(latestProjection);
     }
+  }));
+  root.querySelectorAll<HTMLDetailsElement>("[data-ai-provider-id]").forEach((panel) => panel.addEventListener("toggle", () => {
+    const sourceId = panel.dataset.aiProviderId;
+    if (sourceId) aiAnalysis.setProviderPanelOpen(sourceId, panel.open);
   }));
   root.querySelectorAll<HTMLButtonElement>("[data-network-mode]").forEach((button) => button.addEventListener("click", () => {
     const mode = button.dataset.networkMode as NetworkViewMode;
@@ -183,8 +198,8 @@ function renderProjection(projection: AgentProjection): void {
   if (activeView === "overview" && system) void systemOverviewAnalysis.hydrate(() => {
     if (activeView === "overview" && latestProjection) renderProjection(latestProjection);
   });
-  if (activeView === "ai_usage") void aiAnalysis.hydrate(() => {
-    if (activeView === "ai_usage" && latestProjection) renderProjection(latestProjection);
+  if (activeView === "ai_usage" || activeView === "ai_methodology") void aiAnalysis.hydrate(() => {
+    if ((activeView === "ai_usage" || activeView === "ai_methodology") && latestProjection) renderProjection(latestProjection);
   });
   if (activeView === "system") void systemAnalysis.hydrate(() => {
     if (activeView === "system" && latestProjection) renderProjection(latestProjection);

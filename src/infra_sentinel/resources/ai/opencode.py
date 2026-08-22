@@ -23,7 +23,7 @@ import subprocess
 import time
 from typing import Any
 
-from infra_sentinel.resources.ai.contract import ai_usage_snapshot, daily_usage, detail_group, localized, model_usage, token_metric, usage_window
+from infra_sentinel.resources.ai.contract import ai_usage_snapshot, daily_usage, detail_group, localized, model_usage, pricing_day, token_metric, usage_window
 from infra_sentinel.core.collectors import Collection, CollectorCapability, CollectorContext
 from infra_sentinel.core.model import MetricPoint
 
@@ -63,6 +63,9 @@ class OpenCodeStats:
 class OpenCodeDailyUsage:
     date: str
     total_tokens: int
+    cost_usd: float
+    priced_tokens: int
+    unpriced_tokens: int
     models: tuple[dict[str, Any], ...]
 
 
@@ -283,26 +286,34 @@ def read_opencode_desktop_stats(path: Path, epoch: float, since_epoch: float | N
         output_includes_reasoning=False,
     )
 
-
 def read_opencode_desktop_daily_history(path: Path) -> tuple[OpenCodeDailyUsage, ...]:
-    """Read exact calendar-day/model totals without selecting message content."""
+    """Read day/model token and provider-reported cost aggregates only."""
     if not path.is_file():
         raise OSError("OpenCodeDesktopDatabaseMissing")
     uri = f"{path.resolve().as_uri()}?mode=ro"
     with closing(sqlite3.connect(uri, uri=True)) as connection:
         connection.execute("PRAGMA query_only = ON")
         rows = connection.execute("""
-            SELECT
-                date(time_created / 1000.0, 'unixepoch', 'localtime') AS local_day,
-                COALESCE(NULLIF(json_extract(data, '$.providerID'), ''), 'unknown') AS provider,
-                COALESCE(NULLIF(json_extract(data, '$.modelID'), ''), 'unknown') AS model,
-                COALESCE(SUM(CAST(json_extract(data, '$.tokens.input') AS INTEGER)), 0)
-                  + COALESCE(SUM(CAST(json_extract(data, '$.tokens.output') AS INTEGER)), 0)
-                  + COALESCE(SUM(CAST(json_extract(data, '$.tokens.reasoning') AS INTEGER)), 0)
-                  + COALESCE(SUM(CAST(json_extract(data, '$.tokens.cache.read') AS INTEGER)), 0)
-                  + COALESCE(SUM(CAST(json_extract(data, '$.tokens.cache.write') AS INTEGER)), 0) AS total_tokens
-            FROM message
-            WHERE json_extract(data, '$.role') = 'assistant'
+            WITH assistant_usage AS (
+                SELECT
+                    date(time_created / 1000.0, 'unixepoch', 'localtime') AS local_day,
+                    COALESCE(NULLIF(json_extract(data, '$.providerID'), ''), 'unknown') AS provider,
+                    COALESCE(NULLIF(json_extract(data, '$.modelID'), ''), 'unknown') AS model,
+                    COALESCE(CAST(json_extract(data, '$.tokens.input') AS INTEGER), 0)
+                      + COALESCE(CAST(json_extract(data, '$.tokens.output') AS INTEGER), 0)
+                      + COALESCE(CAST(json_extract(data, '$.tokens.reasoning') AS INTEGER), 0)
+                      + COALESCE(CAST(json_extract(data, '$.tokens.cache.read') AS INTEGER), 0)
+                      + COALESCE(CAST(json_extract(data, '$.tokens.cache.write') AS INTEGER), 0) AS total_tokens,
+                    CASE WHEN json_type(data, '$.cost') IN ('integer', 'real')
+                      THEN CAST(json_extract(data, '$.cost') AS REAL) END AS cost_usd
+                FROM message
+                WHERE json_extract(data, '$.role') = 'assistant'
+            )
+            SELECT local_day, provider, model, SUM(total_tokens) AS total_tokens,
+                COALESCE(SUM(cost_usd), 0.0) AS cost_usd,
+                COALESCE(SUM(CASE WHEN cost_usd IS NOT NULL THEN total_tokens ELSE 0 END), 0) AS priced_tokens,
+                COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN total_tokens ELSE 0 END), 0) AS unpriced_tokens
+            FROM assistant_usage
             GROUP BY local_day, provider, model
             ORDER BY local_day, total_tokens DESC, provider, model
         """).fetchall()
@@ -314,11 +325,17 @@ def read_opencode_desktop_daily_history(path: Path) -> tuple[OpenCodeDailyUsage,
         days.setdefault(day, []).append({
             "id": f"{str(row[1])}/{str(row[2])}",
             "tokens": _number_from_database(row[3]),
+            "cost_usd": _cost_from_database(row[4]),
+            "priced_tokens": _number_from_database(row[5]),
+            "unpriced_tokens": _number_from_database(row[6]),
         })
     return tuple(
         OpenCodeDailyUsage(
             date=day,
             total_tokens=sum(int(model["tokens"]) for model in models),
+            cost_usd=sum(float(model["cost_usd"]) for model in models),
+            priced_tokens=sum(int(model["priced_tokens"]) for model in models),
+            unpriced_tokens=sum(int(model["unpriced_tokens"]) for model in models),
             models=tuple(models),
         )
         for day, models in sorted(days.items())
@@ -447,7 +464,7 @@ class OpenCodeUsageCollector:
             cumulative_method="provider-history",
             cumulative_detail=localized("readable local history", "可读本地历史"),
         ) for model_id in model_ids]
-        output_label = localized("Output + reasoning", "输出 + 推理") if stats.output_includes_reasoning else localized("Output", "输出")
+        output_label = localized("Output", "输出")
         return ai_usage_snapshot(
             source_id="opencode",
             label="OpenCode",
@@ -483,6 +500,18 @@ class OpenCodeUsageCollector:
             daily_history=[
                 daily_usage(day.date, day.total_tokens, list(day.models))
                 for day in daily_history
+            ] if daily_history is not None else None,
+            pricing_history=[
+                pricing_day(
+                    day.date,
+                    kind="provider-reported-cost",
+                    cost_usd=day.cost_usd,
+                    priced_tokens=day.priced_tokens,
+                    unpriced_tokens=day.unpriced_tokens,
+                    models=list(day.models),
+                )
+                for day in daily_history
+                if day.priced_tokens > 0
             ] if daily_history is not None else None,
         )
 
@@ -525,8 +554,6 @@ class OpenCodeUsageCollector:
                 continue
             _scope, metric = key.rsplit(":", 1)
             model_id: str | None = None
-            # Split only on the known metric suffix; provider/model identifiers
-            # can themselves contain ':' in custom OpenCode configurations.
             for candidate in ("ai.tokens.total", "ai.tokens.input", "ai.tokens.output", "ai.tokens.reasoning", "ai.tokens.cache_read", "ai.tokens.cache_write", "ai.cost.usd", "ai.messages"):
                 suffix = f":{candidate}"
                 if key.endswith(suffix):

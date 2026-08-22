@@ -68,6 +68,7 @@ from infra_sentinel.resources.network.mihomo import (
 )
 from infra_sentinel.resources.network.metrics import network_collector_registry
 from infra_sentinel.resources.ai.codex import CodexUsageCollector, discover_codex_state_database
+from infra_sentinel.resources.ai.antigravity import AntigravityUsageCollector
 from infra_sentinel.resources.ai.infer_runtime import InferRuntimeUsageCollector
 from infra_sentinel.resources.ai.opencode import OpenCodeUsageCollector, discover_opencode, discover_opencode_desktop_database
 from infra_sentinel.core.timing import annotate_sample_timing, sample_is_realtime
@@ -901,8 +902,10 @@ def main() -> int:
         ))
         collector_registry.register(CodexUsageCollector(
             checkpoint_path=config.state_dir / "codex-usage-day.json",
+            session_checkpoint_path=config.state_dir / "codex-session-events.json",
             database_finder=lambda: discover_codex_state_database(config.integrations.codex_database),
         ))
+        collector_registry.register(AntigravityUsageCollector())
         collector_registry.register(InferRuntimeUsageCollector(
             checkpoint_path=config.state_dir / "infer-runtime-usage-daily.json",
         ))

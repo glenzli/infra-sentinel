@@ -13,7 +13,7 @@ or durable metrics.
 | `src-tauri/src/` | Sidecar supervision, Projection cache, native menu/notifications, external Console/status links, application paths, an opt-in static documentation-demo gate, and allowlisted Tauri commands | Resource-specific accounting, data normalization, renderer business rules, or a general-purpose test mode |
 
 `src/main.ts` is the renderer composition root: it routes between the overview,
-resource pages, facility detail, and settings. Keep page rendering in the
+resource pages, the AI methodology page, facility detail, and settings. Keep page rendering in the
 corresponding `*_view.ts` module and stateful time-range/filter behavior in
 the matching `*_analysis.ts` module.
 
@@ -24,7 +24,7 @@ the matching `*_analysis.ts` module.
 | Projection/command types or one new allowlisted operation | `src/bridge.ts`, then the paired Rust bridge implementation |
 | Shared formatting, localization, visual primitives | `src/format.ts`, `src/i18n.ts`, `src/icons.ts`, or `src/styles.css` |
 | Network, AI, or system time-range state | The matching `*_analysis.ts` module |
-| Network, AI, system, facility, or upstream-status presentation | The matching `*_view.ts` and scoped CSS module |
+| Network, AI, AI methodology, system, facility, or upstream-status presentation | The matching `*_view.ts` and scoped CSS module |
 | Reusable daily chart behavior | `src/daily_bar_chart.ts` for quantitative bars and `src/daily_activity_calendar.ts` for recorded-history heatmaps, with their scoped CSS |
 | Overview-only composition | `src/overview_view.ts` |
 | Native menu, notification, URL, sidecar, cache, or app-path behavior | The matching module under `src-tauri/src/` |

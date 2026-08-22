@@ -69,6 +69,20 @@ DEFAULT_PROVIDERS = (
         payload_format="flashduty",
         request_host="status.deepseek.com",
     ),
+    StatusProvider(
+        "moonshot",
+        "Kimi / Moonshot",
+        "https://status.moonshot.cn/api/v2/summary.json",
+        "https://status.moonshot.cn/",
+        ("api", "kimi", "open api"),
+    ),
+    StatusProvider(
+        "cursor",
+        "Cursor",
+        "https://status.cursor.com/api/v2/summary.json",
+        "https://status.cursor.com/",
+        ("cli", "cloud agents", "ide", "review agents", "automations"),
+    ),
 )
 
 

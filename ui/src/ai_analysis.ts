@@ -9,6 +9,7 @@ export type AiAnalysisSnapshot = {
   mode: AiViewMode;
   range: AiTimeRange;
   historyVisual: AiHistoryVisual;
+  providerPanels: ReadonlyMap<string, boolean>;
   points: Record<string, unknown>[];
   window: AnalysisTimeWindow;
   loading: boolean;
@@ -25,6 +26,7 @@ export class AiAnalysisController {
   private readonly cache = new Map<AiTimeRange, CacheEntry>();
   private readonly loading = new Set<AiTimeRange>();
   private readonly errors = new Map<AiTimeRange, string>();
+  private readonly providerPanels = new Map<string, boolean>();
 
   selectMode(mode: AiViewMode): void {
     if (mode === this.mode) return;
@@ -40,11 +42,16 @@ export class AiAnalysisController {
     this.historyVisual = visual;
   }
 
+  setProviderPanelOpen(sourceId: string, open: boolean): void {
+    this.providerPanels.set(sourceId, open);
+  }
+
   snapshot(): AiAnalysisSnapshot {
     return {
       mode: this.mode,
       range: this.range,
       historyVisual: this.historyVisual,
+      providerPanels: this.providerPanels,
       points: this.cache.get(this.range)?.points ?? [],
       window: this.cache.get(this.range)?.window ?? analysisTimeWindow(this.range),
       loading: this.loading.has(this.range),

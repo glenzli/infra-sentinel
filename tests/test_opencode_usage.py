@@ -248,20 +248,30 @@ class OpenCodeStatsTests(unittest.TestCase):
                     ("session-a", int(yesterday * 1000), json.dumps({
                         "role": "assistant", "providerID": "openai", "modelID": "gpt-5.6",
                         "tokens": {"input": 100, "output": 20, "reasoning": 30, "cache": {"read": 40, "write": 5}},
+                        "cost": 0.15,
                     })),
                     ("session-b", int(today * 1000), json.dumps({
                         "role": "assistant", "providerID": "deepseek", "modelID": "deepseek-chat",
                         "tokens": {"input": 50, "output": 10, "reasoning": 0, "cache": {"read": 5, "write": 0}},
+                        "cost": 0.01,
                     })),
                     ("session-b", int(today * 1000), json.dumps({"role": "user", "text": "never selected"})),
                 ])
                 connection.commit()
             history = read_opencode_desktop_daily_history(database)
 
-        self.assertEqual([day.date for day in history], ["2026-08-08", "2026-08-09"])
-        self.assertEqual([day.total_tokens for day in history], [195, 65])
-        self.assertEqual(history[0].models, ({"id": "openai/gpt-5.6", "tokens": 195},))
-        self.assertEqual(history[1].models, ({"id": "deepseek/deepseek-chat", "tokens": 65},))
+        self.assertEqual(history[0].models, ({"id": "openai/gpt-5.6", "tokens": 195, "cost_usd": 0.15, "priced_tokens": 195, "unpriced_tokens": 0},))
+        self.assertEqual(history[1].models, ({"id": "deepseek/deepseek-chat", "tokens": 65, "cost_usd": 0.01, "priced_tokens": 65, "unpriced_tokens": 0},))
+        self.assertAlmostEqual(history[0].cost_usd, 0.15)
+        self.assertAlmostEqual(history[1].cost_usd, 0.01)
+        snapshot = OpenCodeUsageCollector(desktop_database_finder=lambda: None)._snapshot_for(
+            parse_opencode_stats(STATS_OUTPUT), "2026-08-09T12:00:00+08:00", "desktop-session-metadata", 260,
+            [], history,
+        )
+        pricing = snapshot["pricing"]["daily"]
+        self.assertEqual([item["reference"]["kind"] for item in pricing], ["provider-reported-cost", "provider-reported-cost"])
+        self.assertAlmostEqual(sum(item["reference"]["cost_usd"] for item in pricing), 0.16)
+        self.assertEqual(sum(item["reference"]["priced_tokens"] for item in pricing), 260)
 
     def test_snapshot_keeps_lifetime_models_when_the_desktop_database_is_available(self) -> None:
         stats = parse_opencode_stats(STATS_OUTPUT)
@@ -299,7 +309,8 @@ class OpenCodeStatsTests(unittest.TestCase):
 
         self.assertEqual(available["history"], {"daily_available": True, "daily": []})
         self.assertEqual(unavailable["history"], {"daily_available": False, "daily": []})
-
+        self.assertEqual(available["pricing"], {"daily_available": True, "daily": []})
+        self.assertEqual(unavailable["pricing"], {"daily_available": False, "daily": []})
 
 if __name__ == "__main__":
     unittest.main()

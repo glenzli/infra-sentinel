@@ -22,12 +22,26 @@ import sqlite3
 import time
 from typing import Any
 
-from infra_sentinel.resources.ai.contract import ai_usage_snapshot, detail_group, localized, model_usage, token_metric, usage_window
+from infra_sentinel.resources.ai.contract import ai_usage_snapshot, detail_group, localized, model_usage, pricing_day, token_metric, usage_window
+from infra_sentinel.resources.ai.codex_sampling import (
+    JsonlSampleState,
+    composition_note,
+    current_day_sample,
+    discover_codex_session_root,
+    load_jsonl_sample_state,
+    sample_visible_rollouts,
+    save_jsonl_sample_state,
+)
+from infra_sentinel.resources.ai.codex_pricing import (
+    OPENAI_STANDARD_TEXT_PRICES_EFFECTIVE_DATE,
+    estimate_standard_api_cost,
+)
 from infra_sentinel.core.collectors import Collection, CollectorCapability, CollectorContext
 from infra_sentinel.core.model import MetricPoint
 
 
 CODEX_POLL_SECONDS = 20
+CODEX_JSONL_SAMPLE_SECONDS = 5 * 60
 ACTIVE_WINDOW_SECONDS = 10 * 60
 DAILY_BASELINE_SCHEMA = "20260809.4"
 
@@ -54,13 +68,24 @@ class CodexStats:
 
 
 def discover_codex_state_database(preferred: Path | None = None) -> Path | None:
-    """Find the active Codex state store, preferring the current location."""
-    candidates = (
-        preferred,
-        Path.home() / ".codex" / "state_5.sqlite",
-        Path.home() / ".codex" / "sqlite" / "state_5.sqlite",
-    )
-    return next((candidate for candidate in candidates if candidate and candidate.is_file()), None)
+    """Find one active Codex App/CLI store without combining migrations.
+
+    Codex App and ``codex`` CLI currently share a state schema, while older
+    releases may leave a migrated store behind. Combining two stores would
+    double-count copied threads, so an explicit configured path always wins;
+    otherwise use the most recently modified readable store.
+    """
+    if preferred is not None:
+        return preferred if preferred.is_file() else None
+    candidates = [
+        candidate for candidate in (
+            Path.home() / ".codex" / "state_5.sqlite",
+            Path.home() / ".codex" / "sqlite" / "state_5.sqlite",
+        ) if candidate.is_file()
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda candidate: candidate.stat().st_mtime_ns)
 
 
 def _integer(value: Any) -> int:
@@ -157,6 +182,9 @@ class CodexUsageCollector:
         clock: Callable[[], float] = time.time,
         poll_seconds: int = CODEX_POLL_SECONDS,
         checkpoint_path: Path | None = None,
+        session_checkpoint_path: Path | None = None,
+        session_root_finder: Callable[[], Path | None] = discover_codex_session_root,
+        session_sample_seconds: int = CODEX_JSONL_SAMPLE_SECONDS,
     ) -> None:
         self._database_finder = database_finder
         self._clock = clock
@@ -169,6 +197,11 @@ class CodexUsageCollector:
         self._daily_thread_baselines: dict[str, int] = {}
         self._daily_key: str | None = None
         self._daily_started_at: str | None = None
+        self._session_checkpoint_path = session_checkpoint_path
+        self._session_root_finder = session_root_finder
+        self._session_sample_seconds = max(1, session_sample_seconds)
+        self._next_session_sample_epoch = 0.0
+        self._session_sample_state: JsonlSampleState = load_jsonl_sample_state(session_checkpoint_path)
 
     def _write_daily_checkpoint(self) -> None:
         if self._checkpoint_path is None or self._daily_key is None or self._daily_baseline is None:
@@ -231,6 +264,86 @@ class CodexUsageCollector:
             model_today[counter.model] = model_today.get(counter.model, 0) + delta
         return sum(model_today.values()), self._daily_started_at or timestamp, model_today
 
+    def _sample_details(self, epoch: float) -> list[dict[str, Any]]:
+        sample = current_day_sample(self._session_sample_state, epoch)
+        if sample is None:
+            return []
+        sample_group = detail_group("visible-rollout-sample", localized("Visible rollout sample", "可见 rollout 抽样"), [
+            token_metric("sample-events", localized("Completed usage events", "完成用量事件"), sample.events, localized("validated token_count records", "已校验的 token_count 记录"), unit="count"),
+            token_metric("sample-total", localized("Sampled Token total", "抽样 Token 总量"), sample.total_tokens, localized("visible session metadata only", "仅当前可见会话元数据")),
+            token_metric("sample-models", localized("Sampled models", "抽样模型数"), len(sample.models), localized("from turn_context only", "仅来自 turn_context"), unit="count"),
+        ], note=composition_note(sample, partial=self._session_sample_state.partial), badge=localized("experimental sample", "实验性抽样"))
+        estimate = estimate_standard_api_cost({
+            identifier: composition.as_model_payload()
+            for identifier, composition in sample.model_compositions.items()
+        })
+        if not estimate.models:
+            return [sample_group]
+        price_detail = localized(
+            f"OpenAI standard API text price snapshot · {OPENAI_STANDARD_TEXT_PRICES_EFFECTIVE_DATE}",
+            f"OpenAI 标准 API 文本价格快照 · {OPENAI_STANDARD_TEXT_PRICES_EFFECTIVE_DATE}",
+        )
+        model_metrics = [
+            token_metric(
+                f"standard-api:{item.model}", localized(item.model, item.model), item.cost_usd,
+                localized(
+                    f"{item.tokens:,} sampled Tokens · standard API text reference",
+                    f"{item.tokens:,} 抽样 Token · 标准 API 文本参考",
+                ), unit="usd",
+            )
+            for item in estimate.models
+        ]
+        if estimate.unpriced_tokens:
+            model_metrics.append(token_metric(
+                "unpriced-sampled-tokens", localized("Unpriced sampled Tokens", "未计价抽样 Token"), estimate.unpriced_tokens,
+                localized("no exact official model-price match", "没有精确匹配的官方模型价格"),
+            ))
+        estimate_group = detail_group("standard-api-estimate", localized("Standard API sampling reference", "标准 API 抽样参考"), [
+            token_metric("standard-api-total", localized("Sample reference value", "样本参考价"), estimate.total_cost_usd, price_detail, unit="usd"),
+            token_metric("standard-api-priced-sample-tokens", localized("Price-matched sample Tokens", "可计价抽样 Token"), estimate.priced_tokens, localized("models with an exact official standard-price match", "有精确官方标准价匹配的模型")),
+            *model_metrics,
+        ], note=localized(
+            "Visible JSONL sample only. Applies current standard text-token prices to observed input, cached input, cache writes, and output. Excludes unmatched models, long-context uplift, tools, multimodal, priority, regional processing, and subscription terms. Not a bill or amount owed.",
+            "仅针对可见 JSONL 抽样，将观察到的输入、缓存输入、缓存写入和输出代入当前标准文本 Token 价格。未匹配模型、长上下文加价、工具、多模态、优先级、区域处理与订阅条款均不计入；不是账单或应付金额。",
+        ), badge=localized("estimate · not billing", "估算 · 非账单"))
+        return [sample_group, estimate_group]
+
+    def _refresh_session_sample(self, epoch: float) -> None:
+        if epoch < self._next_session_sample_epoch:
+            return
+        self._next_session_sample_epoch = epoch + self._session_sample_seconds
+        now = datetime.fromtimestamp(epoch).astimezone()
+        try:
+            state = sample_visible_rollouts(self._session_root_finder(), self._session_sample_state, now=now)
+            self._session_sample_state = state
+            if state.updated_at:
+                save_jsonl_sample_state(self._session_checkpoint_path, state)
+        except (OSError, ValueError, json.JSONDecodeError):
+            # This is an optional, unstable local implementation detail.  A
+            # sampling failure never changes the primary SQLite accounting.
+            self._session_sample_state = JsonlSampleState()
+
+    def _sample_pricing_history(self) -> list[dict[str, Any]]:
+        """Project only bounded JSONL samples beside durable SQLite token totals."""
+        pricing: list[dict[str, Any]] = []
+        for day, sample in sorted(self._session_sample_state.days.items()):
+            if sample.events <= 0:
+                continue
+            estimate = estimate_standard_api_cost({
+                identifier: composition.as_model_payload()
+                for identifier, composition in sample.model_compositions.items()
+            })
+            pricing.append(pricing_day(
+                day,
+                kind="sampled-standard-api-projection",
+                cost_usd=estimate.total_cost_usd,
+                priced_tokens=estimate.priced_tokens,
+                unpriced_tokens=estimate.unpriced_tokens,
+                models=[{"id": item.model, "cost_usd": item.cost_usd, "priced_tokens": item.tokens}
+                        for item in estimate.models],
+            ))
+        return pricing
+
     def _snapshot_for(self, stats: CodexStats, timestamp: str, epoch: float) -> dict[str, Any]:
         today_tokens, started_at, model_today = self._daily_window(stats, epoch, timestamp)
         today_detail = localized(
@@ -246,7 +359,7 @@ class CodexUsageCollector:
             label="Codex",
             status="ok",
             observed_at=timestamp,
-            collection_method="local-state-metadata",
+            collection_method="Codex App / CLI local state",
             today=usage_window(
                 today_tokens,
                 method="sentinel-day-baseline",
@@ -277,9 +390,10 @@ class CodexUsageCollector:
             ], note=localized(
                 "Derived rollout counters can include child work, replayed parent context, and cached input. They are diagnostic only, not a billing or account-activity total.",
                 "派生 rollout 计数可能包含子任务工作、重放的父上下文与缓存输入；仅用于诊断，不是账单或账户活动总量。",
-            ), badge=localized("diagnostic only", "仅诊断"))],
+            ), badge=localized("diagnostic only", "仅诊断")), *self._sample_details(epoch)],
             confidence="medium",
-            privacy="aggregate-thread-state-only",
+            pricing_history=self._sample_pricing_history(),
+            privacy="aggregate-thread-state-plus-visible-rollout-token-sample",
         )
 
     @staticmethod
@@ -310,6 +424,7 @@ class CodexUsageCollector:
         try:
             timestamp = _iso_now(epoch)
             stats = read_codex_state_stats(database, epoch)
+            self._refresh_session_sample(epoch)
             snapshot = self._snapshot_for(stats, timestamp, epoch)
         except (OSError, sqlite3.DatabaseError, ValueError):
             self._snapshot = {**self._snapshot, "available": True, "status": "error", "label": "Codex"}

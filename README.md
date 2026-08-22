@@ -13,7 +13,7 @@ Infra Sentinel 是运行在本机的个人 AI 基础设施观测工具。它把�
 ## 当前覆盖范围
 
 - **网络**：本机 Mihomo 流量、域名与代理路径归因、Linux VPS 网卡账单量、Xray 用户逻辑流量。
-- **AI 用量**：OpenCode、Codex 与 Infer Runtime 的本机 Token 记录；按 Agent、模型、日历史和速率查看。
+- **AI 用量**：OpenCode、Codex、Antigravity 与 Infer Runtime 的本机 Token 记录；按 Agent、模型、日历史和速率查看。
 - **本机系统**：CPU、内存压力与 Swap、磁盘吞吐和 IOPS、容量、温度压力，以及尽力而为的 App 磁盘 I/O 归因。
 - **上游服务**：OpenAI、Claude、DeepSeek 官方状态页的低频只读摘要。
 - **运行设施**：通过 Infra Protocol 自动发现的本地服务，例如 PCP、Infer Runtime 和 Dev Mesh Observer。
@@ -63,12 +63,21 @@ AI 模块只读取客户端或本地设施已经保存的聚合元数据。每�
 - Desktop 数据库不可用时才尝试兼容的 `opencode stats --days 0 --models`；
 - 以持久化 checkpoint 防止重启后重复写入同一天的增量。
 
+### Antigravity
+
+- 自动发现 `~/.gemini/antigravity/conversations`、`~/.gemini/antigravity-ide/conversations` 与 `/antigravity-cli/conversations`（默认 `~/.gemini/antigravity-cli/conversations`）中的本地会话数据库；
+- 仅在内存中解码每轮的模型、时间与输入/输出/缓存/推理 Token 元数据，不读取 `steps`、提示词或输出，也不复制会话数据库内容；
+- 跨目录按生成响应 ID 去重；超过受限读取器上限的元数据行会在 SQLite 侧跳过，不传入应用内存；
+- 这是本地生成用量记录，不是 Google 或 Antigravity 的订阅额度、剩余额度或正式账单；不需要接入运行中 Language Server RPC。
+
 ### Codex
 
 - 只读读取 `~/.codex/state_5.sqlite` 中的主任务 Token 计数、模型与派生拓扑；
 - 今日量从 Sentinel 当天建立的本机基线开始计算；
 - 对可识别主任务的正增量按模型归集，保持总量与模型合计一致；
 - 只显示主任务、子 Agent、近期活动和派生层级，不读取任务标题或内容。
+- 每 5 分钟可对仍存在的 rollout JSONL 做一次有界增量抽样，只保留日期、模型与输入/输出/缓存/推理 Token 聚合；它只解释可见样本的构成，不改写 SQLite 总量、不会保存会话内容或原始路径，也不代表账单。
+- 对抽样中可精确匹配的 GPT-5.6 模型，首页会按 [OpenAI 标准 API 文本价格](https://platform.openai.com/pricing) 得出样本有效单价，并线性映射为当前所选 Codex 用量的等效价参考；无法匹配的模型及长上下文、工具、多模态、优先级、区域处理和订阅条款均不计入，明确不是实际账单或应付金额。
 
 OpenCode 的自然日统计与 Codex 的本机基线窗口可能不同，界面会明确标识来源和覆盖范围。Codex App Server 产生的用量并非总能在本地任务库中形成可归属任务；来源不明时不会按模型猜测。
 
@@ -229,7 +238,7 @@ Infra Sentinel is a local, read-only observability dashboard for personal AI inf
 
 ![Infra Sentinel AI usage](assets/ai-usage-en.png)
 
-It observes Mihomo/Clash Meta traffic, optional Linux VPS interface counters and Xray user counters, OpenCode/Codex/Infer Runtime Token metadata, macOS host resources, official OpenAI/Claude/DeepSeek status feeds, and facilities discovered through [Infra Protocol](https://github.com/glenzli/infra-protocol). PCP, Infer Runtime, and Dev Mesh Observer are verified integrations.
+It observes Mihomo/Clash Meta traffic, optional Linux VPS interface counters and Xray user counters, OpenCode/Codex/Antigravity/Infer Runtime Token metadata, macOS host resources, official OpenAI/Claude/DeepSeek status feeds, and facilities discovered through [Infra Protocol](https://github.com/glenzli/infra-protocol). PCP, Infer Runtime, and Dev Mesh Observer are verified integrations.
 
 The application never captures packets or reads prompts, responses, URL paths, project files, task titles, credentials, or private keys. It does not terminate processes, modify proxy/server configuration, disconnect the network, or execute arbitrary shell commands.
 

@@ -12,7 +12,8 @@ from __future__ import annotations
 from typing import Any
 
 
-AI_USAGE_SNAPSHOT_SCHEMA = "20260809.2"
+AI_USAGE_SNAPSHOT_SCHEMA = "20260822.1"
+AI_USAGE_PRICE_REFERENCE_SCHEMA = "20260822.1"
 
 
 def localized(en: str, zh: str) -> dict[str, str]:
@@ -91,12 +92,11 @@ def model_usage(
         "cumulative": usage_window(cumulative_tokens, method=cumulative_method, detail=cumulative_detail or localized("readable local history", "可读本地历史")),
     }
 
-
 def daily_usage(day: str, tokens: int, models: list[dict[str, Any]]) -> dict[str, Any]:
     """Create one provider-normalized calendar-day usage row.
 
     Providers may derive these rows differently, but consumers never need to
-    know which local database or API supplied them.  A missing daily history is
+    know which local database or API supplied them. A missing daily history is
     distinct from an available history containing no rows.
     """
     return {
@@ -106,6 +106,43 @@ def daily_usage(day: str, tokens: int, models: list[dict[str, Any]]) -> dict[str
             {"id": str(model.get("id") or "unknown"), "tokens": max(0, int(model.get("tokens") or 0))}
             for model in models
         ],
+    }
+
+
+def pricing_day(
+    day: str,
+    *,
+    kind: str,
+    cost_usd: float,
+    priced_tokens: int,
+    unpriced_tokens: int,
+    models: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Create a bounded daily price reference beside, never inside, usage.
+
+    The ``kind`` records provenance: a local provider-reported amount, an
+    explicit catalogue mapping, or a sampled projection. Consumers may sum
+    only compatible references; no reference is a provider invoice.
+    """
+    rows: list[dict[str, Any]] = []
+    for model in (models or [])[:32]:
+        identifier = str(model.get("id") or "unknown")[:128]
+        rows.append({
+            "id": identifier,
+            "cost_usd": max(0.0, float(model.get("cost_usd") or 0.0)),
+            "priced_tokens": max(0, int(model.get("priced_tokens") or 0)),
+            "unpriced_tokens": max(0, int(model.get("unpriced_tokens") or 0)),
+        })
+    return {
+        "date": day,
+        "reference": {
+            "schema": AI_USAGE_PRICE_REFERENCE_SCHEMA,
+            "kind": str(kind)[:96],
+            "cost_usd": max(0.0, float(cost_usd)),
+            "priced_tokens": max(0, int(priced_tokens)),
+            "unpriced_tokens": max(0, int(unpriced_tokens)),
+            "models": rows,
+        },
     }
 
 
@@ -123,6 +160,7 @@ def ai_usage_snapshot(
     confidence: str,
     privacy: str,
     daily_history: list[dict[str, Any]] | None = None,
+    pricing_history: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the only snapshot shape consumed by AI projection and UI."""
     return {
@@ -138,6 +176,10 @@ def ai_usage_snapshot(
         "history": {
             "daily_available": daily_history is not None,
             "daily": daily_history or [],
+        },
+        "pricing": {
+            "daily_available": pricing_history is not None,
+            "daily": pricing_history or [],
         },
         "details": details,
         "attribution_method": "local-reported",

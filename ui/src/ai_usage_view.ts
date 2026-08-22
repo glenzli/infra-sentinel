@@ -5,10 +5,10 @@ import { currentLocale, tr } from "./i18n";
 import { DailyBarBucket, DailyBarSeries, renderDailyBarChart } from "./daily_bar_chart";
 import { renderDailyActivityCalendar } from "./daily_activity_calendar";
 import { AiAnalysisSnapshot, AiHistoryVisual, AiTimeRange, AiViewMode } from "./ai_analysis";
-import { AnalysisTimeWindow } from "./analysis_time";
+import { AnalysisTimeWindow, localDayEpoch } from "./analysis_time";
 import { AttentionDiagnostic, renderAttentionDiagnostics } from "./attention_diagnostics";
 import {
-  ProjectedUsage, UsageInterval, aggregateByModel, aggregateBySource, completeDailyBuckets,
+  ProjectedUsage, UsageInterval, aggregateByModel, aggregateBySource, canonicalModelId, completeDailyBuckets,
   completeRateEpochs, projectUsage,
 } from "./ai_usage_series";
 
@@ -30,7 +30,15 @@ function localized(value: unknown): string {
 
 function formatMetric(value: unknown, unit: unknown = "tokens"): string {
   if (unit === "count") return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(number(value));
-  if (unit === "usd") return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(number(value));
+  if (unit === "usd") {
+    const amount = number(value);
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: amount > 0 && amount < 0.01 ? 4 : 2,
+      maximumFractionDigits: amount > 0 && amount < 0.01 ? 4 : 2,
+    }).format(amount);
+  }
   return formatTokens(value);
 }
 
@@ -68,30 +76,13 @@ function shortStartedAt(value: unknown): string {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function renderCurrentSummary(providerSources: Record<string, unknown>[], sources: SourceProjection[]): string {
-  const today = providerSources.reduce((sum, source) => sum + number(windowOf(source, "today").tokens), 0);
-  const cumulative = providerSources.reduce((sum, source) => sum + number(windowOf(source, "cumulative").tokens), 0);
-  const online = sources.filter((source) => source.enabled && source.status === "ok").length;
-  const coverage = providerSources.map((source) => {
-    const window = windowOf(source, "today");
-    const started = shortStartedAt(window.started_at);
-    const method = String(window.method ?? "");
-    const sourceDetail = localized(window.detail);
-    const detail = started
-      ? [tr(`since ${started}`, `${started} 起`), sourceDetail].filter(Boolean).join(" · ")
-      : method === "provider-day" ? tr("provider day", "供应商自然日") : sourceDetail;
-    return `<span><i class="source-state source-state--${escapeHtml(String(source.status ?? "ok"))}"></i><strong>${escapeHtml(source.label ?? source.source_id)}</strong><small>${escapeHtml(detail)}</small></span>`;
-  }).join("");
-  return `<section class="ai-usage-summary"><article><p>${tr("Observed today", "今日已观测")}</p><strong>${formatTokens(today)}</strong><small>${tr("Available source windows combined", "合并当前可用来源窗口")}</small></article><article><p>${tr("Local history total", "本机历史总量")}</p><strong>${formatTokens(cumulative)}</strong><small>${tr("All readable local records · not billing", "全部可读本地记录 · 非账单")}</small></article><article><p>${tr("Collector coverage", "采集覆盖")}</p><strong>${online} / ${sources.length}</strong><small>${tr("sources online", "个来源在线")}</small></article><div class="ai-window-coverage"><b>${tr("Window coverage", "统计窗口")}</b>${coverage}</div></section>`;
-}
-
 function horizontalBars(
   title: string, detail: string, totals: Map<string, number>, colors: string[],
   labelFor: (identifier: string) => string = (identifier) => identifier,
 ): string {
   const ranked = [...totals.entries()].filter(([, value]) => value > 0).sort((left, right) => right[1] - left[1]).slice(0, 8);
   const maximum = Math.max(...ranked.map(([, value]) => value), 1);
-  return `<article class="detail-panel ai-ranked-panel"><div class="detail-panel__heading"><h3>${escapeHtml(title)}</h3><span>${escapeHtml(detail)}</span></div><div class="ai-ranked-bars">${ranked.map(([label, value], index) => `<div class="ai-ranked-bar"><div><span><i class="chart-dot" style="background:${colors[index % colors.length]}"></i>${escapeHtml(labelFor(label))}</span><strong>${formatTokens(value)}</strong></div><p><i style="background:${colors[index % colors.length]};width:${Math.max(1, value / maximum * 100)}%"></i></p></div>`).join("") || `<div class="chart-empty">${tr("Waiting for recorded Token increments.", "等待已记录的 Token 增量。")}</div>`}</div></article>`;
+  return `<article class="detail-panel ai-ranked-panel"><div class="detail-panel__heading"><h3>${escapeHtml(title)}</h3><span>${escapeHtml(detail)}</span></div><div class="ai-ranked-bars">${ranked.map(([label, value], index) => `<div class="ai-ranked-bar"><div><span><i class="chart-dot" style="background:${colors[index % colors.length]}"></i>${escapeHtml(labelFor(label))}</span><strong>${formatTokens(value)}</strong></div><p><i style="background:${colors[index % colors.length]};width:${Math.max(.2, value / maximum * 100)}%"></i></p></div>`).join("") || `<div class="chart-empty">${tr("Waiting for recorded Token increments.", "等待已记录的 Token 增量。")}</div>`}</div></article>`;
 }
 
 function dailyHistory(
@@ -173,39 +164,153 @@ function rateTrend(intervals: UsageInterval[], dimension: "source" | "model", wi
   return `<article class="trend-panel"><div class="detail-panel__heading"><h3>${dimension === "source" ? tr("Agent Token rate", "Agent Token 速率") : tr("Model Token rate", "模型 Token 速率")}</h3><span>${tr("Token / min", "Token / 分钟")}</span></div><div class="traffic-chart-frame"><span class="chart-axis-label chart-axis-label--peak">${formatTokens(maximum)}</span><span class="chart-axis-label chart-axis-label--mid">${formatTokens(maximum / 2)}</span><span class="chart-axis-label chart-axis-label--zero">0</span><svg class="traffic-chart" viewBox="0 0 100 100" preserveAspectRatio="none"><path class="chart-grid chart-grid--reference" d="M0 10H100"/><path class="chart-grid" d="M0 51H100M0 92H100"/>${seriesIds.map((id, index) => `<polyline class="chart-line" style="stroke:${colors[index % colors.length]}" points="${points(id)}"/>`).join("")}</svg></div><div class="traffic-chart__timeline"><span>${escapeHtml(startLabel)}</span><span>${tr("Now", "现在")}</span></div><div class="chart-legend">${seriesIds.map((id, index) => `<span><i class="chart-dot" style="background:${colors[index % colors.length]}"></i>${escapeHtml(dimension === "model" ? modelLabel(id) : id)}</span>`).join("")}</div></article>`;
 }
 
-function renderOverview(usage: ProjectedUsage, range: AiTimeRange, window: AnalysisTimeWindow, visual: AiHistoryVisual): string {
+type RangeReference = {
+  costUsd: number;
+  pricedTokens: number;
+  unpricedTokens: number;
+  sources: string[];
+};
+
+type SampleRate = { costUsd: number; pricedTokens: number };
+
+function referenceEpoch(day: unknown): number | undefined {
+  const date = String(day ?? "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return undefined;
+  const epoch = new Date(`${date}T00:00:00`).getTime() / 1_000;
+  return Number.isFinite(epoch) ? epoch : undefined;
+}
+
+function selectedCodexModels(usage: ProjectedUsage, providerSources: Record<string, unknown>[], range: AiTimeRange): Map<string, number> {
+  if (range === "today" || range === "recorded") {
+    const source = providerSources.find((candidate) => candidate.source_id === "codex");
+    const window = range === "today" ? "today" : "cumulative";
+    const models = new Map<string, number>();
+    for (const model of asArray(source?.models)) {
+      const id = canonicalModelId(model.id);
+      const tokens = number(asRecord(model[window]).tokens);
+      if (id && tokens > 0) models.set(id, tokens);
+    }
+    return models;
+  }
+  const models = new Map<string, number>();
+  for (const interval of usage.intervals) {
+    if (interval.source !== "codex") continue;
+    for (const [rawId, tokens] of interval.models) {
+      const id = canonicalModelId(rawId);
+      models.set(id, (models.get(id) ?? 0) + tokens);
+    }
+  }
+  return models;
+}
+
+function selectedPriceReference(providerSources: Record<string, unknown>[], usage: ProjectedUsage, range: AiTimeRange, window: AnalysisTimeWindow): RangeReference | undefined {
+  const since = localDayEpoch(window.sinceEpoch);
+  const until = localDayEpoch(window.untilEpoch);
+  let costUsd = 0;
+  let pricedTokens = 0;
+  let unpricedTokens = 0;
+  const labels = new Set<string>();
+  const codexRates = new Map<string, SampleRate>();
+
+  for (const source of providerSources) {
+    const sourceId = String(source.source_id ?? "");
+    const pricing = asRecord(source.pricing);
+    for (const row of asArray(pricing.daily)) {
+      const epoch = referenceEpoch(row.date);
+      if (epoch === undefined || epoch < since || epoch > until) continue;
+      const reference = asRecord(row.reference);
+      const kind = String(reference.kind ?? "");
+      if (sourceId === "codex" && kind === "sampled-standard-api-projection") {
+        for (const model of asArray(reference.models)) {
+          const id = canonicalModelId(model.id);
+          if (!id) continue;
+          const rate = codexRates.get(id) ?? { costUsd: 0, pricedTokens: 0 };
+          rate.costUsd += number(model.cost_usd);
+          rate.pricedTokens += number(model.priced_tokens);
+          codexRates.set(id, rate);
+        }
+        continue;
+      }
+      const tokens = number(reference.priced_tokens);
+      if (!kind || tokens <= 0) continue;
+      costUsd += number(reference.cost_usd);
+      pricedTokens += tokens;
+      unpricedTokens += number(reference.unpriced_tokens);
+      labels.add(String(source.label ?? sourceId));
+    }
+  }
+
+  if (codexRates.size) {
+    let codexPriced = 0;
+    let codexCost = 0;
+    let codexUnpriced = 0;
+    for (const [id, tokens] of selectedCodexModels(usage, providerSources, range)) {
+      const sample = codexRates.get(id);
+      if (!sample || sample.pricedTokens <= 0) {
+        codexUnpriced += tokens;
+        continue;
+      }
+      codexPriced += tokens;
+      codexCost += tokens * sample.costUsd / sample.pricedTokens;
+    }
+    if (codexPriced > 0) {
+      costUsd += codexCost;
+      pricedTokens += codexPriced;
+      unpricedTokens += codexUnpriced;
+      labels.add("Codex");
+    }
+  }
+  return pricedTokens > 0 ? { costUsd, pricedTokens, unpricedTokens, sources: [...labels] } : undefined;
+}
+
+function referencePriceTag(providerSources: Record<string, unknown>[], usage: ProjectedUsage, range: AiTimeRange, window: AnalysisTimeWindow): string {
+  const estimate = selectedPriceReference(providerSources, usage, range, window);
+  if (!estimate) return "";
+  const sources = estimate.sources.join(" / ");
+  const title = tr(
+    `Local price reference for ${sources}. OpenCode uses provider-reported stored cost; Antigravity uses explicit text-model mappings; Codex projects sampled model prices over matching local model totals. Infer Runtime is excluded. Not an invoice.`,
+    `${sources} 的本地价格参考：OpenCode 使用已记录的供应商成本；Antigravity 使用明确的文本模型映射；Codex 将抽样模型价格投影到同名模型的本地总量。暂不包含 Infer Runtime；不是账单。`,
+  );
+  return `<span class="ai-reference-price" title="${escapeHtml(title)}">${tr("API reference", "API 参考")} ≈ US$${estimate.costUsd.toFixed(2)}</span>`;
+}
+
+function renderOverview(usage: ProjectedUsage, providerSources: Record<string, unknown>[], range: AiTimeRange, window: AnalysisTimeWindow, visual: AiHistoryVisual): string {
   const sources = usage.sourceTotals;
   const selectedTotal = [...sources.values()].reduce((sum, value) => sum + value, 0);
-  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Selected range total", "所选时段总量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><span>${rangeLabel(range)} · ${sources.size} ${tr("Agents", "个 Agent")}</span></div>${horizontalBars(tr("Usage by Agent", "按 Agent 的用量"), rangeLabel(range), sources, SOURCE_COLORS)}${range === "today" ? rateTrend(usage.intervals, "source", window) : dailyHistory(usage.intervals, "source", range, window, visual, usage.undatedTotal)}</section>`;
+  const priceTag = referencePriceTag(providerSources, usage, range, window);
+  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Selected range total", "所选时段总量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)} · ${sources.size} ${tr("Agents", "个 Agent")}</span>${priceTag}</aside></div>${horizontalBars(tr("Usage by Agent", "按 Agent 的用量"), rangeLabel(range), sources, SOURCE_COLORS)}${range === "today" ? rateTrend(usage.intervals, "source", window) : dailyHistory(usage.intervals, "source", range, window, visual, usage.undatedTotal)}</section>`;
 }
 
-function renderModels(usage: ProjectedUsage, range: AiTimeRange, window: AnalysisTimeWindow, visual: AiHistoryVisual): string {
+function renderModels(usage: ProjectedUsage, providerSources: Record<string, unknown>[], range: AiTimeRange, window: AnalysisTimeWindow, visual: AiHistoryVisual): string {
   const models = usage.modelTotals;
   const selectedTotal = [...models.values()].reduce((sum, value) => sum + value, 0);
-  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Model total in range", "所选时段模型量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><span>${rangeLabel(range)} · ${tr("mass-conserving", "总量守恒")}</span></div>${horizontalBars(tr("Model composition", "模型构成"), rangeLabel(range), models, MODEL_COLORS, modelLabel)}${range === "today" ? rateTrend(usage.intervals, "model", window) : dailyHistory(usage.intervals, "model", range, window, visual, usage.undatedTotal)}</section>`;
+  const priceTag = referencePriceTag(providerSources, usage, range, window);
+  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Model total in range", "所选时段模型量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)}</span>${priceTag}</aside></div>${horizontalBars(tr("Model composition", "模型构成"), rangeLabel(range), models, MODEL_COLORS, modelLabel)}${range === "today" ? rateTrend(usage.intervals, "model", window) : dailyHistory(usage.intervals, "model", range, window, visual, usage.undatedTotal)}</section>`;
 }
 
-function providerDetails(source: Record<string, unknown>): string {
+function providerDetails(source: Record<string, unknown>, providerPanels: ReadonlyMap<string, boolean>): string {
+  const sourceId = String(source.source_id ?? "");
+  const open = providerPanels.get(sourceId) !== false;
   const today = windowOf(source, "today");
   const cumulative = windowOf(source, "cumulative");
   const groups = asArray(source.details);
   const started = shortStartedAt(today.started_at);
   const todaySource = [started ? tr(`since ${started}`, `${started} 起`) : "", localized(today.detail)].filter(Boolean).join(" · ");
-  return `<details class="ai-provider-panel"><summary><span><strong>${escapeHtml(source.label ?? source.source_id)}</strong><small>${escapeHtml(String(source.collection_method ?? ""))}</small></span><span><small>${tr("Today", "今日")}</small><strong>${today.available ? formatTokens(today.tokens) : "—"}</strong></span><span><small>${tr("Cumulative", "累计")}</small><strong>${cumulative.available ? formatTokens(cumulative.tokens) : "—"}</strong></span><em>${escapeHtml(todaySource)}</em></summary><div class="ai-provider-body">${groups.map((group) => `<section><div class="detail-panel__heading"><h3>${escapeHtml(localized(group.title))}</h3><span>${escapeHtml(localized(group.badge))}</span></div><dl>${asArray(group.metrics).map((metric) => `<div><dt>${escapeHtml(localized(metric.label))}<small>${escapeHtml(localized(metric.detail))}</small></dt><dd>${formatMetric(metric.value, metric.unit)}</dd></div>`).join("")}</dl>${group.note ? `<p>${escapeHtml(localized(group.note))}</p>` : ""}</section>`).join("")}</div></details>`;
+  return `<details class="ai-provider-panel" data-ai-provider-id="${escapeHtml(sourceId)}"${open ? " open" : ""}><summary><span><strong>${escapeHtml(source.label ?? source.source_id)}</strong><small>${escapeHtml(String(source.collection_method ?? ""))}</small></span><span><small>${tr("Today", "今日")}</small><strong>${today.available ? formatTokens(today.tokens) : "—"}</strong></span><span><small>${tr("Cumulative", "累计")}</small><strong>${cumulative.available ? formatTokens(cumulative.tokens) : "—"}</strong></span><em>${escapeHtml(todaySource)}</em></summary><div class="ai-provider-body">${groups.map((group) => `<section><div class="detail-panel__heading"><h3>${escapeHtml(localized(group.title))}</h3><span>${escapeHtml(localized(group.badge))}</span></div><dl>${asArray(group.metrics).map((metric) => `<div><dt>${escapeHtml(localized(metric.label))}<small>${escapeHtml(localized(metric.detail))}</small></dt><dd>${formatMetric(metric.value, metric.unit)}</dd></div>`).join("")}</dl>${group.note ? `<p>${escapeHtml(localized(group.note))}</p>` : ""}</section>`).join("")}</div></details>`;
 }
 
-function renderActivity(providerSources: Record<string, unknown>[]): string {
-  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Provider snapshots", "来源快照")}</p><strong>${providerSources.length}</strong></div><span>${tr("Current diagnostics · not additive", "当前诊断 · 不可与 Token 总量相加")}</span></div><div class="ai-provider-list">${providerSources.map(providerDetails).join("") || `<div class="chart-empty">${tr("No AI usage provider available.", "暂无可用的 AI 用量来源。")}</div>`}</div></section>`;
+function renderActivity(providerSources: Record<string, unknown>[], providerPanels: ReadonlyMap<string, boolean>): string {
+  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Provider snapshots", "来源快照")}</p><strong>${providerSources.length}</strong></div><span>${tr("Current diagnostics · not additive", "当前诊断 · 不可与 Token 总量相加")}</span></div><div class="ai-provider-list">${providerSources.map((source) => providerDetails(source, providerPanels)).join("") || `<div class="chart-empty">${tr("No AI usage provider available.", "暂无可用的 AI 用量来源。")}</div>`}</div></section>`;
 }
 
 function analysisBody(snapshot: AiAnalysisSnapshot, providerSources: Record<string, unknown>[]): string {
-  if (snapshot.mode === "activity") return renderActivity(providerSources);
+  if (snapshot.mode === "activity") return renderActivity(providerSources, snapshot.providerPanels);
   if (snapshot.loading && !snapshot.points.length) return `<article class="detail-panel ai-analysis-state"><span class="pulse"></span><p>${tr("Loading recorded Token usage…", "正在读取已记录的 Token 用量…")}</p></article>`;
   if (snapshot.error) return `<article class="detail-panel ai-analysis-state ai-analysis-state--error"><strong>${tr("Recorded metrics unavailable", "暂时无法读取历史指标")}</strong><p>${escapeHtml(snapshot.error)}</p></article>`;
   const usage = projectUsage(snapshot.points, providerSources, snapshot.range, snapshot.window);
   return snapshot.mode === "overview"
-    ? renderOverview(usage, snapshot.range, snapshot.window, snapshot.historyVisual)
-    : renderModels(usage, snapshot.range, snapshot.window, snapshot.historyVisual);
+    ? renderOverview(usage, providerSources, snapshot.range, snapshot.window, snapshot.historyVisual)
+    : renderModels(usage, providerSources, snapshot.range, snapshot.window, snapshot.historyVisual);
 }
 
 function sourceRow(source: SourceProjection): string {
@@ -246,5 +351,11 @@ export function renderAiUsageResourcePage(projection: AgentProjection, resource:
   const providerSources = asArray(asRecord(projection.infra.ai_usage).sources);
   const sourceNames = providerSources.map((source) => String(source.label ?? source.source_id ?? "")).filter(Boolean).join(" · ");
   const diagnostics = renderAttentionDiagnostics(aiUsageDiagnostics(projection, resource, sources));
-  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("RESOURCE DETAIL", "资源详情")}</p><h2>${tr("AI usage", "AI 用量")}</h2></div><span class="section-heading__meta">${escapeHtml(sourceNames)}</span></div>${diagnostics}<section class="network-detail">${renderCurrentSummary(providerSources, sources)}${renderControls(snapshot)}${analysisBody(snapshot, providerSources)}<article class="sources-card sources-card--footer"><div class="sources-card__heading"><h3>${tr("Collector sources", "采集数据源")}</h3><span>${sources.length}</span></div><ul>${sources.map(sourceRow).join("")}</ul></article></section></section>`;
+  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("RESOURCE DETAIL", "资源详情")}</p><h2>${tr("AI usage", "AI 用量")}</h2></div><div class="ai-resource-meta"><span class="section-heading__meta">${escapeHtml(sourceNames)}</span><button type="button" class="button button--subtle ai-methodology-link" data-ai-methodology>${tr("Methods & estimates", "口径与估算")}</button></div></div>${diagnostics}<section class="network-detail">${renderCurrentSummary(providerSources, sources)}${renderControls(snapshot)}${analysisBody(snapshot, providerSources)}<article class="sources-card sources-card--footer"><div class="sources-card__heading"><h3>${tr("Collector sources", "采集数据源")}</h3><span>${sources.length}</span></div><ul>${sources.map(sourceRow).join("")}</ul></article></section></section>`;
+}
+function renderCurrentSummary(providerSources: Record<string, unknown>[], sources: SourceProjection[]): string {
+  const today = providerSources.reduce((sum, source) => sum + number(windowOf(source, "today").tokens), 0);
+  const cumulative = providerSources.reduce((sum, source) => sum + number(windowOf(source, "cumulative").tokens), 0);
+  const online = sources.filter((source) => source.enabled && source.status === "ok").length;
+  return `<section class="ai-usage-summary"><article><p>${tr("Observed today", "今日已观测")}</p><div class="ai-summary-value"><strong>${formatTokens(today)}</strong></div><small>${tr("Available source windows combined", "合并当前可用来源窗口")}</small></article><article><p>${tr("Local history total", "本机历史总量")}</p><strong>${formatTokens(cumulative)}</strong><small>${tr("All readable local records · not billing", "全部可读本地记录 · 非账单")}</small></article><article><p>${tr("Collector coverage", "采集覆盖")}</p><strong>${online} / ${sources.length}</strong><small>${tr("sources online", "个来源在线")}</small></article></section>`;
 }

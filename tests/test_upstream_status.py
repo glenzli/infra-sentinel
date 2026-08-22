@@ -11,6 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from infra_sentinel.resources.upstream.status import (  # noqa: E402
+    DEFAULT_PROVIDERS,
     StatusProvider,
     UpstreamStatusMonitor,
     aggregate_snapshot,
@@ -81,6 +82,12 @@ def flashduty_page(*, active: bool = False) -> bytes:
 
 
 class UpstreamStatusTests(unittest.TestCase):
+    def test_default_official_status_feeds_include_kimi_and_cursor(self) -> None:
+        providers = {provider.id: provider for provider in DEFAULT_PROVIDERS}
+        self.assertEqual(providers["moonshot"].summary_url, "https://status.moonshot.cn/api/v2/summary.json")
+        self.assertEqual(providers["cursor"].summary_url, "https://status.cursor.com/api/v2/summary.json")
+        self.assertNotIn("reference_pages", aggregate_snapshot([], "now"))
+
     def test_only_api_components_contribute_to_provider_status(self) -> None:
         item = normalize_summary(PROVIDER, summary(), "2026-08-11T10:00:00+08:00")
         self.assertEqual(item["status"], "healthy")

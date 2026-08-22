@@ -1,0 +1,24 @@
+.ai-methodology { display: grid; gap: 12px; }
+.methodology-page-heading { align-items: center; }
+.methodology-intro, .methodology-card { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.methodology-intro { align-items: baseline; display: flex; gap: 11px; padding: 11px 14px; }
+.methodology-intro strong { color: #38434d; font-size: 12px; white-space: nowrap; }
+.methodology-intro p, .methodology-note { color: var(--muted); font-size: 11px; line-height: 1.45; margin: 0; }
+.methodology-grid { display: grid; grid-template-columns: minmax(250px, .9fr) minmax(300px, 1.1fr); gap: 12px; }
+.methodology-card { padding: 14px 15px; }
+.methodology-card--coverage { grid-row: span 2; }
+.methodology-card__heading { align-items: baseline; display: flex; justify-content: space-between; gap: 12px; }
+.methodology-card__heading h3 { font-size: 13px; margin: 0; }
+.methodology-card__heading > span { color: var(--muted); font-size: 10px; white-space: nowrap; }
+.methodology-source-list { display: grid; gap: 0; margin-top: 9px; }
+.methodology-source-list article { display: grid; gap: 2px; padding: 8px 0; border-top: 1px solid var(--border); }
+.methodology-source-list article:first-child { border-top: 0; padding-top: 0; }
+.methodology-source-list strong { font-size: 11px; }
+.methodology-source-list span, .methodology-source-list small { color: var(--muted); font-size: 10px; line-height: 1.35; }
+.methodology-price-values { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+.methodology-price-values div { display: grid; gap: 3px; border-left: 2px solid var(--blue-soft); padding-left: 8px; }
+.methodology-price-values span { color: var(--muted); font-size: 10px; }
+.methodology-price-values strong { font-size: 14px; letter-spacing: -.015em; }
+.methodology-note { margin-top: 9px; }
+@media (max-width: 920px) { .methodology-grid { grid-template-columns: 1fr; } .methodology-card--coverage { grid-row: auto; } }
+@media (max-width: 620px) { .methodology-intro { align-items: start; flex-direction: column; gap: 4px; } .methodology-price-values { grid-template-columns: 1fr; } }
