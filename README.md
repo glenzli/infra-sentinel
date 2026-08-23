@@ -24,6 +24,8 @@ Infra Sentinel 是一个本地优先的个人 AI 基础设施观测工具，用�
 
 采集仅处理可核对的本地聚合数据与公开状态信息，且始终为只读操作：不会抓包，不会读取提示词、响应、项目文件或凭据，也不会修改代理、服务器或本机系统状态。Codex 用量以本机 rollout JSONL 的 `last_token_usage` 请求增量为唯一事实源；fork 状态机会跳过子 Agent 中被重写时间戳的父任务回放，带上游会话作用域的不可逆去重标记再排除跨文件副本。捕获后仅保存不含任务内容的聚合账本、解析状态与去重标记，不再使用 `threads.tokens_used` 推算用量。主图显示本机去重后的原始 Token，不等同于 Codex 官方额度消耗；标准 API 参考值按模型分别代入输入、缓存输入、缓存写入和输出价格。对于短连接、来源离线或统计窗口不一致等无法可靠归因的情况，界面将明确标记为未知、未归因或等待采样；本地统计不作为供应商账单使用。
 
+当日用量按小时展示：有原生时间戳的来源按事件时间归桶，仅提供累计值的来源按采样差分归桶，无法定位的起始余额归入统计开始所在小时并标记为估算。跨日后 AI 历史按自然日汇总；小时参考价值按该小时的可计价 Token 构成换算，仍不是供应商账单。
+
 ## 使用方式
 
 启动 App 后，应用负责管理本地采样进程；关闭主窗口后继续驻留菜单栏。首次启动会创建：
@@ -106,6 +108,8 @@ Infra Sentinel is a local-first desktop dashboard for personal AI infrastructure
 - **Facilities**: compatible local services discovered through [Infra Protocol](https://github.com/glenzli/infra-protocol), including PCP, Infer Runtime, and Dev Mesh Observer.
 
 The dashboard brings together measurements that can be checked locally while keeping their sources visible. Collection stays read-only: it does not capture packets, inspect prompts or responses, touch project files or credentials, or alter proxy/server configuration. Codex usage has one fact source: per-request `last_token_usage` from local rollout JSONL. A fork state machine skips retimestamped parent replay in subagents, while irreversible dedup keys scoped to the upstream session suppress cross-file copies. After capture, only aggregate usage, parser state, and deduplication markers are retained; `threads.tokens_used` is not an accounting input. Charts show deduplicated local raw Tokens, not official Codex quota consumption, while the standard API reference prices input, cached input, cache writes, and output separately by model. When a measurement cannot be explained reliably, it stays unknown or unattributed rather than becoming a made-up invoice number.
+
+The current local day is shown in hourly buckets: timestamped sources use their recorded event time, cumulative-only sources use sampled deltas, and an unlocatable opening balance is assigned to the statistics-start hour and marked as estimated. After the local day closes, AI history is summarized by calendar day. Hourly reference value is derived from each hour's priced Token composition and remains a local estimate, not provider billing.
 
 The packaged desktop app currently targets macOS 13+. Build from source with:
 
