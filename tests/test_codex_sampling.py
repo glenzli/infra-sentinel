@@ -29,8 +29,15 @@ def record(record_type: str, payload: dict[str, object], timestamp: str = "2026-
     return json.dumps({"type": record_type, "timestamp": timestamp, "payload": payload}, separators=(",", ":")) + "\n"
 
 
-def context(model: str) -> str:
-    return record("turn_context", {"model": model})
+def context(model: str, timestamp: str = "2026-08-22T00:59:00Z", *, turn_id: str | None = None) -> str:
+    payload: dict[str, object] = {"model": model}
+    if turn_id is not None:
+        payload["turn_id"] = turn_id
+    return record("turn_context", payload, timestamp)
+
+
+def task_started(turn_id: str, timestamp: str) -> str:
+    return record("event_msg", {"type": "task_started", "turn_id": turn_id}, timestamp)
 
 
 def cumulative_usage(last_total: int, cumulative_total: int, timestamp: str) -> str:
@@ -124,7 +131,7 @@ class CodexJsonlSamplingTests(unittest.TestCase):
         self.assertEqual(ledger.days, {})
         self.assertEqual(ledger.files, {})
 
-    def test_audit_uses_cumulative_deltas_suppresses_duplicates_and_counts_resets(self) -> None:
+    def test_audit_uses_last_usage_suppresses_duplicates_and_counts_resets(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "sessions"
             rollout = root / "2026" / "08" / "20" / "rollout.jsonl"
@@ -173,6 +180,182 @@ class CodexJsonlSamplingTests(unittest.TestCase):
         self.assertEqual(day.composition.total_tokens, 55)
         self.assertEqual(day.source_tokens, {"subagent": 55})
         self.assertEqual(day.delta_last_mismatches, 0)
+
+    def test_audit_suppresses_retimestamped_parent_history_in_nested_subagents(self) -> None:
+        root_id = "019fa000-0000-7000-8000-000000000001"
+        child_id = "019fa100-0000-7000-8000-000000000001"
+        child_turn = "019fa101-0000-7000-8000-000000000001"
+        grandchild_id = "019fa200-0000-7000-8000-000000000001"
+        grandchild_turn = "019fa201-0000-7000-8000-000000000001"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "sessions"
+            root.mkdir()
+            (root / "rollout-root.jsonl").write_text(
+                record("session_meta", {"id": root_id, "thread_source": "user"})
+                + context("gpt-5.6-sol")
+                + cumulative_usage(100, 100, "2026-08-22T01:00:00Z")
+                + cumulative_usage(50, 150, "2026-08-22T01:01:00Z"),
+                encoding="utf-8",
+            )
+            (root / "rollout-child.jsonl").write_text(
+                record("session_meta", {
+                    "id": child_id, "parent_thread_id": root_id, "thread_source": "subagent",
+                })
+                + record("session_meta", {"id": root_id, "thread_source": "user"})
+                + cumulative_usage(100, 100, "2026-08-22T02:00:00Z")
+                + cumulative_usage(50, 150, "2026-08-22T02:00:01Z")
+                + task_started(child_turn, "2026-08-22T02:00:01.500Z")
+                + context("gpt-5.6-sol", "2026-08-22T02:00:01.600Z", turn_id=child_turn)
+                + cumulative_usage(30, 180, "2026-08-22T02:00:02Z"),
+                encoding="utf-8",
+            )
+            (root / "rollout-grandchild.jsonl").write_text(
+                record("session_meta", {
+                    "id": grandchild_id, "parent_thread_id": child_id, "thread_source": "subagent",
+                })
+                + record("session_meta", {"id": child_id, "forked_from_id": root_id, "thread_source": "subagent"})
+                + cumulative_usage(100, 100, "2026-08-22T03:00:00Z")
+                + cumulative_usage(50, 150, "2026-08-22T03:00:01Z")
+                + cumulative_usage(30, 180, "2026-08-22T03:00:02Z")
+                + task_started(grandchild_turn, "2026-08-22T03:00:02.500Z")
+                + context("gpt-5.6-sol", "2026-08-22T03:00:02.600Z", turn_id=grandchild_turn)
+                + cumulative_usage(20, 200, "2026-08-22T03:00:03Z"),
+                encoding="utf-8",
+            )
+            audit = audit_codex_rollouts(
+                [root], start_day=NOW.date().replace(day=22),
+                end_day=NOW.date().replace(day=22), timezone=timezone.utc,
+            )
+
+        day = audit.days["2026-08-22"]
+        self.assertEqual(day.composition.total_tokens, 200)
+        self.assertEqual(day.source_tokens, {"subagent": 50, "user": 150})
+        self.assertEqual(day.inherited_snapshots, 5)
+        self.assertEqual(day.composition.events, 4)
+
+    def test_durable_ledger_suppresses_inherited_prefix_when_child_arrives_later(self) -> None:
+        root_id = "019fa000-0000-7000-8000-000000000001"
+        child_id = "019fa100-0000-7000-8000-000000000001"
+        child_turn = "019fa101-0000-7000-8000-000000000001"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "sessions"
+            root.mkdir()
+            (root / "rollout-root.jsonl").write_text(
+                record("session_meta", {"id": root_id, "thread_source": "user"})
+                + cumulative_usage(100, 100, "2026-08-22T01:00:00Z")
+                + cumulative_usage(50, 150, "2026-08-22T01:01:00Z"),
+                encoding="utf-8",
+            )
+            ledger = rebuild_codex_rollout_ledger([root], timezone=timezone.utc, now=NOW)
+            (root / "rollout-child.jsonl").write_text(
+                record("session_meta", {
+                    "id": child_id, "parent_thread_id": root_id, "thread_source": "subagent",
+                })
+                + record("session_meta", {"id": root_id, "thread_source": "user"})
+                + cumulative_usage(100, 100, "2026-08-22T02:00:00Z")
+                + cumulative_usage(50, 150, "2026-08-22T02:00:01Z")
+                + task_started(child_turn, "2026-08-22T02:00:01.500Z")
+                + context("gpt-5.6-sol", "2026-08-22T02:00:01.600Z", turn_id=child_turn)
+                + cumulative_usage(30, 180, "2026-08-22T02:00:02Z"),
+                encoding="utf-8",
+            )
+            update = update_codex_rollout_ledger(
+                [root], ledger, timezone=timezone.utc, now=NOW, max_scan_bytes=None,
+            )
+
+        self.assertEqual(ledger.cumulative().total_tokens, 180)
+        self.assertEqual([increment.usage["total_tokens"] for increment in update.increments], [30])
+        self.assertEqual(ledger.days["2026-08-22"].inherited_snapshots, 2)
+        self.assertEqual(len(ledger.dedup_keys), 3)
+
+    def test_audit_suppresses_retimestamped_middle_segment_without_merging_distinct_totals(self) -> None:
+        root_id = "019fa000-0000-7000-8000-000000000001"
+        child_id = "019fa100-0000-7000-8000-000000000001"
+        child_turn = "019fa101-0000-7000-8000-000000000001"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "sessions"
+            root.mkdir()
+            (root / "rollout-root.jsonl").write_text(
+                record("session_meta", {"id": root_id, "thread_source": "user"})
+                + cumulative_usage(100, 100, "2026-08-22T01:00:00Z")
+                + cumulative_usage(50, 150, "2026-08-22T01:01:00Z")
+                + cumulative_usage(30, 180, "2026-08-22T01:02:00Z"),
+                encoding="utf-8",
+            )
+            (root / "rollout-child.jsonl").write_text(
+                record("session_meta", {
+                    "id": child_id, "parent_thread_id": root_id, "thread_source": "subagent",
+                })
+                + record("session_meta", {"id": root_id, "thread_source": "user"})
+                + cumulative_usage(50, 150, "2026-08-22T02:00:00Z")
+                + cumulative_usage(30, 180, "2026-08-22T02:00:01Z")
+                + task_started(child_turn, "2026-08-22T02:00:01.500Z")
+                + context("gpt-5.6-sol", "2026-08-22T02:00:01.600Z", turn_id=child_turn)
+                + cumulative_usage(20, 200, "2026-08-22T02:00:02Z"),
+                encoding="utf-8",
+            )
+            (root / "rollout-independent.jsonl").write_text(
+                record("session_meta", {"id": "independent", "thread_source": "user"})
+                + cumulative_usage(20, 20, "2026-08-22T03:00:00Z"),
+                encoding="utf-8",
+            )
+            audit = audit_codex_rollouts(
+                [root], start_day=NOW.date().replace(day=22),
+                end_day=NOW.date().replace(day=22), timezone=timezone.utc,
+            )
+
+        day = audit.days["2026-08-22"]
+        self.assertEqual(day.composition.total_tokens, 220)
+        self.assertEqual(day.inherited_snapshots, 2)
+
+    def test_scoped_dedup_keeps_identical_totals_in_independent_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "sessions"
+            root.mkdir()
+            for index in (1, 2):
+                (root / f"rollout-independent-{index}.jsonl").write_text(
+                    record("session_meta", {"id": f"independent-{index}", "thread_source": "user"})
+                    + context("gpt-5.6-sol", f"2026-08-22T0{index}:00:00Z")
+                    + cumulative_usage(20, 20, f"2026-08-22T0{index}:00:01Z"),
+                    encoding="utf-8",
+                )
+            audit = audit_codex_rollouts(
+                [root], start_day=NOW.date().replace(day=22),
+                end_day=NOW.date().replace(day=22), timezone=timezone.utc,
+            )
+
+        self.assertEqual(audit.days["2026-08-22"].composition.total_tokens, 40)
+        self.assertEqual(audit.days["2026-08-22"].inherited_snapshots, 0)
+
+    def test_incremental_fork_gate_survives_checkpoint_before_child_turn_context(self) -> None:
+        root_id = "019fa000-0000-7000-8000-000000000001"
+        child_id = "019fa100-0000-7000-8000-000000000001"
+        child_turn = "019fa101-0000-7000-8000-000000000001"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "sessions"
+            root.mkdir()
+            rollout = root / "rollout-child.jsonl"
+            rollout.write_text(
+                record("session_meta", {
+                    "id": child_id, "parent_thread_id": root_id, "thread_source": "subagent",
+                })
+                + record("session_meta", {"id": root_id, "thread_source": "user"})
+                + cumulative_usage(100, 100, "2026-08-22T02:00:00Z")
+                + task_started(child_turn, "2026-08-22T02:00:01Z"),
+                encoding="utf-8",
+            )
+            ledger = rebuild_codex_rollout_ledger([root], timezone=timezone.utc, now=NOW)
+            with rollout.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    context("gpt-5.6-sol", "2026-08-22T02:00:02Z", turn_id=child_turn)
+                    + cumulative_usage(30, 130, "2026-08-22T02:00:03Z")
+                )
+            update = update_codex_rollout_ledger(
+                [root], ledger, timezone=timezone.utc, now=NOW, max_scan_bytes=None,
+            )
+
+        self.assertEqual(ledger.cumulative().total_tokens, 30)
+        self.assertEqual([increment.usage["total_tokens"] for increment in update.increments], [30])
 
     def test_audit_includes_continuing_old_rollout_and_deduplicates_archived_copy(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

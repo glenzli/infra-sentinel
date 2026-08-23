@@ -1,6 +1,6 @@
 """Privacy-minimal Codex local rollout usage collector.
 
-Codex usage is reconstructed from local rollout ``total_token_usage`` deltas
+Codex usage is reconstructed from local rollout ``last_token_usage`` increments
 and retained in Sentinel's aggregate-only ledger. SQLite thread counters are
 not an accounting input. Prompts, responses, project paths, task identifiers,
 and raw rollout records never enter the checkpoint or Projection.
@@ -45,7 +45,6 @@ from infra_sentinel.resources.ai.contract import (
 
 
 CODEX_POLL_SECONDS = 20
-CODEX_EMPIRICAL_CACHE_WEIGHT = 0.3
 _COMPONENT_METRICS = {
     "ai.tokens.total": "total_tokens",
     "ai.tokens.input": "input_tokens",
@@ -69,16 +68,6 @@ def _composition_models(composition: TokenComposition) -> dict[str, dict[str, in
 
 def _empty_day() -> RolloutAuditDay:
     return RolloutAuditDay()
-
-
-def _empirical_weighted_tokens(composition: TokenComposition) -> int:
-    """Return a local compatibility indicator, not an official Codex rule."""
-    uncached_input = max(0, composition.input_tokens - composition.cached_input_tokens)
-    return round(
-        uncached_input
-        + composition.output_tokens
-        + CODEX_EMPIRICAL_CACHE_WEIGHT * composition.cached_input_tokens
-    )
 
 
 class CodexUsageCollector:
@@ -148,6 +137,7 @@ class CodexUsageCollector:
         root_files = sum(1 for entry in ledger.files.values() if entry.get("source") == "user")
         subagent_files = sum(1 for entry in ledger.files.values() if entry.get("source") == "subagent")
         duplicate_snapshots = sum(day.duplicate_snapshots for day in ledger.days.values())
+        inherited_snapshots = sum(day.inherited_snapshots for day in ledger.days.values())
         counter_resets = sum(day.counter_resets for day in ledger.days.values())
         today_estimate = estimate_standard_api_cost(_composition_models(today.composition))
         cumulative_estimate = estimate_standard_api_cost(_composition_models(cumulative))
@@ -183,30 +173,16 @@ class CodexUsageCollector:
                 token_metric("output", localized("Output", "输出"), today.composition.output_tokens, localized("today", "今日")),
                 token_metric("reasoning", localized("Reasoning", "推理"), today.composition.reasoning_output_tokens, localized("subset of output", "输出的一部分")),
             ], badge=localized("today · local JSONL", "今日 · 本机 JSONL")),
-            detail_group("cached-weight-comparison", localized("Cached-weight comparison", "缓存折算对照"), [
-                token_metric(
-                    "weighted-today", localized("Today comparison", "今日对照量"),
-                    _empirical_weighted_tokens(today.composition),
-                    localized("uncached input + output + 30% cached input", "非缓存输入 + 输出 + 30% 缓存输入"),
-                ),
-                token_metric(
-                    "weighted-cumulative", localized("Local-history comparison", "本机历史对照量"),
-                    _empirical_weighted_tokens(cumulative),
-                    localized("derived from all captured local JSONL", "由全部已捕获本机 JSONL 推导"),
-                ),
-            ], note=localized(
-                "The 30% cache coefficient is an empirical compatibility indicator inferred from this machine's historical JSONL and legacy counters. OpenAI's public documentation does not define it as the Codex allowance formula. Raw Tokens and the API reference remain authoritative within this dashboard.",
-                "30% 缓存系数只是依据本机历史 JSONL 与旧计数器反推的经验兼容指标；OpenAI 公开文档没有将其定义为 Codex 额度公式。本面板仍以原始 Token 与 API 参考估值为准。",
-            ), badge=localized("derived · not official", "推导 · 非官方")),
             detail_group("rollout-ledger", localized("Rollout ledger", "Rollout 账本"), [
                 token_metric("rollout-files", localized("Observed rollout files", "已观测 rollout 文件"), len(ledger.files), localized("irreversible file markers only", "仅保存不可逆文件标记"), unit="count"),
                 token_metric("root-rollouts", localized("Root rollouts", "主任务 rollout"), root_files, localized("thread source user", "任务来源为 user"), unit="count"),
-                token_metric("subagent-rollouts", localized("Subagent rollouts", "子 Agent rollout"), subagent_files, localized("included as real local requests", "作为真实本机请求计入"), unit="count"),
+                token_metric("subagent-rollouts", localized("Subagent rollouts", "子 Agent rollout"), subagent_files, localized("only lineage-unique suffixes are counted", "仅计入 lineage 独有后缀"), unit="count"),
                 token_metric("duplicate-snapshots", localized("Suppressed duplicate snapshots", "已排除重复快照"), duplicate_snapshots, localized("unchanged cumulative counter", "累计计数不变"), unit="count"),
+                token_metric("inherited-snapshots", localized("Suppressed inherited snapshots", "已排除继承快照"), inherited_snapshots, localized("retimestamped parent lineage prefix", "被重写时间戳的父任务 lineage 前缀"), unit="count"),
                 token_metric("counter-resets", localized("Counter generations", "计数器换代"), counter_resets, localized("decrease starts a new generation", "累计下降后开始新一代"), unit="count"),
             ], note=localized(
-                "Aggregate ledger survives rollout deletion after capture. Usage from another machine and rollouts deleted before capture remain absent.",
-                "聚合账本在捕获后不受 rollout 删除影响；其他机器的用量以及捕获前已删除的 rollout 仍然缺失。",
+                "A fork-aware replay gate and upstream-session-scoped dedup keys suppress inherited parent history. This is local raw JSONL usage, not official Codex quota consumption. The aggregate ledger survives rollout deletion after capture; usage from another machine and rollouts deleted before capture remain absent.",
+                "fork 回放门控与带上游会话作用域的去重标记会排除继承的父任务历史。这是本机 JSONL 原始用量，不是 Codex 官方额度消耗。聚合账本在捕获后不受 rollout 删除影响；其他机器的用量以及捕获前已删除的 rollout 仍然缺失。",
             ), badge=localized("local ledger", "本机账本")),
             detail_group(
                 "standard-api-reference", localized("Standard API reference", "标准 API 参考"), price_metrics,

@@ -89,13 +89,15 @@ class CodexUsageTests(unittest.TestCase):
         self.assertEqual(reference["priced_tokens"], 100)
         self.assertEqual(reference["unpriced_tokens"], 40)
         groups = {group["id"]: group for group in result.snapshot["details"]}
-        comparison = groups["cached-weight-comparison"]
-        weighted = {metric["id"]: metric["value"] for metric in comparison["metrics"]}
-        self.assertEqual(weighted["weighted-today"], 84)
-        self.assertIn("经验兼容指标", comparison["note"]["zh"])
+        self.assertNotIn("cached-weight-comparison", groups)
+        inherited = next(
+            metric for metric in groups["rollout-ledger"]["metrics"]
+            if metric["id"] == "inherited-snapshots"
+        )
+        self.assertEqual(inherited["value"], 0)
         self.assertNotIn("rollout-2026", persisted)
 
-    def test_appended_reset_is_counted_once_and_emitted_with_original_event_time(self) -> None:
+    def test_appended_reset_is_counted_once_and_emitted_at_request_start(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             root = base / "sessions"
@@ -120,7 +122,7 @@ class CodexUsageTests(unittest.TestCase):
             (20, {"model": "gpt-5.6-sol"}),
         ])
         expected_event_time = datetime.fromtimestamp(EPOCH, tz=timezone.utc).astimezone().replace(
-            hour=20, minute=2, second=0, microsecond=0,
+            hour=20, minute=0, second=0, microsecond=0,
         ).isoformat(timespec="seconds")
         self.assertEqual({point.observed_at for point in updated.points}, {expected_event_time})
         self.assertEqual(updated.snapshot["usage"]["today"]["tokens"], 120)

@@ -29,6 +29,31 @@ from infra_sentinel.resources.network.metrics import (  # noqa: E402
 
 
 class MetricStoreTests(unittest.TestCase):
+    def test_new_codex_rebuild_marker_replaces_history_after_prior_migration(self) -> None:
+        old_migration = "codex-jsonl-history-20260824.1"
+        with tempfile.TemporaryDirectory() as temporary:
+            store = MetricStore(Path(temporary))
+            old_point = MetricPoint(
+                observed_at="2026-08-22T12:00:00+08:00", observed_epoch=100,
+                metric="ai.tokens.total", instrument="counter", value=42, unit="tokens",
+                source_id="codex", resource_id="ai_usage",
+            )
+            later_point = MetricPoint(
+                observed_at="2026-08-22T12:05:00+08:00", observed_epoch=200,
+                metric="ai.tokens.total", instrument="counter", value=9, unit="tokens",
+                source_id="codex", resource_id="ai_usage",
+            )
+            store.write((old_point,))
+            store.replace_source_history_once("codex", migration_key=old_migration, points=(later_point,))
+            store.write((old_point,))
+            report = store.replace_source_history_once(
+                "codex", migration_key=CODEX_JSONL_HISTORY_MIGRATION,
+            )
+            self.assertEqual(report["status"], "replaced")
+            self.assertEqual(report["deleted"], 2)
+            self.assertEqual(store.metadata(old_migration)["inserted"], 1)
+            self.assertEqual(store.metadata(CODEX_JSONL_HISTORY_MIGRATION)["inserted"], 0)
+
     def test_source_history_replacement_is_scoped_atomic_and_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             store = MetricStore(Path(temporary))

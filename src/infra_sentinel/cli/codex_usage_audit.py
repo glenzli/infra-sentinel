@@ -75,7 +75,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  models: {models or 'none'}")
         print(
             f"  records: {usage.token_records:,}; counted: {usage.composition.events:,}; "
-            f"duplicates: {usage.duplicate_snapshots:,}; resets: {usage.counter_resets:,}; "
+            f"duplicates: {usage.duplicate_snapshots:,}; inherited: {usage.inherited_snapshots:,}; "
+            f"resets: {usage.counter_resets:,}; "
             f"delta/last mismatches: {usage.delta_last_mismatches:,}"
         )
     print("Scope: this machine's still-visible live and archived rollout metadata; not account billing.")
