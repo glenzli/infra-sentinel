@@ -22,7 +22,7 @@ Infra Sentinel 是一个本地优先的个人 AI 基础设施观测工具，用�
 - **上游状态**：OpenAI、Claude、DeepSeek、Kimi / Moonshot 与 Cursor 的公开官方状态页。
 - **本地设施**：通过 [Infra Protocol](https://github.com/glenzli/infra-protocol) 自动发现并显示 PCP、Infer Runtime、Dev Mesh Observer 等兼容服务。详细诊断仍在各自 Console 中完成。
 
-采集仅处理可核对的本地聚合数据与公开状态信息，且始终为只读操作：不会抓包，不会读取提示词、响应、项目文件或凭据，也不会修改代理、服务器或本机系统状态。对于短连接、来源离线或统计窗口不一致等无法可靠归因的情况，界面将明确标记为未知、未归因或等待采样；本地统计不作为供应商账单使用。
+采集仅处理可核对的本地聚合数据与公开状态信息，且始终为只读操作：不会抓包，不会读取提示词、响应、项目文件或凭据，也不会修改代理、服务器或本机系统状态。Codex 用量以本机 rollout JSONL 的累计计数差分为唯一事实源，捕获后保存不含任务内容的聚合账本；不再使用 `threads.tokens_used` 推算用量。主图显示原始 Token，标准 API 参考值按模型分别代入输入、缓存输入、缓存写入和输出价格；详情中的 30% 缓存折算量仅用于兼容对照，是本机数据反推而非 OpenAI 公布的额度公式。对于短连接、来源离线或统计窗口不一致等无法可靠归因的情况，界面将明确标记为未知、未归因或等待采样；本地统计不作为供应商账单使用。
 
 ## 使用方式
 
@@ -42,6 +42,18 @@ Host edge-a
 ```
 
 Xray 用户统计是可选项：每个客户端需要独立 `email` 标签，StatsService 应只监听远端回环地址。
+
+首次运行新版 Agent 时，会先重建仍可见的 Codex 历史，备份旧 SQLite 与旧 Codex
+检查点，然后只移除 SQLite 中旧的 Codex 指标投影。此后 JSONL 聚合账本按新增记录
+递增，已捕获历史不受后来删除任务影响；其他机器和重建前已经删除的任务仍然缺失。
+
+如需单独核对某台机器仍可见的 Codex 本地 JSONL 用量，可从源码运行只读审计。它按
+`total_token_usage` 累计差分去重，并处理计数器重置；结果同样不是账户账单：
+
+```sh
+PYTHONPATH=src python3 -m infra_sentinel.cli.codex_usage_audit \
+  --from 2026-08-22 --to 2026-08-23 --timezone Asia/Shanghai
+```
 
 ## 安装与构建
 
@@ -93,7 +105,7 @@ Infra Sentinel is a local-first desktop dashboard for personal AI infrastructure
 - **Remote**: Linux VPS interface counters through an existing SSH Host alias, optional Xray user counters, and public status feeds for OpenAI, Claude, DeepSeek, Kimi / Moonshot, and Cursor.
 - **Facilities**: compatible local services discovered through [Infra Protocol](https://github.com/glenzli/infra-protocol), including PCP, Infer Runtime, and Dev Mesh Observer.
 
-The dashboard brings together measurements that can be checked locally while keeping their sources visible. Collection stays read-only: it does not capture packets, inspect prompts or responses, touch project files or credentials, or alter proxy/server configuration. When a measurement cannot be explained reliably, it stays unknown or unattributed rather than becoming a made-up invoice number.
+The dashboard brings together measurements that can be checked locally while keeping their sources visible. Collection stays read-only: it does not capture packets, inspect prompts or responses, touch project files or credentials, or alter proxy/server configuration. Codex usage has one fact source: cumulative-counter deltas from local rollout JSONL, retained after capture in an aggregate-only ledger; `threads.tokens_used` is not an accounting input. Charts show raw Tokens, while the standard API reference prices input, cached input, cache writes, and output separately by model. The 30%-cached compatibility indicator in details is inferred from local data, not a published OpenAI allowance formula. When a measurement cannot be explained reliably, it stays unknown or unattributed rather than becoming a made-up invoice number.
 
 The packaged desktop app currently targets macOS 13+. Build from source with:
 
@@ -104,3 +116,20 @@ open "ui/src-tauri/target/release/bundle/macos/Infra Sentinel.app"
 ```
 
 On first launch, the app creates `~/Library/Application Support/Infra Sentinel/config.toml`. Mihomo is discovered automatically; remote hosts are referenced only by an existing `~/.ssh/config` Host alias.
+
+On the first upgraded Agent run, Infra Sentinel rebuilds still-visible Codex
+history, backs up the prior SQLite store and legacy Codex checkpoints, then
+removes only the old Codex metric projection. Later JSONL events extend the
+aggregate ledger, so deleting a rollout after capture does not erase history.
+Other machines and rollouts deleted before the rebuild remain absent.
+
+For a separate read-only reconstruction of this machine's still-visible Codex
+JSONL usage, run:
+
+```sh
+PYTHONPATH=src python3 -m infra_sentinel.cli.codex_usage_audit \
+  --from 2026-08-22 --to 2026-08-23 --timezone Asia/Shanghai
+```
+
+The audit deduplicates cumulative snapshots and handles counter resets. It is
+not account billing.

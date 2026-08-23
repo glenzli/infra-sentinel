@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from typing import Mapping
 
 
-OPENAI_STANDARD_TEXT_PRICES_EFFECTIVE_DATE = "2026-08-21"
-OPENAI_STANDARD_TEXT_PRICES_URL = "https://platform.openai.com/pricing"
+OPENAI_STANDARD_TEXT_PRICES_EFFECTIVE_DATE = "2026-08-24"
+OPENAI_STANDARD_TEXT_PRICES_URL = "https://developers.openai.com/api/docs/models"
 
 
 @dataclass(frozen=True)
@@ -34,7 +34,7 @@ class StandardTextPrice:
 # effective date above.  This is not a subscription, Codex plan, Batch,
 # Priority, regional-processing, long-context, tool, or multimodal price.
 STANDARD_TEXT_PRICES: Mapping[str, StandardTextPrice] = {
-    "gpt-5.6-sol": StandardTextPrice(5.00, 0.50, 6.25, 30.00),
+    "gpt-5.6-sol": StandardTextPrice(4.00, 0.40, 5.00, 20.00),
     "gpt-5.6-terra": StandardTextPrice(2.00, 0.20, 2.50, 12.00),
     "gpt-5.6-luna": StandardTextPrice(0.20, 0.02, 0.25, 1.20),
     # GPT-5.5 has no separately published cache-write tier.

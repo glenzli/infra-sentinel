@@ -32,6 +32,7 @@ from infra_sentinel.app.projection_publisher import (
     PROJECTION_STREAM_STDIO,
     ProjectionPublisher,
 )
+from infra_sentinel.app.codex_migration import prepare_codex_jsonl_migration
 from infra_sentinel.app.configuration import (
     Config,
     StateConfig,
@@ -67,7 +68,7 @@ from infra_sentinel.resources.network.mihomo import (
     save_tracker,
 )
 from infra_sentinel.resources.network.metrics import network_collector_registry
-from infra_sentinel.resources.ai.codex import CodexUsageCollector, discover_codex_state_database
+from infra_sentinel.resources.ai.codex import CodexUsageCollector
 from infra_sentinel.resources.ai.antigravity import AntigravityUsageCollector
 from infra_sentinel.resources.ai.infer_runtime import InferRuntimeUsageCollector
 from infra_sentinel.resources.ai.opencode import OpenCodeUsageCollector, discover_opencode, discover_opencode_desktop_database
@@ -892,6 +893,15 @@ def main() -> int:
         if lock is None:
             raise RuntimeError("另一个监控实例已经在运行")
         metric_store = MetricStore(config.state_dir)
+        codex_migration = prepare_codex_jsonl_migration(
+            config.state_dir,
+            metric_store,
+            now=datetime.now().astimezone(),
+        )
+        if codex_migration.get("status") == "blocked":
+            logger.warning("Codex JSONL history migration=%s", codex_migration)
+        elif codex_migration.get("status") != "current":
+            logger.info("Codex JSONL history migration=%s", codex_migration)
         collector_registry = network_collector_registry(
             (server.id, server.estimation.billing_mode) for server in config.remote_servers
         )
@@ -901,9 +911,7 @@ def main() -> int:
             desktop_database_finder=lambda: discover_opencode_desktop_database(config.integrations.opencode_database),
         ))
         collector_registry.register(CodexUsageCollector(
-            checkpoint_path=config.state_dir / "codex-usage-day.json",
-            session_checkpoint_path=config.state_dir / "codex-session-events.json",
-            database_finder=lambda: discover_codex_state_database(config.integrations.codex_database),
+            ledger_path=config.state_dir / "codex-rollout-ledger.json",
         ))
         collector_registry.register(AntigravityUsageCollector())
         collector_registry.register(InferRuntimeUsageCollector(

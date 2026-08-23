@@ -23,6 +23,7 @@ STORE_FILENAME = "infra.sqlite3"
 LEGACY_NETWORK_IMPORT = "legacy-network-jsonl-20260808.2"
 TIERED_METRIC_MIGRATION = "20260812.1"
 REMOTE_HISTORY_REBUILD = "remote-network-history-rebuild-20260812.3"
+CODEX_JSONL_HISTORY_MIGRATION = "codex-jsonl-history-20260824.1"
 MAINTENANCE_EPOCH = "metric-maintenance-20260812.1"
 HOT_RESOLUTION_SECONDS = 15 * 60
 HOURLY_RESOLUTION_SECONDS = 60 * 60
@@ -406,6 +407,70 @@ class MetricStore:
             self._point_count = int(connection.execute("SELECT COUNT(*) FROM metric_points").fetchone()[0])
         self._remote_history_rebuilt = True
         return report
+
+    def metadata(self, key: str) -> dict[str, Any] | None:
+        """Read one store-owned migration report without exposing SQL."""
+        self.initialize()
+        with self._lock, self._transaction() as connection:
+            row = connection.execute("SELECT value FROM store_metadata WHERE key = ?", (key,)).fetchone()
+        if row is None:
+            return None
+        try:
+            value = json.loads(str(row[0]))
+        except json.JSONDecodeError:
+            return None
+        return value if isinstance(value, dict) else None
+
+    def replace_source_history_once(
+        self,
+        source_id: str,
+        *,
+        migration_key: str,
+        points: Iterable[MetricPoint] = (),
+    ) -> dict[str, Any]:
+        """Atomically replace one source's metric projection once.
+
+        Source facts are already backed up by the migration orchestrator. This
+        store boundary only owns the scoped delete, optional replacement rows,
+        and idempotent marker transaction.
+        """
+        if not source_id or not migration_key:
+            raise ValueError("source_id and migration_key are required")
+        materialized = tuple(points)
+        if any(point.source_id != source_id for point in materialized):
+            raise ValueError("replacement point source does not match")
+        self.initialize()
+        with self._lock, self._transaction(write=True) as connection:
+            marker = connection.execute(
+                "SELECT value FROM store_metadata WHERE key = ?", (migration_key,),
+            ).fetchone()
+            if marker is not None:
+                try:
+                    current = json.loads(str(marker[0]))
+                except json.JSONDecodeError:
+                    current = {}
+                return {"status": "current", **(current if isinstance(current, dict) else {})}
+            deleted = max(0, int(connection.execute(
+                "DELETE FROM metric_points WHERE source_id = ?", (source_id,),
+            ).rowcount))
+            before_insert = connection.total_changes
+            connection.executemany(f"""
+                INSERT OR IGNORE INTO metric_points({self._insert_columns()})
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, [self._row(point) for point in materialized])
+            inserted = connection.total_changes - before_insert
+            report = {
+                "source_id": source_id,
+                "deleted": deleted,
+                "inserted": inserted,
+                "schema": STORE_SCHEMA,
+            }
+            connection.execute(
+                "INSERT INTO store_metadata(key, value) VALUES (?, ?)",
+                (migration_key, json.dumps(report, separators=(",", ":"))),
+            )
+            self._point_count = int(connection.execute("SELECT COUNT(*) FROM metric_points").fetchone()[0])
+        return {"status": "replaced", **report}
 
     def summary(self) -> dict[str, Any]:
         self.initialize()

@@ -13,6 +13,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from infra_sentinel.core.model import MetricPoint  # noqa: E402
 from infra_sentinel.metrics.aggregation import MetricAccumulator  # noqa: E402
 from infra_sentinel.metrics.store import (  # noqa: E402
+    CODEX_JSONL_HISTORY_MIGRATION,
     DAILY_RESOLUTION_SECONDS,
     HOURLY_RESOLUTION_SECONDS,
     HOT_RESOLUTION_SECONDS,
@@ -28,6 +29,54 @@ from infra_sentinel.resources.network.metrics import (  # noqa: E402
 
 
 class MetricStoreTests(unittest.TestCase):
+    def test_source_history_replacement_is_scoped_atomic_and_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            store = MetricStore(Path(temporary))
+            codex = MetricPoint(
+                observed_at="2026-08-22T12:00:00+08:00", observed_epoch=100,
+                metric="ai.tokens.total", instrument="counter", value=42, unit="tokens",
+                source_id="codex", resource_id="ai_usage",
+            )
+            other = MetricPoint(
+                observed_at="2026-08-22T12:00:00+08:00", observed_epoch=100,
+                metric="ai.tokens.total", instrument="counter", value=7, unit="tokens",
+                source_id="opencode", resource_id="ai_usage",
+            )
+            replacement = MetricPoint(
+                observed_at="2026-08-22T12:05:00+08:00", observed_epoch=200,
+                metric="ai.tokens.total", instrument="counter", value=9, unit="tokens",
+                source_id="codex", resource_id="ai_usage",
+            )
+            store.write((codex, other))
+            report = store.replace_source_history_once(
+                "codex", migration_key=CODEX_JSONL_HISTORY_MIGRATION, points=(replacement,),
+            )
+            repeated = store.replace_source_history_once(
+                "codex", migration_key=CODEX_JSONL_HISTORY_MIGRATION,
+            )
+            self.assertEqual(report["status"], "replaced")
+            self.assertEqual(report["deleted"], 1)
+            self.assertEqual(report["inserted"], 1)
+            self.assertEqual(repeated["status"], "current")
+            self.assertEqual(store.metadata(CODEX_JSONL_HISTORY_MIGRATION)["inserted"], 1)
+            codex_rows = store.query_points(since_epoch=0, until_epoch=1_000, source_id="codex")
+            other_rows = store.query_points(since_epoch=0, until_epoch=1_000, source_id="opencode")
+            self.assertEqual([row["value"] for row in codex_rows], [9])
+            self.assertEqual([row["value"] for row in other_rows], [7])
+
+    def test_source_history_replacement_rejects_cross_source_points(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            store = MetricStore(Path(temporary))
+            point = MetricPoint(
+                observed_at="2026-08-22T12:00:00+08:00", observed_epoch=100,
+                metric="ai.tokens.total", instrument="counter", value=7, unit="tokens",
+                source_id="opencode", resource_id="ai_usage",
+            )
+            with self.assertRaisesRegex(ValueError, "source"):
+                store.replace_source_history_once(
+                    "codex", migration_key=CODEX_JSONL_HISTORY_MIGRATION, points=(point,),
+                )
+
     def test_idempotent_metric_writes_keep_one_fact_per_source_interval(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             store = MetricStore(Path(temporary))

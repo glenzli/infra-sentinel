@@ -1,449 +1,326 @@
-"""Privacy-minimal Codex local workload collector.
+"""Privacy-minimal Codex local rollout usage collector.
 
-Codex currently persists a per-thread ``tokens_used`` counter in its local
-state database.  Child-agent rollouts retain their own cumulative context, so
-they must not be added to the user-facing token counter.  This collector uses
-only ``thread_source = 'user'`` for user token and model totals, while keeping
-all-thread topology as a separate workload signal.  It never selects titles,
-prompts, previews, working directories, Git metadata, agent names, or agent
-paths.  Its daily window starts from a Sentinel baseline on the local calendar
-day, which may not share the reporting boundary used by Codex's own panel.
+Codex usage is reconstructed from local rollout ``total_token_usage`` deltas
+and retained in Sentinel's aggregate-only ledger. SQLite thread counters are
+not an accounting input. Prompts, responses, project paths, task identifiers,
+and raw rollout records never enter the checkpoint or Projection.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from contextlib import closing
-from dataclasses import dataclass
 from datetime import datetime
 import json
 from pathlib import Path
-import sqlite3
 import time
 from typing import Any
 
-from infra_sentinel.resources.ai.contract import ai_usage_snapshot, detail_group, localized, model_usage, pricing_day, token_metric, usage_window
-from infra_sentinel.resources.ai.codex_sampling import (
-    JsonlSampleState,
-    composition_note,
-    current_day_sample,
-    discover_codex_session_root,
-    load_jsonl_sample_state,
-    sample_visible_rollouts,
-    save_jsonl_sample_state,
-)
+from infra_sentinel.core.collectors import Collection, CollectorCapability, CollectorContext
+from infra_sentinel.core.model import MetricPoint
 from infra_sentinel.resources.ai.codex_pricing import (
     OPENAI_STANDARD_TEXT_PRICES_EFFECTIVE_DATE,
     estimate_standard_api_cost,
 )
-from infra_sentinel.core.collectors import Collection, CollectorCapability, CollectorContext
-from infra_sentinel.core.model import MetricPoint
+from infra_sentinel.resources.ai.codex_sampling import (
+    CodexRolloutLedger,
+    LedgerIncrement,
+    RolloutAuditDay,
+    TokenComposition,
+    discover_codex_rollout_roots,
+    load_codex_rollout_ledger,
+    rebuild_codex_rollout_ledger,
+    save_codex_rollout_ledger,
+    update_codex_rollout_ledger,
+)
+from infra_sentinel.resources.ai.contract import (
+    ai_usage_snapshot,
+    daily_usage,
+    detail_group,
+    localized,
+    model_usage,
+    pricing_day,
+    token_metric,
+    usage_window,
+)
 
 
 CODEX_POLL_SECONDS = 20
-CODEX_JSONL_SAMPLE_SECONDS = 5 * 60
-ACTIVE_WINDOW_SECONDS = 10 * 60
-DAILY_BASELINE_SCHEMA = "20260809.4"
-
-
-@dataclass(frozen=True)
-class CodexThreadCounter:
-    identifier: str
-    model: str
-    tokens: int
-
-
-@dataclass(frozen=True)
-class CodexStats:
-    total_tokens: int
-    models: tuple[dict[str, Any], ...]
-    user_counters: tuple[CodexThreadCounter, ...]
-    threads: int
-    user_threads: int
-    subagents: int
-    subagent_tokens: int
-    recent_threads: int
-    recent_subagents: int
-    maximum_depth: int
-
-
-def discover_codex_state_database(preferred: Path | None = None) -> Path | None:
-    """Find one active Codex App/CLI store without combining migrations.
-
-    Codex App and ``codex`` CLI currently share a state schema, while older
-    releases may leave a migrated store behind. Combining two stores would
-    double-count copied threads, so an explicit configured path always wins;
-    otherwise use the most recently modified readable store.
-    """
-    if preferred is not None:
-        return preferred if preferred.is_file() else None
-    candidates = [
-        candidate for candidate in (
-            Path.home() / ".codex" / "state_5.sqlite",
-            Path.home() / ".codex" / "sqlite" / "state_5.sqlite",
-        ) if candidate.is_file()
-    ]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda candidate: candidate.stat().st_mtime_ns)
-
-
-def _integer(value: Any) -> int:
-    try:
-        return max(0, int(value or 0))
-    except (TypeError, ValueError):
-        return 0
+CODEX_EMPIRICAL_CACHE_WEIGHT = 0.3
+_COMPONENT_METRICS = {
+    "ai.tokens.total": "total_tokens",
+    "ai.tokens.input": "input_tokens",
+    "ai.tokens.output": "output_tokens",
+    "ai.tokens.reasoning": "reasoning_output_tokens",
+    "ai.tokens.cache_read": "cached_input_tokens",
+    "ai.tokens.cache_write": "cache_write_input_tokens",
+}
 
 
 def _iso_now(epoch: float) -> str:
     return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
 
 
-def read_codex_state_stats(path: Path, epoch: float) -> CodexStats:
-    """Read only aggregate counters and topology facts from Codex state.
+def _composition_models(composition: TokenComposition) -> dict[str, dict[str, int]]:
+    return {
+        identifier: values.as_model_payload()
+        for identifier, values in composition.model_compositions.items()
+    }
 
-    The SQL expressions classify a source inside SQLite and return only
-    counts.  The JSON source payload itself, which can contain task-specific
-    metadata, is never selected or returned.
-    """
-    if not path.is_file():
-        raise OSError("CodexStateDatabaseMissing")
-    cutoff = int((epoch - ACTIVE_WINDOW_SECONDS) * 1000)
-    uri = f"{path.resolve().as_uri()}?mode=ro"
-    with closing(sqlite3.connect(uri, uri=True)) as connection:
-        connection.execute("PRAGMA query_only = ON")
-        counter_rows = connection.execute("""
-            SELECT id, COALESCE(NULLIF(model, ''), 'unknown'), tokens_used
-            FROM threads
-            WHERE thread_source = 'user'
-            ORDER BY id
-        """).fetchall()
-        totals = connection.execute("""
-            SELECT
-                COUNT(*) AS threads,
-                COALESCE(SUM(CASE WHEN thread_source = 'user' THEN tokens_used ELSE 0 END), 0) AS total_tokens,
-                COALESCE(SUM(CASE WHEN thread_source = 'user' THEN 1 ELSE 0 END), 0) AS user_threads,
-                COALESCE(SUM(CASE
-                    WHEN thread_source = 'subagent'
-                      OR (json_valid(source) AND json_type(source, '$.subagent') IS NOT NULL)
-                    THEN 1 ELSE 0 END), 0) AS subagents,
-                COALESCE(SUM(CASE
-                    WHEN thread_source = 'subagent'
-                      OR (json_valid(source) AND json_type(source, '$.subagent') IS NOT NULL)
-                    THEN tokens_used ELSE 0 END), 0) AS subagent_tokens,
-                COALESCE(SUM(CASE WHEN updated_at_ms >= ? THEN 1 ELSE 0 END), 0) AS recent_threads,
-                COALESCE(SUM(CASE WHEN updated_at_ms >= ? AND (
-                    thread_source = 'subagent'
-                    OR (json_valid(source) AND json_type(source, '$.subagent') IS NOT NULL)
-                ) THEN 1 ELSE 0 END), 0) AS recent_subagents,
-                COALESCE(MAX(CASE WHEN json_valid(source)
-                    THEN CAST(json_extract(source, '$.subagent.thread_spawn.depth') AS INTEGER)
-                    ELSE 0 END), 0) AS maximum_depth
-            FROM threads
-        """, (cutoff, cutoff)).fetchone()
-    counters = tuple(CodexThreadCounter(str(row[0]), str(row[1]), _integer(row[2])) for row in counter_rows)
-    model_totals: dict[str, dict[str, int]] = {}
-    for counter in counters:
-        model = model_totals.setdefault(counter.model, {"threads": 0, "total_tokens": 0})
-        model["threads"] += 1
-        model["total_tokens"] += counter.tokens
-    models = tuple({"id": model, **values} for model, values in sorted(
-        model_totals.items(), key=lambda item: (-item[1]["total_tokens"], item[0])
-    ))
-    return CodexStats(
-        total_tokens=_integer(totals[1]),
-        models=models,
-        user_counters=counters,
-        threads=_integer(totals[0]),
-        user_threads=_integer(totals[2]),
-        subagents=_integer(totals[3]),
-        subagent_tokens=_integer(totals[4]),
-        recent_threads=_integer(totals[5]),
-        recent_subagents=_integer(totals[6]),
-        maximum_depth=_integer(totals[7]),
+
+def _empty_day() -> RolloutAuditDay:
+    return RolloutAuditDay()
+
+
+def _empirical_weighted_tokens(composition: TokenComposition) -> int:
+    """Return a local compatibility indicator, not an official Codex rule."""
+    uncached_input = max(0, composition.input_tokens - composition.cached_input_tokens)
+    return round(
+        uncached_input
+        + composition.output_tokens
+        + CODEX_EMPIRICAL_CACHE_WEIGHT * composition.cached_input_tokens
     )
 
 
 class CodexUsageCollector:
-    """Own Codex local-state discovery, aggregate reads, and delta emission."""
+    """Own Codex rollout discovery, durable aggregate ledger, and metric deltas."""
 
     capability = CollectorCapability(
         id="ai.codex.local-workload",
         source_id="codex",
         source_kind="ai.codex",
         resource_id="ai_usage",
-        metrics=("ai.tokens.total", "ai.threads", "ai.subagents"),
+        metrics=tuple(_COMPONENT_METRICS),
     )
 
     def __init__(
         self,
         *,
-        database_finder: Callable[[], Path | None] = discover_codex_state_database,
+        rollout_roots_finder: Callable[[], tuple[Path, ...]] = discover_codex_rollout_roots,
+        ledger_path: Path | None = None,
         clock: Callable[[], float] = time.time,
         poll_seconds: int = CODEX_POLL_SECONDS,
-        checkpoint_path: Path | None = None,
-        session_checkpoint_path: Path | None = None,
-        session_root_finder: Callable[[], Path | None] = discover_codex_session_root,
-        session_sample_seconds: int = CODEX_JSONL_SAMPLE_SECONDS,
     ) -> None:
-        self._database_finder = database_finder
+        self._rollout_roots_finder = rollout_roots_finder
+        self._ledger_path = ledger_path
+        self._ledger = load_codex_rollout_ledger(ledger_path)
         self._clock = clock
-        self._poll_seconds = poll_seconds
+        self._poll_seconds = max(1, int(poll_seconds))
         self._next_poll_epoch = 0.0
         self._snapshot: dict[str, Any] = {"available": False, "status": "unavailable"}
-        self._previous_thread_tokens: dict[str, int] = {}
-        self._checkpoint_path = checkpoint_path
-        self._daily_baseline: int | None = None
-        self._daily_thread_baselines: dict[str, int] = {}
-        self._daily_key: str | None = None
-        self._daily_started_at: str | None = None
-        self._session_checkpoint_path = session_checkpoint_path
-        self._session_root_finder = session_root_finder
-        self._session_sample_seconds = max(1, session_sample_seconds)
-        self._next_session_sample_epoch = 0.0
-        self._session_sample_state: JsonlSampleState = load_jsonl_sample_state(session_checkpoint_path)
 
-    def _write_daily_checkpoint(self) -> None:
-        if self._checkpoint_path is None or self._daily_key is None or self._daily_baseline is None:
-            return
-        self._checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self._checkpoint_path.with_suffix(".tmp")
-        temporary.write_text(json.dumps({
-            "schema": DAILY_BASELINE_SCHEMA, "day": self._daily_key,
-            "baseline_tokens": self._daily_baseline,
-            "baseline_threads": self._daily_thread_baselines,
-            "last_threads": self._previous_thread_tokens,
-            "started_at": self._daily_started_at,
-        }, separators=(",", ":")), encoding="utf-8")
-        temporary.replace(self._checkpoint_path)
-
-    def _daily_window(self, stats: CodexStats, epoch: float, timestamp: str) -> tuple[int, str, dict[str, int]]:
-        day = datetime.fromtimestamp(epoch).astimezone().date().isoformat()
-        if self._daily_key != day:
-            checkpoint: dict[str, Any] = {}
-            if self._checkpoint_path is not None:
-                try:
-                    checkpoint = json.loads(self._checkpoint_path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    checkpoint = {}
-            stored_baseline = _integer(checkpoint.get("baseline_tokens"))
-            checkpoint_is_current = (
-                checkpoint.get("schema") == DAILY_BASELINE_SCHEMA
-                and checkpoint.get("day") == day
-                # A counter cannot legitimately be below a daily baseline.
-                # Treat it as a changed accounting scope and re-baseline rather
-                # than indefinitely displaying a protected zero.
-                and stored_baseline <= stats.total_tokens
-            )
-            if checkpoint_is_current:
-                self._daily_baseline = stored_baseline
-                stored_threads = checkpoint.get("baseline_threads")
-                self._daily_thread_baselines = {
-                    str(identifier): _integer(tokens)
-                    for identifier, tokens in stored_threads.items()
-                } if isinstance(stored_threads, dict) else {}
-                last_threads = checkpoint.get("last_threads")
-                self._previous_thread_tokens = {
-                    str(identifier): _integer(tokens)
-                    for identifier, tokens in last_threads.items()
-                } if isinstance(last_threads, dict) else {
-                    counter.identifier: counter.tokens for counter in stats.user_counters
-                }
-                self._daily_started_at = str(checkpoint.get("started_at") or timestamp)
-            else:
-                self._daily_baseline = stats.total_tokens
-                self._daily_thread_baselines = {counter.identifier: counter.tokens for counter in stats.user_counters}
-                self._previous_thread_tokens = dict(self._daily_thread_baselines)
-                self._daily_started_at = timestamp
-            self._daily_key = day
-            self._write_daily_checkpoint()
-        model_today: dict[str, int] = {}
-        for counter in stats.user_counters:
-            baseline = self._daily_thread_baselines.get(counter.identifier, 0)
-            delta = max(0, counter.tokens - baseline)
-            model_today[counter.model] = model_today.get(counter.model, 0) + delta
-        return sum(model_today.values()), self._daily_started_at or timestamp, model_today
-
-    def _sample_details(self, epoch: float) -> list[dict[str, Any]]:
-        sample = current_day_sample(self._session_sample_state, epoch)
-        if sample is None:
-            return []
-        sample_group = detail_group("visible-rollout-sample", localized("Visible rollout sample", "可见 rollout 抽样"), [
-            token_metric("sample-events", localized("Completed usage events", "完成用量事件"), sample.events, localized("validated token_count records", "已校验的 token_count 记录"), unit="count"),
-            token_metric("sample-total", localized("Sampled Token total", "抽样 Token 总量"), sample.total_tokens, localized("visible session metadata only", "仅当前可见会话元数据")),
-            token_metric("sample-models", localized("Sampled models", "抽样模型数"), len(sample.models), localized("from turn_context only", "仅来自 turn_context"), unit="count"),
-        ], note=composition_note(sample, partial=self._session_sample_state.partial), badge=localized("experimental sample", "实验性抽样"))
-        estimate = estimate_standard_api_cost({
-            identifier: composition.as_model_payload()
-            for identifier, composition in sample.model_compositions.items()
-        })
-        if not estimate.models:
-            return [sample_group]
-        price_detail = localized(
-            f"OpenAI standard API text price snapshot · {OPENAI_STANDARD_TEXT_PRICES_EFFECTIVE_DATE}",
-            f"OpenAI 标准 API 文本价格快照 · {OPENAI_STANDARD_TEXT_PRICES_EFFECTIVE_DATE}",
-        )
-        model_metrics = [
-            token_metric(
-                f"standard-api:{item.model}", localized(item.model, item.model), item.cost_usd,
-                localized(
-                    f"{item.tokens:,} sampled Tokens · standard API text reference",
-                    f"{item.tokens:,} 抽样 Token · 标准 API 文本参考",
-                ), unit="usd",
-            )
-            for item in estimate.models
-        ]
-        if estimate.unpriced_tokens:
-            model_metrics.append(token_metric(
-                "unpriced-sampled-tokens", localized("Unpriced sampled Tokens", "未计价抽样 Token"), estimate.unpriced_tokens,
-                localized("no exact official model-price match", "没有精确匹配的官方模型价格"),
-            ))
-        estimate_group = detail_group("standard-api-estimate", localized("Standard API sampling reference", "标准 API 抽样参考"), [
-            token_metric("standard-api-total", localized("Sample reference value", "样本参考价"), estimate.total_cost_usd, price_detail, unit="usd"),
-            token_metric("standard-api-priced-sample-tokens", localized("Price-matched sample Tokens", "可计价抽样 Token"), estimate.priced_tokens, localized("models with an exact official standard-price match", "有精确官方标准价匹配的模型")),
-            *model_metrics,
-        ], note=localized(
-            "Visible JSONL sample only. Applies current standard text-token prices to observed input, cached input, cache writes, and output. Excludes unmatched models, long-context uplift, tools, multimodal, priority, regional processing, and subscription terms. Not a bill or amount owed.",
-            "仅针对可见 JSONL 抽样，将观察到的输入、缓存输入、缓存写入和输出代入当前标准文本 Token 价格。未匹配模型、长上下文加价、工具、多模态、优先级、区域处理与订阅条款均不计入；不是账单或应付金额。",
-        ), badge=localized("estimate · not billing", "估算 · 非账单"))
-        return [sample_group, estimate_group]
-
-    def _refresh_session_sample(self, epoch: float) -> None:
-        if epoch < self._next_session_sample_epoch:
-            return
-        self._next_session_sample_epoch = epoch + self._session_sample_seconds
-        now = datetime.fromtimestamp(epoch).astimezone()
-        try:
-            state = sample_visible_rollouts(self._session_root_finder(), self._session_sample_state, now=now)
-            self._session_sample_state = state
-            if state.updated_at:
-                save_jsonl_sample_state(self._session_checkpoint_path, state)
-        except (OSError, ValueError, json.JSONDecodeError):
-            # This is an optional, unstable local implementation detail.  A
-            # sampling failure never changes the primary SQLite accounting.
-            self._session_sample_state = JsonlSampleState()
-
-    def _sample_pricing_history(self) -> list[dict[str, Any]]:
-        """Project only bounded JSONL samples beside durable SQLite token totals."""
-        pricing: list[dict[str, Any]] = []
-        for day, sample in sorted(self._session_sample_state.days.items()):
-            if sample.events <= 0:
-                continue
-            estimate = estimate_standard_api_cost({
-                identifier: composition.as_model_payload()
-                for identifier, composition in sample.model_compositions.items()
-            })
-            pricing.append(pricing_day(
+    @staticmethod
+    def _daily_history(ledger: CodexRolloutLedger) -> list[dict[str, Any]]:
+        return [
+            daily_usage(
                 day,
-                kind="sampled-standard-api-projection",
+                usage.composition.total_tokens,
+                [
+                    {"id": identifier, "tokens": tokens}
+                    for identifier, tokens in sorted(usage.composition.models.items())
+                ],
+            )
+            for day, usage in sorted(ledger.days.items())
+            if usage.composition.total_tokens > 0
+        ]
+
+    @staticmethod
+    def _pricing_history(ledger: CodexRolloutLedger) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for day, usage in sorted(ledger.days.items()):
+            if usage.composition.total_tokens <= 0:
+                continue
+            estimate = estimate_standard_api_cost(_composition_models(usage.composition))
+            rows.append(pricing_day(
+                day,
+                kind="local-rollout-standard-api-projection",
                 cost_usd=estimate.total_cost_usd,
                 priced_tokens=estimate.priced_tokens,
                 unpriced_tokens=estimate.unpriced_tokens,
-                models=[{"id": item.model, "cost_usd": item.cost_usd, "priced_tokens": item.tokens}
-                        for item in estimate.models],
+                models=[
+                    {"id": item.model, "cost_usd": item.cost_usd, "priced_tokens": item.tokens}
+                    for item in estimate.models
+                ],
             ))
-        return pricing
+        return rows
 
-    def _snapshot_for(self, stats: CodexStats, timestamp: str, epoch: float) -> dict[str, Any]:
-        today_tokens, started_at, model_today = self._daily_window(stats, epoch, timestamp)
-        today_detail = localized(
-            "local calendar-day baseline; may differ from the Codex Usage panel reporting day",
-            "本机自然日基线；可能与 Codex 用量面板的统计日界线不同",
-        )
+    @staticmethod
+    def _details(ledger: CodexRolloutLedger, today: RolloutAuditDay, cumulative: TokenComposition) -> list[dict[str, Any]]:
+        root_files = sum(1 for entry in ledger.files.values() if entry.get("source") == "user")
+        subagent_files = sum(1 for entry in ledger.files.values() if entry.get("source") == "subagent")
+        duplicate_snapshots = sum(day.duplicate_snapshots for day in ledger.days.values())
+        counter_resets = sum(day.counter_resets for day in ledger.days.values())
+        today_estimate = estimate_standard_api_cost(_composition_models(today.composition))
+        cumulative_estimate = estimate_standard_api_cost(_composition_models(cumulative))
+        price_metrics = [
+            token_metric(
+                "standard-api-today", localized("Today reference value", "今日参考价"),
+                today_estimate.total_cost_usd,
+                localized("current standard text-token reference", "当前标准文本 Token 参考价"), unit="usd",
+            ),
+            token_metric(
+                "standard-api-cumulative", localized("Local-history reference value", "本机历史参考价"),
+                cumulative_estimate.total_cost_usd,
+                localized("all captured local rollout metadata", "全部已捕获本机 rollout 元数据"), unit="usd",
+            ),
+            token_metric(
+                "standard-api-priced-tokens", localized("Price-matched local Tokens", "可计价本机 Token"),
+                cumulative_estimate.priced_tokens,
+                localized("models with an exact standard-price match", "有精确标准价格匹配的模型"),
+            ),
+        ]
+        if cumulative_estimate.unpriced_tokens:
+            price_metrics.append(token_metric(
+                "standard-api-unpriced-tokens", localized("Unpriced local Tokens", "未计价本机 Token"),
+                cumulative_estimate.unpriced_tokens,
+                localized("no exact official model-price match", "没有精确官方模型价格匹配"),
+            ))
+        return [
+            detail_group("token-breakdown", localized("Token breakdown", "Token 分类明细"), [
+                token_metric("raw-total", localized("Raw total", "原始总量"), today.composition.total_tokens, localized("today · input plus output", "今日 · 输入加输出")),
+                token_metric("input", localized("Input", "输入"), today.composition.input_tokens, localized("today", "今日")),
+                token_metric("cache-read", localized("Cache read", "缓存读取"), today.composition.cached_input_tokens, localized("subset of input", "输入的一部分")),
+                token_metric("cache-write", localized("Cache write", "缓存写入"), today.composition.cache_write_input_tokens, localized("today", "今日")),
+                token_metric("output", localized("Output", "输出"), today.composition.output_tokens, localized("today", "今日")),
+                token_metric("reasoning", localized("Reasoning", "推理"), today.composition.reasoning_output_tokens, localized("subset of output", "输出的一部分")),
+            ], badge=localized("today · local JSONL", "今日 · 本机 JSONL")),
+            detail_group("cached-weight-comparison", localized("Cached-weight comparison", "缓存折算对照"), [
+                token_metric(
+                    "weighted-today", localized("Today comparison", "今日对照量"),
+                    _empirical_weighted_tokens(today.composition),
+                    localized("uncached input + output + 30% cached input", "非缓存输入 + 输出 + 30% 缓存输入"),
+                ),
+                token_metric(
+                    "weighted-cumulative", localized("Local-history comparison", "本机历史对照量"),
+                    _empirical_weighted_tokens(cumulative),
+                    localized("derived from all captured local JSONL", "由全部已捕获本机 JSONL 推导"),
+                ),
+            ], note=localized(
+                "The 30% cache coefficient is an empirical compatibility indicator inferred from this machine's historical JSONL and legacy counters. OpenAI's public documentation does not define it as the Codex allowance formula. Raw Tokens and the API reference remain authoritative within this dashboard.",
+                "30% 缓存系数只是依据本机历史 JSONL 与旧计数器反推的经验兼容指标；OpenAI 公开文档没有将其定义为 Codex 额度公式。本面板仍以原始 Token 与 API 参考估值为准。",
+            ), badge=localized("derived · not official", "推导 · 非官方")),
+            detail_group("rollout-ledger", localized("Rollout ledger", "Rollout 账本"), [
+                token_metric("rollout-files", localized("Observed rollout files", "已观测 rollout 文件"), len(ledger.files), localized("irreversible file markers only", "仅保存不可逆文件标记"), unit="count"),
+                token_metric("root-rollouts", localized("Root rollouts", "主任务 rollout"), root_files, localized("thread source user", "任务来源为 user"), unit="count"),
+                token_metric("subagent-rollouts", localized("Subagent rollouts", "子 Agent rollout"), subagent_files, localized("included as real local requests", "作为真实本机请求计入"), unit="count"),
+                token_metric("duplicate-snapshots", localized("Suppressed duplicate snapshots", "已排除重复快照"), duplicate_snapshots, localized("unchanged cumulative counter", "累计计数不变"), unit="count"),
+                token_metric("counter-resets", localized("Counter generations", "计数器换代"), counter_resets, localized("decrease starts a new generation", "累计下降后开始新一代"), unit="count"),
+            ], note=localized(
+                "Aggregate ledger survives rollout deletion after capture. Usage from another machine and rollouts deleted before capture remain absent.",
+                "聚合账本在捕获后不受 rollout 删除影响；其他机器的用量以及捕获前已删除的 rollout 仍然缺失。",
+            ), badge=localized("local ledger", "本机账本")),
+            detail_group(
+                "standard-api-reference", localized("Standard API reference", "标准 API 参考"), price_metrics,
+                note=localized(
+                    "Applies the OpenAI standard text-token price snapshot checked on " + OPENAI_STANDARD_TEXT_PRICES_EFFECTIVE_DATE + " to captured input, cached input, cache writes, and output by observed model. Excludes unmatched aliases, long-context uplift, tools, multimodal, priority, regional processing, and subscription terms. Not a bill or quota balance.",
+                    "将 " + OPENAI_STANDARD_TEXT_PRICES_EFFECTIVE_DATE + " 核对的 OpenAI 标准文本 Token 价格，按已观测模型代入捕获的输入、缓存输入、缓存写入和输出；未匹配别名、长上下文加价、工具、多模态、优先级、区域处理与订阅条款均不计入。不是账单或额度余额。",
+                ),
+                badge=localized("reference · not billing", "估算 · 非账单"),
+            ),
+        ]
+
+    @classmethod
+    def _snapshot_for(cls, ledger: CodexRolloutLedger, timestamp: str, epoch: float) -> dict[str, Any]:
+        day_key = datetime.fromtimestamp(epoch).astimezone().date().isoformat()
+        today = ledger.days.get(day_key, _empty_day())
+        cumulative = ledger.cumulative()
+        identifiers = sorted(cumulative.models, key=lambda identifier: (-cumulative.models[identifier], identifier))
+        today_detail = localized("local calendar day from captured rollout events", "按已捕获 rollout 事件统计的本机自然日")
         cumulative_detail = localized(
-            "sum of readable local root-thread counters; approximate and not billing",
-            "可读本地主任务计数器之和；近似值，非账单口径",
+            "captured local rollout ledger; excludes other machines and pre-capture deletions",
+            "已捕获本机 rollout 账本；不含其他机器及捕获前删除的数据",
         )
+        local_midnight = datetime.fromtimestamp(epoch).astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
         return ai_usage_snapshot(
             source_id="codex",
             label="Codex",
             status="ok",
             observed_at=timestamp,
-            collection_method="Codex App / CLI local state",
+            collection_method="Codex local rollout JSONL ledger",
             today=usage_window(
-                today_tokens,
-                method="sentinel-day-baseline",
+                today.composition.total_tokens,
+                method="local-rollout-calendar-day",
                 detail=today_detail,
-                started_at=started_at,
+                started_at=local_midnight.isoformat(timespec="seconds"),
             ),
             cumulative=usage_window(
-                stats.total_tokens,
-                method="local-root-thread",
+                cumulative.total_tokens,
+                method="local-rollout-ledger",
                 detail=cumulative_detail,
+                started_at=ledger.rebuilt_at,
             ),
-            models=[model_usage(
-                str(model["id"]),
-                today_tokens=model_today.get(str(model["id"]), 0),
-                cumulative_tokens=int(model["total_tokens"]),
-                today_method="sentinel-day-baseline",
-                today_detail=today_detail,
-                cumulative_method="local-root-thread",
-                cumulative_detail=cumulative_detail,
-            ) for model in stats.models],
-            details=[detail_group("task-topology", localized("Task topology", "任务拓扑"), [
-                token_metric("root-threads", localized("Root threads", "主任务"), stats.user_threads, localized("source classified as user", "来源标为 user"), unit="count"),
-                token_metric("all-local-threads", localized("All local threads", "本地全部任务"), stats.threads, localized("content never read", "不读取任务内容"), unit="count"),
-                token_metric("subagents", localized("Subagents", "子 Agent"), stats.subagents, localized("workload count", "工作负载数量"), unit="count"),
-                token_metric("recent-subagents", localized("Recent subagents", "近期子 Agent"), stats.recent_subagents, localized(f"{ACTIVE_WINDOW_SECONDS // 60} minute activity window", f"{ACTIVE_WINDOW_SECONDS // 60} 分钟活动窗口"), unit="count"),
-                token_metric("deepest-spawn", localized("Deepest spawn", "最大层级"), stats.maximum_depth, localized("observed spawn depth", "已观测派生层级"), unit="count"),
-                token_metric("derived-rollout-raw-count", localized("Derived rollout raw count", "派生 rollout 原始计数"), stats.subagent_tokens, localized("not additive to root or account total", "不可与主任务或账户总量相加")),
-            ], note=localized(
-                "Derived rollout counters can include child work, replayed parent context, and cached input. They are diagnostic only, not a billing or account-activity total.",
-                "派生 rollout 计数可能包含子任务工作、重放的父上下文与缓存输入；仅用于诊断，不是账单或账户活动总量。",
-            ), badge=localized("diagnostic only", "仅诊断")), *self._sample_details(epoch)],
+            models=[
+                model_usage(
+                    identifier,
+                    today_tokens=today.composition.models.get(identifier, 0),
+                    cumulative_tokens=cumulative.models[identifier],
+                    today_method="local-rollout-calendar-day",
+                    today_detail=today_detail,
+                    cumulative_method="local-rollout-ledger",
+                    cumulative_detail=cumulative_detail,
+                )
+                for identifier in identifiers
+            ],
+            details=cls._details(ledger, today, cumulative),
             confidence="medium",
-            pricing_history=self._sample_pricing_history(),
-            privacy="aggregate-thread-state-plus-visible-rollout-token-sample",
+            privacy="aggregate-rollout-token-metadata-only",
+            daily_history=cls._daily_history(ledger),
+            pricing_history=cls._pricing_history(ledger),
         )
 
     @staticmethod
-    def _point(timestamp: str, epoch: float, metric: str, value: int, dimensions: dict[str, str]) -> MetricPoint:
+    def _point(increment: LedgerIncrement, metric: str, value: int, dimensions: dict[str, str]) -> MetricPoint:
         return MetricPoint(
-            observed_at=timestamp,
-            observed_epoch=epoch,
+            observed_at=increment.timestamp,
+            observed_epoch=increment.epoch,
             metric=metric,
             instrument="counter",
             value=value,
-            unit="tokens" if metric == "ai.tokens.total" else "threads",
+            unit="tokens",
             source_id="codex",
             resource_id="ai_usage",
             dimensions=dimensions,
-            attribution_method="local-reported",
+            attribution_method="local-rollout-delta",
             confidence="medium",
         )
+
+    @classmethod
+    def _points(cls, increments: tuple[LedgerIncrement, ...]) -> tuple[MetricPoint, ...]:
+        points: list[MetricPoint] = []
+        for increment in increments:
+            for metric, field in _COMPONENT_METRICS.items():
+                value = int(increment.usage.get(field, 0))
+                if not value:
+                    continue
+                if metric == "ai.tokens.total":
+                    points.append(cls._point(increment, metric, value, {"scope": "local-jsonl"}))
+                points.append(cls._point(increment, metric, value, {"model": increment.model}))
+        return tuple(points)
 
     def collect(self, context: CollectorContext) -> Collection:
         epoch = float(context.local_sample.get("epoch") or self._clock())
         if epoch < self._next_poll_epoch:
             return Collection(status=str(self._snapshot.get("status", "ok")), snapshot=self._snapshot)
         self._next_poll_epoch = epoch + self._poll_seconds
-        database = self._database_finder()
-        if database is None:
+        roots = self._rollout_roots_finder()
+        if not roots:
             self._snapshot = {"available": False, "status": "unavailable"}
             return Collection(status="unavailable", snapshot=self._snapshot)
+        now = datetime.fromtimestamp(epoch).astimezone()
         try:
+            if not self._ledger.rebuilt_at:
+                self._ledger = rebuild_codex_rollout_ledger(roots, timezone=now.tzinfo, now=now)
+                increments: tuple[LedgerIncrement, ...] = ()
+                save_codex_rollout_ledger(self._ledger_path, self._ledger)
+            else:
+                update = update_codex_rollout_ledger(roots, self._ledger, timezone=now.tzinfo, now=now)
+                increments = update.increments
+                if update.scanned_bytes:
+                    save_codex_rollout_ledger(self._ledger_path, self._ledger)
             timestamp = _iso_now(epoch)
-            stats = read_codex_state_stats(database, epoch)
-            self._refresh_session_sample(epoch)
-            snapshot = self._snapshot_for(stats, timestamp, epoch)
-        except (OSError, sqlite3.DatabaseError, ValueError):
+            snapshot = self._snapshot_for(self._ledger, timestamp, epoch)
+            points = self._points(increments)
+        except (OSError, ValueError, json.JSONDecodeError):
             self._snapshot = {**self._snapshot, "available": True, "status": "error", "label": "Codex"}
             return Collection(status="error", snapshot=self._snapshot)
-        points_list: list[MetricPoint] = []
-        model_deltas: dict[str, int] = {}
-        for counter in stats.user_counters:
-            previous = self._previous_thread_tokens.get(counter.identifier, 0)
-            delta = max(0, counter.tokens - previous)
-            if delta:
-                model_deltas[counter.model] = model_deltas.get(counter.model, 0) + delta
-        total_delta = sum(model_deltas.values())
-        if total_delta:
-            points_list.append(self._point(timestamp, epoch, "ai.tokens.total", total_delta, {"scope": "local-state"}))
-            points_list.extend(
-                self._point(timestamp, epoch, "ai.tokens.total", value, {"model": model})
-                for model, value in sorted(model_deltas.items())
-            )
-        self._previous_thread_tokens = {counter.identifier: counter.tokens for counter in stats.user_counters}
-        self._write_daily_checkpoint()
         self._snapshot = snapshot
-        return Collection(points=tuple(points_list), status="ok", snapshot=snapshot)
+        return Collection(points=points, status="ok", snapshot=snapshot)

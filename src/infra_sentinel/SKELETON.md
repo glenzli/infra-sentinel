@@ -24,6 +24,15 @@ belongs in `resources/` and SQL mechanics belong in `metrics/`.
 | `platform/` | Narrow process-level host primitives such as the single-Agent lock |
 | `cli/` | Report and snapshot entry points over the package's typed APIs |
 
+Within the AI boundary, `resources/ai/codex_sampling.py` owns privacy-bounded
+Codex rollout token parsing, durable cumulative-delta ledger updates, and
+read-only reconstruction. `resources/ai/codex.py` consumes that ledger as its
+only Codex usage fact source. `cli/codex_usage_audit.py` only renders an
+aggregate audit; it does not own parsing or persist user rollout data.
+`app/codex_migration.py` coordinates the one-time ledger rebuild, recoverable
+backup, and scoped metric-store replacement without moving those policies into
+the Collector or SQLite owner.
+
 ## State and privacy boundaries
 
 - `metrics/` is the durable metric boundary. A resource adapter returns points

@@ -1,9 +1,9 @@
-"""Bounded, aggregate-only sampling of visible Codex rollout token metadata.
+"""Aggregate-only reconstruction of Codex rollout token metadata.
 
-Codex's SQLite state is the durable source for Sentinel's main local workload
-counter.  Rollout JSONL files are intentionally *not* a replacement: users can
-remove them and their shape is an implementation detail.  This module reads a
-small, validated subset only to describe the observed input/output/cache mix.
+The durable ledger and read-only audit reconstruct local usage from
+``total_token_usage`` deltas, suppressing unchanged snapshots and treating a
+counter decrease as a new generation. They are intentionally account-agnostic:
+rollouts removed before observation and usage from another machine are absent.
 
 No rollout content, task identifiers, paths, or raw JSON records are retained.
 The checkpoint contains only daily aggregate counters plus irreversible file
@@ -13,19 +13,17 @@ markers and byte offsets, so later sampling does not replay the same events.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime, time as datetime_time, tzinfo
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 
-SAMPLE_SCHEMA = "20260821.2"
-MAX_SESSION_FILES = 256
-MAX_SCAN_BYTES = 16 * 1024 * 1024
+LEDGER_SCHEMA = "20260824.1"
+MAX_LEDGER_SCAN_BYTES = 64 * 1024 * 1024
 MAX_LINE_BYTES = 512 * 1024
-RETAIN_DAYS = 8
-MAX_SAMPLED_MODELS = 32
+MAX_SAMPLED_MODELS = 128
 
 
 @dataclass
@@ -62,6 +60,22 @@ class TokenComposition:
         self.output_tokens += usage["output_tokens"]
         self.reasoning_output_tokens += usage["reasoning_output_tokens"]
         self.total_tokens += usage["total_tokens"]
+
+    def merge(self, other: "TokenComposition") -> None:
+        """Merge another aggregate without inventing token events."""
+        self.events += other.events
+        self.input_tokens += other.input_tokens
+        self.cached_input_tokens += other.cached_input_tokens
+        self.cache_write_input_tokens += other.cache_write_input_tokens
+        self.output_tokens += other.output_tokens
+        self.reasoning_output_tokens += other.reasoning_output_tokens
+        self.total_tokens += other.total_tokens
+        for identifier, tokens in other.models.items():
+            accepted = identifier if identifier in self.models or len(self.models) < MAX_SAMPLED_MODELS else "other"
+            self.models[accepted] = self.models.get(accepted, 0) + tokens
+        for identifier, composition in other.model_compositions.items():
+            accepted = identifier if identifier in self.model_compositions or len(self.model_compositions) < MAX_SAMPLED_MODELS else "other"
+            self.model_compositions.setdefault(accepted, TokenComposition()).merge(composition)
 
     def as_payload(self) -> dict[str, Any]:
         return {
@@ -132,181 +146,337 @@ class TokenComposition:
 
 
 @dataclass
-class JsonlSampleState:
-    days: dict[str, TokenComposition] = field(default_factory=dict)
-    files: dict[str, dict[str, Any]] = field(default_factory=dict)
-    partial: bool = False
-    updated_at: str | None = None
+class RolloutAuditDay:
+    """One local calendar day's reconstructed, aggregate-only usage."""
+
+    composition: TokenComposition = field(default_factory=TokenComposition)
+    source_tokens: dict[str, int] = field(default_factory=dict)
+    token_records: int = 0
+    duplicate_snapshots: int = 0
+    counter_resets: int = 0
+    delta_last_mismatches: int = 0
 
     def as_payload(self) -> dict[str, Any]:
         return {
-            "schema": SAMPLE_SCHEMA,
-            "days": {day: sample.as_payload() for day, sample in sorted(self.days.items())},
-            "files": self.files,
-            "partial": self.partial,
-            "updated_at": self.updated_at,
+            **self.composition.as_payload(),
+            "source_tokens": dict(sorted(self.source_tokens.items())),
+            "token_records": self.token_records,
+            "duplicate_snapshots": self.duplicate_snapshots,
+            "counter_resets": self.counter_resets,
+            "delta_last_mismatches": self.delta_last_mismatches,
         }
 
     @classmethod
-    def from_payload(cls, raw: object) -> "JsonlSampleState":
+    def from_payload(cls, raw: object) -> "RolloutAuditDay":
         payload = raw if isinstance(raw, dict) else {}
-        if payload.get("schema") != SAMPLE_SCHEMA:
-            return cls()
-        days_raw = payload.get("days")
-        days = {
-            str(day): TokenComposition.from_payload(sample)
-            for day, sample in days_raw.items()
-            if _valid_day(day)
-        } if isinstance(days_raw, dict) else {}
-        files_raw = payload.get("files")
-        files = {
-            str(marker): {
-                "offset": _integer(entry.get("offset")),
-                "model": _model_or_unknown(entry.get("model")),
-                "day": str(entry.get("day")) if _valid_day(entry.get("day")) else None,
-                "incomplete": bool(entry.get("incomplete")),
-            }
-            for marker, entry in files_raw.items()
-            if _valid_marker(marker) and isinstance(entry, dict)
-        } if isinstance(files_raw, dict) else {}
         return cls(
-            days=days,
-            files=files,
-            partial=bool(payload.get("partial")),
-            updated_at=str(payload.get("updated_at")) if payload.get("updated_at") else None,
+            composition=TokenComposition.from_payload(payload),
+            source_tokens={
+                str(source)[:64]: _integer(tokens)
+                for source, tokens in payload.get("source_tokens", {}).items()
+                if isinstance(source, str) and source
+            } if isinstance(payload.get("source_tokens"), dict) else {},
+            token_records=_integer(payload.get("token_records")),
+            duplicate_snapshots=_integer(payload.get("duplicate_snapshots")),
+            counter_resets=_integer(payload.get("counter_resets")),
+            delta_last_mismatches=_integer(payload.get("delta_last_mismatches")),
         )
 
 
-def discover_codex_session_root(preferred: Path | None = None) -> Path | None:
-    """Find Codex's visible session directory without inspecting its contents."""
-    candidates = (preferred, Path.home() / ".codex" / "sessions")
-    return next((candidate for candidate in candidates if candidate and candidate.is_dir()), None)
+@dataclass
+class RolloutAudit:
+    """Coverage and daily totals from one read-only rollout reconstruction."""
+
+    start_day: str
+    end_day: str
+    days: dict[str, RolloutAuditDay] = field(default_factory=dict)
+    roots: int = 0
+    candidate_files: int = 0
+    scanned_files: int = 0
+    duplicate_files: int = 0
+    files_with_usage: int = 0
+    bytes_scanned: int = 0
+    read_errors: int = 0
+
+    def as_payload(self) -> dict[str, Any]:
+        return {
+            "scope": "local-visible-codex-jsonl",
+            "start_day": self.start_day,
+            "end_day": self.end_day,
+            "coverage": {
+                "roots": self.roots,
+                "candidate_files": self.candidate_files,
+                "scanned_files": self.scanned_files,
+                "duplicate_files": self.duplicate_files,
+                "files_with_usage": self.files_with_usage,
+                "bytes_scanned": self.bytes_scanned,
+                "read_errors": self.read_errors,
+            },
+            "days": {day: usage.as_payload() for day, usage in sorted(self.days.items())},
+        }
 
 
-def load_jsonl_sample_state(path: Path | None) -> JsonlSampleState:
+@dataclass(frozen=True)
+class LedgerIncrement:
+    timestamp: str
+    epoch: float
+    day: str
+    model: str
+    source: str
+    usage: dict[str, int]
+    duplicate: bool = False
+    reset: bool = False
+    delta_last_mismatch: bool = False
+
+
+@dataclass(frozen=True)
+class LedgerUpdate:
+    increments: tuple[LedgerIncrement, ...]
+    scanned_bytes: int
+    partial: bool
+
+
+@dataclass
+class CodexRolloutLedger:
+    """Durable aggregate ledger that survives rollout deletion after capture."""
+
+    days: dict[str, RolloutAuditDay] = field(default_factory=dict)
+    files: dict[str, dict[str, Any]] = field(default_factory=dict)
+    updated_at: str | None = None
+    rebuilt_at: str | None = None
+    partial: bool = False
+
+    def as_payload(self) -> dict[str, Any]:
+        return {
+            "schema": LEDGER_SCHEMA,
+            "days": {day: usage.as_payload() for day, usage in sorted(self.days.items())},
+            "files": self.files,
+            "updated_at": self.updated_at,
+            "rebuilt_at": self.rebuilt_at,
+            "partial": self.partial,
+        }
+
+    @classmethod
+    def from_payload(cls, raw: object) -> "CodexRolloutLedger":
+        payload = raw if isinstance(raw, dict) else {}
+        if payload.get("schema") != LEDGER_SCHEMA:
+            return cls()
+        days_raw = payload.get("days")
+        files_raw = payload.get("files")
+        return cls(
+            days={
+                str(day): RolloutAuditDay.from_payload(usage)
+                for day, usage in days_raw.items()
+                if _valid_day(day)
+            } if isinstance(days_raw, dict) else {},
+            files={
+                str(marker): _ledger_file_from_payload(entry)
+                for marker, entry in files_raw.items()
+                if _valid_marker(marker) and isinstance(entry, dict)
+            } if isinstance(files_raw, dict) else {},
+            updated_at=str(payload.get("updated_at")) if payload.get("updated_at") else None,
+            rebuilt_at=str(payload.get("rebuilt_at")) if payload.get("rebuilt_at") else None,
+            partial=bool(payload.get("partial")),
+        )
+
+    def cumulative(self) -> TokenComposition:
+        aggregate = TokenComposition()
+        for usage in self.days.values():
+            aggregate.merge(usage.composition)
+        return aggregate
+
+
+def discover_codex_rollout_roots(preferred: Iterable[Path] | None = None) -> tuple[Path, ...]:
+    """Return readable live and archived rollout roots without combining copies."""
+    candidates = tuple(preferred) if preferred is not None else (
+        Path.home() / ".codex" / "sessions",
+        Path.home() / ".codex" / "archived_sessions",
+    )
+    roots: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if resolved.is_dir() and resolved not in seen:
+            roots.append(resolved)
+            seen.add(resolved)
+    return tuple(roots)
+
+
+def audit_codex_rollouts(
+    roots: Iterable[Path],
+    *,
+    start_day: date,
+    end_day: date,
+    timezone: tzinfo,
+) -> RolloutAudit:
+    """Reconstruct local daily usage from visible rollout cumulative counters.
+
+    Only session classification, ``turn_context.model``, event timestamps, and
+    token-count metadata are parsed. A first observation or counter reset uses
+    ``last_token_usage``; later increases use the cumulative delta. This keeps
+    inherited fork baselines out while recovering gaps between visible events.
+    Unchanged cumulative snapshots contribute zero.
+    """
+    if end_day < start_day:
+        raise ValueError("end_day must not precede start_day")
+    readable_roots = discover_codex_rollout_roots(roots)
+    result = RolloutAudit(start_day.isoformat(), end_day.isoformat(), roots=len(readable_roots))
+    start_epoch = datetime.combine(start_day, datetime_time.min, tzinfo=timezone).timestamp()
+    candidates: list[tuple[int, Path]] = []
+    for root in readable_roots:
+        try:
+            for path in root.rglob("*.jsonl"):
+                try:
+                    stat = path.stat()
+                except OSError:
+                    result.read_errors += 1
+                    continue
+                rollout_day = _rollout_day_or_none(root, path)
+                if stat.st_mtime < start_epoch or (rollout_day is not None and rollout_day > end_day):
+                    continue
+                candidates.append((stat.st_size, path))
+        except OSError:
+            result.read_errors += 1
+    result.candidate_files = len(candidates)
+    size_counts: dict[int, int] = {}
+    for size, _ in candidates:
+        size_counts[size] = size_counts.get(size, 0) + 1
+    seen_content: set[tuple[int, str]] = set()
+    for size, path in sorted(candidates, key=lambda item: item[0], reverse=True):
+        if size_counts[size] > 1:
+            try:
+                identity = (size, _file_digest(path))
+            except OSError:
+                result.read_errors += 1
+                continue
+            if identity in seen_content:
+                result.duplicate_files += 1
+                continue
+            seen_content.add(identity)
+        try:
+            scanned_bytes, has_usage = _audit_rollout_file(
+                path, result.days, start_day=start_day, end_day=end_day, timezone=timezone,
+            )
+        except OSError:
+            result.read_errors += 1
+            continue
+        result.scanned_files += 1
+        result.bytes_scanned += scanned_bytes
+        if has_usage:
+            result.files_with_usage += 1
+    return result
+
+
+def load_codex_rollout_ledger(path: Path | None) -> CodexRolloutLedger:
     if path is None:
-        return JsonlSampleState()
+        return CodexRolloutLedger()
     try:
-        return JsonlSampleState.from_payload(json.loads(path.read_text(encoding="utf-8")))
+        return CodexRolloutLedger.from_payload(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, ValueError, json.JSONDecodeError):
-        return JsonlSampleState()
+        return CodexRolloutLedger()
 
 
-def save_jsonl_sample_state(path: Path | None, state: JsonlSampleState) -> None:
+def save_codex_rollout_ledger(path: Path | None, ledger: CodexRolloutLedger) -> None:
     if path is None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(state.as_payload(), separators=(",", ":")), encoding="utf-8")
+    temporary.write_text(json.dumps(ledger.as_payload(), separators=(",", ":")), encoding="utf-8")
     temporary.replace(path)
 
 
-def sample_visible_rollouts(
-    root: Path | None,
-    state: JsonlSampleState,
+def rebuild_codex_rollout_ledger(
+    roots: Iterable[Path],
     *,
+    timezone: tzinfo,
     now: datetime,
-) -> JsonlSampleState:
-    """Ingest bounded new token-count records from visible rollout files.
+) -> CodexRolloutLedger:
+    """Rebuild all still-visible local history without emitting live increments."""
+    ledger = CodexRolloutLedger()
+    update_codex_rollout_ledger(roots, ledger, timezone=timezone, now=now, max_scan_bytes=None)
+    ledger.rebuilt_at = now.astimezone().isoformat(timespec="seconds")
+    ledger.partial = False
+    return ledger
 
-    The parser intentionally accepts only ``turn_context.model`` and
-    ``event_msg/token_count/info/last_token_usage``.  Any schema drift,
-    malformed line, oversized record, or truncated file is ignored rather than
-    guessed at.  Stored markers are SHA-256 digests of relative file names;
-    original paths do not enter the checkpoint or Projection.
-    """
-    if root is None or not root.is_dir():
-        return state
-    cutoff_day = now.date().toordinal() - RETAIN_DAYS
-    files = sorted(
-        (
-            item for item in root.rglob("*.jsonl")
-            if item.is_file() and _rollout_day(root, item).toordinal() >= cutoff_day
-        ),
-        key=lambda item: (_rollout_day(root, item), item.stat().st_mtime_ns, item.name),
-        reverse=True,
-    )[:MAX_SESSION_FILES]
-    remaining = MAX_SCAN_BYTES
-    touched = False
-    partial = len(files) >= MAX_SESSION_FILES
-    for path in files:
-        if remaining <= 0:
-            partial = True
-            break
-        marker = _file_marker(root, path)
-        entry = state.files.get(marker, {})
-        offset = _integer(entry.get("offset"))
+
+def update_codex_rollout_ledger(
+    roots: Iterable[Path],
+    ledger: CodexRolloutLedger,
+    *,
+    timezone: tzinfo,
+    now: datetime,
+    max_scan_bytes: int | None = MAX_LEDGER_SCAN_BYTES,
+) -> LedgerUpdate:
+    """Ingest append-only rollout tails into a durable aggregate ledger."""
+    readable_roots = discover_codex_rollout_roots(roots)
+    candidates: dict[str, tuple[int, int, Path]] = {}
+    for root in readable_roots:
         try:
-            size = path.stat().st_size
+            for path in root.rglob("*.jsonl"):
+                try:
+                    stat = path.stat()
+                except OSError:
+                    continue
+                marker = _ledger_file_marker(path)
+                current = candidates.get(marker)
+                candidate = (stat.st_size, stat.st_mtime_ns, path)
+                if current is None or candidate[:2] > current[:2]:
+                    candidates[marker] = candidate
         except OSError:
             continue
+    remaining = max_scan_bytes
+    increments: list[LedgerIncrement] = []
+    scanned_bytes = 0
+    partial = False
+    for marker, (size, modified, path) in sorted(
+        candidates.items(), key=lambda item: (item[1][1], item[1][0], item[0]), reverse=True,
+    ):
+        entry = ledger.files.get(marker, {})
+        offset = _integer(entry.get("offset"))
         if size < offset:
-            # A rewritten rollout cannot safely be replayed without a durable
-            # event identifier.  Keep prior aggregates and wait for future
-            # append-only records rather than risking duplicate attribution.
-            state.files[marker] = {**entry, "offset": size, "incomplete": True}
-            partial = True
-            touched = True
+            # A moved archived copy can be shorter than the already observed
+            # live file. Never replay it or roll the durable offset backwards.
             continue
         if size == offset:
             continue
-        consumed, model, day, did_ingest, exhausted = _ingest_file_tail(
-            path, offset, remaining, state, _model_or_unknown(entry.get("model")), entry.get("day"), now,
+        if remaining is not None and remaining <= 0:
+            partial = True
+            break
+        budget = size - offset if remaining is None else remaining
+        consumed, next_entry, file_increments, exhausted = _ingest_ledger_file_tail(
+            path, offset, budget, entry, timezone=timezone,
         )
-        state.files[marker] = {"offset": consumed, "model": model, "day": day, "incomplete": exhausted}
-        remaining -= max(0, consumed - offset)
+        ledger.files[marker] = {**next_entry, "offset": consumed, "modified": modified, "incomplete": exhausted}
+        used = max(0, consumed - offset)
+        scanned_bytes += used
+        if remaining is not None:
+            remaining -= used
+        for increment in file_increments:
+            _add_ledger_increment(ledger, increment)
+            if increment.usage["total_tokens"] > 0:
+                increments.append(increment)
         partial = partial or exhausted
-        touched = touched or did_ingest or consumed != offset
-    state.days = {day: sample for day, sample in state.days.items() if datetime.fromisoformat(day).date().toordinal() >= cutoff_day}
-    state.files = {
-        marker: entry for marker, entry in state.files.items()
-        if _valid_day(entry.get("day")) and datetime.fromisoformat(str(entry["day"])).date().toordinal() >= cutoff_day
-    }
-    if touched:
-        state.updated_at = now.astimezone().isoformat(timespec="seconds")
-    state.partial = partial or any(bool(entry.get("incomplete")) for entry in state.files.values())
-    return state
+    if scanned_bytes:
+        ledger.updated_at = now.astimezone().isoformat(timespec="seconds")
+    ledger.partial = partial or any(bool(entry.get("incomplete")) for entry in ledger.files.values())
+    return LedgerUpdate(tuple(increments), scanned_bytes, ledger.partial)
 
 
-def current_day_sample(state: JsonlSampleState, epoch: float) -> TokenComposition | None:
-    day = datetime.fromtimestamp(epoch).astimezone().date().isoformat()
-    sample = state.days.get(day)
-    return sample if sample and sample.events else None
-
-
-def composition_note(sample: TokenComposition, *, partial: bool) -> dict[str, str]:
-    input_share = _ratio(sample.input_tokens, sample.total_tokens)
-    output_share = _ratio(sample.output_tokens, sample.total_tokens)
-    reasoning_share = _ratio(sample.reasoning_output_tokens, sample.output_tokens)
-    cached_input_rate = _ratio(sample.cached_input_tokens, sample.input_tokens)
-    coverage = "Partial scan; " if partial else ""
-    coverage_zh = "扫描受限；" if partial else ""
-    return {
-        "en": (
-            f"{coverage}visible rollout sample only: input {input_share:.1%}, "
-            f"output {output_share:.1%}, reasoning {reasoning_share:.1%} of output, "
-            f"cached input {cached_input_rate:.1%} of input. "
-            "It never changes the SQLite workload total or represents billing."
-        ),
-        "zh": (
-            f"{coverage_zh}仅为当前可见 rollout 的抽样：输入 {input_share:.1%}，"
-            f"输出 {output_share:.1%}，推理占输出 {reasoning_share:.1%}，缓存输入占输入 {cached_input_rate:.1%}。"
-            "不会改写 SQLite 工作负载总量，也不是账单。"
-        ),
-    }
-
-
-def _ingest_file_tail(
+def _ingest_ledger_file_tail(
     path: Path,
     offset: int,
     remaining: int,
-    state: JsonlSampleState,
-    model: str,
-    stored_day: object,
-    now: datetime,
-) -> tuple[int, str, str, bool, bool]:
-    day = str(stored_day) if _valid_day(stored_day) else now.astimezone().date().isoformat()
-    ingested = False
+    stored: dict[str, Any],
+    *,
+    timezone: tzinfo,
+) -> tuple[int, dict[str, Any], list[LedgerIncrement], bool]:
+    model = _model_or_unknown(stored.get("model"))
+    source = _source_or_unknown(stored.get("source"))
+    previous = _usage_from_payload(stored.get("previous"))
+    observations: list[LedgerIncrement] = []
     exhausted = False
     position = offset
     try:
@@ -319,9 +489,6 @@ def _ingest_file_tail(
                     break
                 if not line.endswith(b"\n"):
                     if len(line) > MAX_LINE_BYTES:
-                        # Deliberately skip an oversized raw JSON record while
-                        # consuming its remainder; otherwise it would block
-                        # every later incremental pass at the same offset.
                         position += len(line)
                         remaining -= len(line)
                         while remaining > 0:
@@ -334,9 +501,6 @@ def _ingest_file_tail(
                                 break
                         exhausted = True
                         continue
-                    # Appends can be observed while the writer has not yet
-                    # completed a JSONL record.  Leave that suffix untouched
-                    # so a later low-frequency pass can parse it atomically.
                     position = line_start
                     exhausted = True
                     break
@@ -348,23 +512,131 @@ def _ingest_file_tail(
                 record = _record(line)
                 if record is None:
                     continue
-                record_type = record.get("type")
                 payload = record.get("payload")
+                record_type = record.get("type")
+                if record_type == "session_meta" and isinstance(payload, dict):
+                    source = _rollout_source(payload)
+                    continue
                 if record_type == "turn_context" and isinstance(payload, dict):
                     model = _model_or_unknown(payload.get("model"))
                     continue
                 if record_type != "event_msg" or not isinstance(payload, dict) or payload.get("type") != "token_count":
                     continue
-                usage = _usage(payload)
-                if usage is None:
+                total = _usage_field(payload, "total_token_usage")
+                if total is None:
                     continue
-                event_day = _event_day(record.get("timestamp"), now)
-                state.days.setdefault(event_day, TokenComposition()).add(model, usage)
-                day = event_day
-                ingested = True
+                last = _usage_field(payload, "last_token_usage")
+                current_total = total["total_tokens"]
+                previous_total = previous["total_tokens"] if previous is not None else None
+                duplicate = previous_total is not None and current_total == previous_total
+                reset = previous_total is not None and current_total < previous_total
+                if previous is None or reset:
+                    delta = last or total
+                elif duplicate:
+                    delta = _zero_usage()
+                else:
+                    delta = {field: max(0, total[field] - previous[field]) for field in _usage_fields()}
+                timestamp = _event_timestamp(record.get("timestamp"), timezone)
+                if timestamp is not None:
+                    observations.append(LedgerIncrement(
+                        timestamp=timestamp.isoformat(timespec="seconds"),
+                        epoch=timestamp.timestamp(),
+                        day=timestamp.date().isoformat(),
+                        model=model,
+                        source=source,
+                        usage=delta,
+                        duplicate=duplicate,
+                        reset=reset,
+                        delta_last_mismatch=(
+                            last is not None and not duplicate and delta["total_tokens"] != last["total_tokens"]
+                        ),
+                    ))
+                previous = total
     except OSError:
-        return offset, model, day, False, True
-    return position, model, day, ingested, exhausted or remaining <= 0
+        return offset, _ledger_file_from_payload(stored), [], True
+    entry = {
+        "model": model,
+        "source": source,
+        "previous": previous or _zero_usage(),
+    }
+    try:
+        more_bytes = path.stat().st_size > position
+    except OSError:
+        more_bytes = True
+    return position, entry, observations, exhausted or (remaining <= 0 and more_bytes)
+
+
+def _add_ledger_increment(ledger: CodexRolloutLedger, increment: LedgerIncrement) -> None:
+    day = ledger.days.setdefault(increment.day, RolloutAuditDay())
+    day.token_records += 1
+    day.duplicate_snapshots += int(increment.duplicate)
+    day.counter_resets += int(increment.reset)
+    day.delta_last_mismatches += int(increment.delta_last_mismatch)
+    if increment.usage["total_tokens"] <= 0:
+        return
+    day.composition.add(increment.model, increment.usage)
+    day.source_tokens[increment.source] = day.source_tokens.get(increment.source, 0) + increment.usage["total_tokens"]
+
+
+def _audit_rollout_file(
+    path: Path,
+    days: dict[str, RolloutAuditDay],
+    *,
+    start_day: date,
+    end_day: date,
+    timezone: tzinfo,
+) -> tuple[int, bool]:
+    previous: dict[str, int] | None = None
+    model = "unknown"
+    source = "unknown"
+    scanned_bytes = 0
+    has_usage = False
+    with path.open("rb") as handle:
+        for line in handle:
+            scanned_bytes += len(line)
+            if len(line) > MAX_LINE_BYTES:
+                continue
+            record = _record(line)
+            if record is None:
+                continue
+            payload = record.get("payload")
+            record_type = record.get("type")
+            if record_type == "session_meta" and isinstance(payload, dict):
+                source = _rollout_source(payload)
+                continue
+            if record_type == "turn_context" and isinstance(payload, dict):
+                model = _model_or_unknown(payload.get("model"))
+                continue
+            if record_type != "event_msg" or not isinstance(payload, dict) or payload.get("type") != "token_count":
+                continue
+            total = _usage_field(payload, "total_token_usage")
+            if total is None:
+                continue
+            last = _usage_field(payload, "last_token_usage")
+            current_total = total["total_tokens"]
+            previous_total = previous["total_tokens"] if previous is not None else None
+            duplicate = previous_total is not None and current_total == previous_total
+            reset = previous_total is not None and current_total < previous_total
+            if previous is None or reset:
+                delta = last or total
+            elif duplicate:
+                delta = _zero_usage()
+            else:
+                delta = {field: max(0, total[field] - previous[field]) for field in _usage_fields()}
+            event_day = _event_date(record.get("timestamp"), timezone)
+            if event_day is not None and start_day <= event_day <= end_day:
+                day = days.setdefault(event_day.isoformat(), RolloutAuditDay())
+                day.token_records += 1
+                day.duplicate_snapshots += int(duplicate)
+                day.counter_resets += int(reset)
+                if last is not None and not duplicate and delta["total_tokens"] != last["total_tokens"]:
+                    day.delta_last_mismatches += 1
+                if delta["total_tokens"] > 0:
+                    day.composition.add(model, delta)
+                    day.source_tokens[source] = day.source_tokens.get(source, 0) + delta["total_tokens"]
+                    has_usage = True
+            previous = total
+    return scanned_bytes, has_usage
 
 
 def _record(line: bytes) -> dict[str, Any] | None:
@@ -376,14 +648,15 @@ def _record(line: bytes) -> dict[str, Any] | None:
 
 
 def _usage(payload: dict[str, Any]) -> dict[str, int] | None:
+    return _usage_field(payload, "last_token_usage")
+
+
+def _usage_field(payload: dict[str, Any], key: str) -> dict[str, int] | None:
     info = payload.get("info")
-    raw = info.get("last_token_usage") if isinstance(info, dict) else None
+    raw = info.get(key) if isinstance(info, dict) else None
     if not isinstance(raw, dict):
         return None
-    fields = (
-        "input_tokens", "cached_input_tokens", "cache_write_input_tokens",
-        "output_tokens", "reasoning_output_tokens", "total_tokens",
-    )
+    fields = _usage_fields()
     if any(field not in raw for field in fields):
         return None
     values = {field: _integer(raw.get(field)) for field in fields}
@@ -392,29 +665,87 @@ def _usage(payload: dict[str, Any]) -> dict[str, int] | None:
     return values
 
 
-def _event_day(value: object, fallback: datetime) -> str:
-    if isinstance(value, str):
-        try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone().date().isoformat()
-        except ValueError:
-            pass
-    return fallback.astimezone().date().isoformat()
+def _usage_fields() -> tuple[str, ...]:
+    return (
+        "input_tokens", "cached_input_tokens", "cache_write_input_tokens",
+        "output_tokens", "reasoning_output_tokens", "total_tokens",
+    )
 
 
-def _file_marker(root: Path, path: Path) -> str:
+def _zero_usage() -> dict[str, int]:
+    return {field: 0 for field in _usage_fields()}
+
+
+def _event_date(value: object, timezone: tzinfo) -> date | None:
+    timestamp = _event_timestamp(value, timezone)
+    return timestamp.date() if timestamp is not None else None
+
+
+def _event_timestamp(value: object, timezone: tzinfo) -> datetime | None:
+    if not isinstance(value, str):
+        return None
     try:
-        relative = path.relative_to(root).as_posix()
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone)
     except ValueError:
-        relative = path.name
-    return hashlib.sha256(relative.encode("utf-8")).hexdigest()
+        return None
 
 
-def _rollout_day(root: Path, path: Path):
+def _rollout_source(payload: dict[str, Any]) -> str:
+    source = payload.get("thread_source")
+    if isinstance(source, str) and source.strip():
+        return source.strip()[:64]
+    if payload.get("parent_thread_id") or payload.get("forked_from_id"):
+        return "subagent"
+    return "user"
+
+
+def _source_or_unknown(value: object) -> str:
+    return str(value).strip()[:64] if isinstance(value, str) and value.strip() else "unknown"
+
+
+def _usage_from_payload(raw: object) -> dict[str, int] | None:
+    if not isinstance(raw, dict) or any(field not in raw for field in _usage_fields()):
+        return None
+    values = {field: _integer(raw.get(field)) for field in _usage_fields()}
+    return values if values["total_tokens"] > 0 else None
+
+
+def _ledger_file_from_payload(raw: object) -> dict[str, Any]:
+    payload = raw if isinstance(raw, dict) else {}
+    return {
+        "offset": _integer(payload.get("offset")),
+        "model": _model_or_unknown(payload.get("model")),
+        "source": _source_or_unknown(payload.get("source")),
+        "previous": _usage_from_payload(payload.get("previous")) or _zero_usage(),
+        "modified": _integer(payload.get("modified")),
+        "incomplete": bool(payload.get("incomplete")),
+    }
+
+
+def _ledger_file_marker(path: Path) -> str:
+    return hashlib.sha256(path.name.encode("utf-8")).hexdigest()
+
+
+def _file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _rollout_day_or_none(root: Path, path: Path) -> date | None:
     try:
         year, month, day, *_ = path.relative_to(root).parts
-        return datetime(int(year), int(month), int(day)).date()
+        return date(int(year), int(month), int(day))
     except (ValueError, TypeError):
-        return datetime.fromtimestamp(path.stat().st_mtime).astimezone().date()
+        name = path.name
+        if name.startswith("rollout-") and len(name) >= 18:
+            try:
+                return date.fromisoformat(name[8:18])
+            except ValueError:
+                pass
+        return None
 
 
 def _integer(value: object) -> int:
@@ -445,7 +776,3 @@ def _valid_day(value: object) -> bool:
 
 def _valid_marker(value: object) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
-
-
-def _ratio(numerator: int, denominator: int) -> float:
-    return max(0.0, numerator / denominator) if denominator > 0 else 0.0

@@ -113,6 +113,8 @@ class LocalIntegrationPaths:
     ssh_executable: Path | None = None
     opencode_executable: Path | None = None
     opencode_database: Path | None = None
+    # Legacy schema field retained for round-trip compatibility only. Codex
+    # usage is reconstructed from rollout JSONL and never reads this path.
     codex_database: Path | None = None
 
     def as_payload(self) -> dict[str, str]:

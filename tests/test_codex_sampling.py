@@ -12,12 +12,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from infra_sentinel.resources.ai.codex_sampling import (  # noqa: E402
-    JsonlSampleState,
-    composition_note,
-    current_day_sample,
-    load_jsonl_sample_state,
-    sample_visible_rollouts,
-    save_jsonl_sample_state,
+    CodexRolloutLedger,
+    audit_codex_rollouts,
+    load_codex_rollout_ledger,
+    rebuild_codex_rollout_ledger,
+    save_codex_rollout_ledger,
+    update_codex_rollout_ledger,
 )
 from infra_sentinel.resources.ai.codex_pricing import estimate_standard_api_cost  # noqa: E402
 
@@ -33,62 +33,189 @@ def context(model: str) -> str:
     return record("turn_context", {"model": model})
 
 
-def usage(*, input_tokens: int, cached_input_tokens: int, output_tokens: int, reasoning_output_tokens: int, total_tokens: int) -> str:
+def cumulative_usage(last_total: int, cumulative_total: int, timestamp: str) -> str:
+    def fields(total: int) -> dict[str, int]:
+        return {
+            "input_tokens": total,
+            "cached_input_tokens": 0,
+            "cache_write_input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_output_tokens": 0,
+            "total_tokens": total,
+        }
+
     return record("event_msg", {
         "type": "token_count",
-        "info": {"last_token_usage": {
-            "input_tokens": input_tokens,
-            "cached_input_tokens": cached_input_tokens,
-            "cache_write_input_tokens": 0,
-            "output_tokens": output_tokens,
-            "reasoning_output_tokens": reasoning_output_tokens,
-            "total_tokens": total_tokens,
-        }},
-    })
+        "info": {
+            "last_token_usage": fields(last_total),
+            "total_token_usage": fields(cumulative_total),
+        },
+    }, timestamp)
 
 
 class CodexJsonlSamplingTests(unittest.TestCase):
-    def test_uses_only_token_count_after_explicit_turn_model(self) -> None:
+    def test_durable_ledger_rebuilds_once_then_ingests_only_appended_usage(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "sessions"
             root.mkdir()
-            (root / "rollout.jsonl").write_text(
-                context("gpt-5.6-terra")
-                + usage(input_tokens=100, cached_input_tokens=40, output_tokens=20, reasoning_output_tokens=8, total_tokens=120)
-                + context("gpt-5.6-luna")
-                + usage(input_tokens=30, cached_input_tokens=0, output_tokens=10, reasoning_output_tokens=2, total_tokens=40)
-                + record("event_msg", {"type": "agent_message", "message": "never read"}),
+            rollout = root / "rollout-2026-08-22-ledger.jsonl"
+            rollout.write_text(
+                record("session_meta", {"thread_source": "user"})
+                + context("gpt-5.6-sol")
+                + cumulative_usage(100, 100, "2026-08-22T01:00:00Z")
+                + cumulative_usage(50, 150, "2026-08-22T01:01:00Z")
+                + cumulative_usage(20, 20, "2026-08-22T01:02:00Z"),
                 encoding="utf-8",
             )
-            state = sample_visible_rollouts(root, JsonlSampleState(), now=NOW)
+            ledger = rebuild_codex_rollout_ledger([root], timezone=timezone.utc, now=NOW)
+            checkpoint = Path(temporary) / "codex-rollout-ledger.json"
+            save_codex_rollout_ledger(checkpoint, ledger)
+            reloaded = load_codex_rollout_ledger(checkpoint)
+            with rollout.open("a", encoding="utf-8") as handle:
+                handle.write(cumulative_usage(30, 50, "2026-08-22T01:03:00Z"))
+            update = update_codex_rollout_ledger(
+                [root], reloaded, timezone=timezone.utc, now=NOW, max_scan_bytes=None,
+            )
+            repeated = update_codex_rollout_ledger(
+                [root], reloaded, timezone=timezone.utc, now=NOW, max_scan_bytes=None,
+            )
+            rollout.unlink()
+            retained = update_codex_rollout_ledger(
+                [root], reloaded, timezone=timezone.utc, now=NOW, max_scan_bytes=None,
+            )
 
-        sample = current_day_sample(state, NOW.timestamp())
-        self.assertIsNotNone(sample)
-        assert sample is not None
-        self.assertEqual(sample.events, 2)
-        self.assertEqual(sample.total_tokens, 160)
-        self.assertEqual(sample.input_tokens, 130)
-        self.assertEqual(sample.cached_input_tokens, 40)
-        self.assertEqual(sample.output_tokens, 30)
-        self.assertEqual(sample.reasoning_output_tokens, 10)
-        self.assertEqual(sample.models, {"gpt-5.6-luna": 40, "gpt-5.6-terra": 120})
-        self.assertEqual(sample.model_compositions["gpt-5.6-terra"].cached_input_tokens, 40)
+        self.assertEqual(ledger.cumulative().total_tokens, 170)
+        self.assertEqual([increment.usage["total_tokens"] for increment in update.increments], [30])
+        self.assertEqual(reloaded.cumulative().total_tokens, 200)
+        self.assertEqual(repeated.increments, ())
+        self.assertEqual(retained.increments, ())
+        self.assertEqual(reloaded.days["2026-08-22"].counter_resets, 1)
+        self.assertFalse(reloaded.partial)
+
+    def test_ledger_marker_survives_move_from_live_to_archive_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            live = base / "sessions"
+            archived = base / "archived_sessions"
+            live.mkdir()
+            archived.mkdir()
+            rollout = live / "rollout-2026-08-22-moved.jsonl"
+            rollout.write_text(
+                cumulative_usage(40, 40, "2026-08-22T03:00:00Z"), encoding="utf-8",
+            )
+            ledger = rebuild_codex_rollout_ledger([live, archived], timezone=timezone.utc, now=NOW)
+            moved = archived / rollout.name
+            rollout.replace(moved)
+            update = update_codex_rollout_ledger(
+                [live, archived], ledger, timezone=timezone.utc, now=NOW, max_scan_bytes=None,
+            )
+
+        self.assertEqual(ledger.cumulative().total_tokens, 40)
+        self.assertEqual(update.increments, ())
+        self.assertEqual(len(ledger.files), 1)
+
+    def test_invalid_ledger_schema_rebuilds_from_empty_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / "ledger.json"
+            checkpoint.write_text('{"schema":"old","days":{"2026-08-22":{"total_tokens":99}}}', encoding="utf-8")
+            ledger = load_codex_rollout_ledger(checkpoint)
+
+        self.assertIsInstance(ledger, CodexRolloutLedger)
+        self.assertEqual(ledger.days, {})
+        self.assertEqual(ledger.files, {})
+
+    def test_audit_uses_cumulative_deltas_suppresses_duplicates_and_counts_resets(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "sessions"
+            rollout = root / "2026" / "08" / "20" / "rollout.jsonl"
+            rollout.parent.mkdir(parents=True)
+            rollout.write_text(
+                record("session_meta", {"session_id": "session-1", "thread_source": "user"})
+                + context("gpt-5.6-sol")
+                + cumulative_usage(100, 100, "2026-08-22T01:00:00Z")
+                + cumulative_usage(100, 100, "2026-08-22T01:01:00Z")
+                + cumulative_usage(50, 150, "2026-08-22T01:02:00Z")
+                + cumulative_usage(20, 20, "2026-08-22T01:03:00Z"),
+                encoding="utf-8",
+            )
+            audit = audit_codex_rollouts(
+                [root], start_day=NOW.date().replace(day=22), end_day=NOW.date().replace(day=22), timezone=timezone.utc,
+            )
+
+        day = audit.days["2026-08-22"]
+        self.assertEqual(day.composition.total_tokens, 170)
+        self.assertEqual(day.composition.events, 3)
+        self.assertEqual(day.token_records, 4)
+        self.assertEqual(day.duplicate_snapshots, 1)
+        self.assertEqual(day.counter_resets, 1)
+        self.assertEqual(day.delta_last_mismatches, 0)
+        self.assertEqual(day.source_tokens, {"user": 170})
+        self.assertEqual(day.composition.models, {"gpt-5.6-sol": 170})
+
+    def test_audit_first_record_uses_last_usage_instead_of_inherited_cumulative_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "sessions"
+            root.mkdir()
+            (root / "rollout-2026-08-22-fork.jsonl").write_text(
+                record("session_meta", {
+                    "session_id": "fork-1", "thread_source": "subagent", "forked_from_id": "not-retained",
+                })
+                + context("gpt-5.6-terra")
+                + cumulative_usage(25, 1_025, "2026-08-22T02:00:00Z")
+                + cumulative_usage(30, 1_055, "2026-08-22T02:01:00Z"),
+                encoding="utf-8",
+            )
+            audit = audit_codex_rollouts(
+                [root], start_day=NOW.date().replace(day=22), end_day=NOW.date().replace(day=22), timezone=timezone.utc,
+            )
+
+        day = audit.days["2026-08-22"]
+        self.assertEqual(day.composition.total_tokens, 55)
+        self.assertEqual(day.source_tokens, {"subagent": 55})
+        self.assertEqual(day.delta_last_mismatches, 0)
+
+    def test_audit_includes_continuing_old_rollout_and_deduplicates_archived_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            live = base / "sessions"
+            archived = base / "archived_sessions"
+            live_rollout = live / "2026" / "08" / "20" / "rollout.jsonl"
+            related_rollout = live / "2026" / "08" / "20" / "related.jsonl"
+            archived_rollout = archived / "rollout-2026-08-20-copy.jsonl"
+            live_rollout.parent.mkdir(parents=True)
+            archived.mkdir()
+            payload = record("session_meta", {"thread_source": "user"}) + cumulative_usage(
+                40, 40, "2026-08-22T03:00:00Z",
+            )
+            live_rollout.write_text(payload, encoding="utf-8")
+            archived_rollout.write_text(payload, encoding="utf-8")
+            related_rollout.write_text(
+                record("session_meta", {"thread_source": "subagent"})
+                + cumulative_usage(60, 60, "2026-08-22T03:01:00Z"),
+                encoding="utf-8",
+            )
+            audit = audit_codex_rollouts(
+                [live, archived], start_day=NOW.date().replace(day=22), end_day=NOW.date().replace(day=23), timezone=timezone.utc,
+            )
+
+        self.assertEqual(audit.candidate_files, 3)
+        self.assertEqual(audit.scanned_files, 2)
+        self.assertEqual(audit.duplicate_files, 1)
+        self.assertEqual(audit.days["2026-08-22"].composition.total_tokens, 100)
 
     def test_standard_api_estimate_uses_observed_model_breakdowns_only(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary) / "sessions"
-            root.mkdir()
-            (root / "rollout.jsonl").write_text(
-                context("gpt-5.6-terra")
-                + usage(input_tokens=100, cached_input_tokens=40, output_tokens=20, reasoning_output_tokens=8, total_tokens=120)
-                + context("unknown-local-model")
-                + usage(input_tokens=30, cached_input_tokens=0, output_tokens=10, reasoning_output_tokens=2, total_tokens=40),
-                encoding="utf-8",
-            )
-            state = sample_visible_rollouts(root, JsonlSampleState(), now=NOW)
-        sample = current_day_sample(state, NOW.timestamp())
-        assert sample is not None
-        estimate = estimate_standard_api_cost({identifier: item.as_model_payload() for identifier, item in sample.model_compositions.items()})
+        estimate = estimate_standard_api_cost({
+            "gpt-5.6-terra": {
+                "input_tokens": 100, "cached_input_tokens": 40,
+                "cache_write_input_tokens": 0, "output_tokens": 20,
+                "reasoning_output_tokens": 8, "total_tokens": 120,
+            },
+            "unknown-local-model": {
+                "input_tokens": 30, "cached_input_tokens": 0,
+                "cache_write_input_tokens": 0, "output_tokens": 10,
+                "reasoning_output_tokens": 2, "total_tokens": 40,
+            },
+        })
         self.assertEqual(estimate.priced_tokens, 120)
         self.assertEqual(estimate.unpriced_tokens, 40)
         self.assertEqual(estimate.models[0].model, "gpt-5.6-terra")
@@ -110,68 +237,6 @@ class CodexJsonlSamplingTests(unittest.TestCase):
         # on the normal input leg instead of being treated as a zero-cost tier.
         self.assertEqual(estimate.priced_tokens, 2_000_000)
         self.assertAlmostEqual(estimate.total_cost_usd, 33.2)
-
-    def test_checkpoint_is_incremental_and_retains_aggregate_after_visible_file_disappears(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary) / "sessions"
-            root.mkdir()
-            rollout = root / "rollout.jsonl"
-            rollout.write_text(record("event_msg", {"type": "user_message", "message": "private prompt must never persist"}) + context("gpt-5.6-sol") + usage(
-                input_tokens=100, cached_input_tokens=80, output_tokens=10, reasoning_output_tokens=4, total_tokens=110,
-            ), encoding="utf-8")
-            checkpoint = Path(temporary) / "codex-session-events.json"
-            state = sample_visible_rollouts(root, JsonlSampleState(), now=NOW)
-            save_jsonl_sample_state(checkpoint, state)
-            reloaded = load_jsonl_sample_state(checkpoint)
-            repeated = sample_visible_rollouts(root, reloaded, now=NOW)
-            with rollout.open("a", encoding="utf-8") as handle:
-                handle.write(usage(input_tokens=50, cached_input_tokens=10, output_tokens=10, reasoning_output_tokens=0, total_tokens=60))
-            updated = sample_visible_rollouts(root, repeated, now=NOW)
-            rollout.unlink()
-            retained = sample_visible_rollouts(root, updated, now=NOW)
-
-            persisted = checkpoint.read_text(encoding="utf-8")
-
-        sample = current_day_sample(retained, NOW.timestamp())
-        self.assertIsNotNone(sample)
-        assert sample is not None
-        self.assertEqual(sample.events, 2)
-        self.assertEqual(sample.total_tokens, 170)
-        self.assertNotIn("rollout.jsonl", persisted)
-        self.assertNotIn("private prompt must never persist", persisted)
-
-    def test_incomplete_or_malformed_records_are_not_counted_or_advanced(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary) / "sessions"
-            root.mkdir()
-            rollout = root / "rollout.jsonl"
-            rollout.write_text(context("gpt-5.6-sol") + '{"type":"event_msg"', encoding="utf-8")
-            initial = sample_visible_rollouts(root, JsonlSampleState(), now=NOW)
-            with rollout.open("a", encoding="utf-8") as handle:
-                handle.write(',"timestamp":"2026-08-21T12:00:00Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0,"total_tokens":2}}}}\n')
-            completed = sample_visible_rollouts(root, initial, now=NOW)
-
-        sample = current_day_sample(completed, NOW.timestamp())
-        self.assertIsNotNone(sample)
-        assert sample is not None
-        self.assertEqual(sample.total_tokens, 2)
-
-    def test_note_exposes_estimate_boundary_without_claiming_billing(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary) / "sessions"
-            root.mkdir()
-            (root / "rollout.jsonl").write_text(context("gpt-5.6-sol") + usage(
-                input_tokens=100, cached_input_tokens=50, output_tokens=20, reasoning_output_tokens=5, total_tokens=120,
-            ), encoding="utf-8")
-            state = sample_visible_rollouts(root, JsonlSampleState(), now=NOW)
-
-        sample = current_day_sample(state, NOW.timestamp())
-        assert sample is not None
-        note = composition_note(sample, partial=False)
-        self.assertIn("visible rollout sample only", note["en"])
-        self.assertIn("不会改写 SQLite 工作负载总量", note["zh"])
-        self.assertIn("不是账单", note["zh"])
-
 
 if __name__ == "__main__":
     unittest.main()

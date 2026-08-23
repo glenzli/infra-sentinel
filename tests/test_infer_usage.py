@@ -95,7 +95,7 @@ class InferRuntimeUsageTests(unittest.TestCase):
             reference = replacement.snapshot["pricing"]["daily"]  # type: ignore[index]
             self.assertEqual(reference[0]["reference"]["kind"], "runtime-origin-aware-price-reference")
             self.assertEqual(reference[0]["reference"]["priced_tokens"], 135)
-            self.assertAlmostEqual(reference[0]["reference"]["cost_usd"], 0.025 + (100 * 5 + 10 * 30) / 1_000_000)
+            self.assertAlmostEqual(reference[0]["reference"]["cost_usd"], 0.025 + (100 * 4 + 10 * 20) / 1_000_000)
 
     def test_same_model_from_two_origins_is_upserted_separately_and_displayed_once(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

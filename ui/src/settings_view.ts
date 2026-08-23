@@ -116,7 +116,9 @@ function readForm(form: HTMLFormElement, existing: SettingsPayload): SettingsPay
     ssh_executable: field("integration-ssh-executable").value.trim(),
     opencode_executable: field("integration-opencode-executable").value.trim(),
     opencode_database: field("integration-opencode-database").value.trim(),
-    codex_database: field("integration-codex-database").value.trim(),
+    // Kept only for the current configuration-schema round trip. Codex no
+    // longer consumes a database path and the field is intentionally hidden.
+    codex_database: String(existing.integrations.codex_database ?? ""),
   };
   const remotes = remoteSources(draft);
   draft.policies = draft.policies.filter((policy) => policy.kind !== "network.daily.usage");
@@ -169,7 +171,6 @@ export function renderSettings(root: HTMLDivElement, initial: SettingsPayload, a
               <label><span>SSH executable / SSH 程序</span><input name="integration-ssh-executable" value="${escapeHtml(settings.integrations.ssh_executable)}" placeholder="Auto discover / 自动发现" /></label>
               <label><span>OpenCode executable / OpenCode 程序</span><input name="integration-opencode-executable" value="${escapeHtml(settings.integrations.opencode_executable)}" placeholder="Auto discover / 自动发现" /></label>
               <label><span>OpenCode database / OpenCode 数据库</span><input name="integration-opencode-database" value="${escapeHtml(settings.integrations.opencode_database)}" placeholder="Auto discover / 自动发现" /></label>
-              <label><span>Codex database / Codex 数据库</span><input name="integration-codex-database" value="${escapeHtml(settings.integrations.codex_database)}" placeholder="Auto discover / 自动发现" /></label>
             </div>
           </section>
           <section class="settings-section settings-panel ${activeSection === "network" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">NETWORK SOURCES</p><h2>Remote host configuration / 远端主机配置</h2></div><button class="button button--subtle" type="button" id="add-host">${icon("plus")}<span>Add VPS / 添加 VPS</span></button></div>
