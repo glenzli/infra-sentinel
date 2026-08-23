@@ -1,3 +1,4 @@
+/* Shared by hourly and daily quantitative time-bucket charts. */
 .daily-bars-frame {
   border-top: 1px dashed #dce2e8;
   padding: 8px 0 0 54px;

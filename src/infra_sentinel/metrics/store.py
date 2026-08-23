@@ -519,11 +519,14 @@ class MetricStore:
         before_epoch: float,
         *,
         offset_seconds: int = 0,
+        resource_id: str | None = None,
     ) -> dict[str, int]:
+        resource_clause = " AND resource_id = ?" if resource_id is not None else ""
+        resource_parameters: tuple[object, ...] = (resource_id,) if resource_id is not None else ()
         with self._transaction() as connection:
             row = connection.execute(
-                "SELECT MIN(observed_epoch) FROM metric_points WHERE resolution_seconds = ? AND observed_epoch < ?",
-                (source_resolution, before_epoch),
+                f"SELECT MIN(observed_epoch) FROM metric_points WHERE resolution_seconds = ? AND observed_epoch < ?{resource_clause}",
+                (source_resolution, before_epoch, *resource_parameters),
             ).fetchone()
         if row is None or row[0] is None:
             return {"source_points": 0, "target_points": 0}
@@ -534,14 +537,14 @@ class MetricStore:
         while start < before_epoch:
             end = min(before_epoch, start + chunk_seconds)
             with self._transaction(write=True) as connection:
-                rows = connection.execute("""
+                rows = connection.execute(f"""
                     SELECT observed_epoch, metric, instrument, value, unit, source_id, resource_id,
                            dimensions_json, attribution_method, confidence, estimated, sample_count,
                            minimum_value, maximum_value, last_value, last_epoch, resolution_seconds
                     FROM metric_points
-                    WHERE resolution_seconds = ? AND observed_epoch >= ? AND observed_epoch < ?
+                    WHERE resolution_seconds = ? AND observed_epoch >= ? AND observed_epoch < ?{resource_clause}
                     ORDER BY observed_epoch, metric, source_id, dimensions_json
-                """, (source_resolution, start, end)).fetchall()
+                """, (source_resolution, start, end, *resource_parameters)).fetchall()
                 if rows:
                     accumulator = MetricAccumulator(target_resolution, offset_seconds=offset_seconds)
                     for candidate in rows:
@@ -549,8 +552,8 @@ class MetricStore:
                     buckets = accumulator.buckets()
                     self._write_buckets_on(connection, buckets)
                     deleted = connection.execute(
-                        "DELETE FROM metric_points WHERE resolution_seconds = ? AND observed_epoch >= ? AND observed_epoch < ?",
-                        (source_resolution, start, end),
+                        f"DELETE FROM metric_points WHERE resolution_seconds = ? AND observed_epoch >= ? AND observed_epoch < ?{resource_clause}",
+                        (source_resolution, start, end, *resource_parameters),
                     ).rowcount
                     source_points += max(0, int(deleted))
                     target_points += len(buckets)
@@ -565,19 +568,41 @@ class MetricStore:
             with self._transaction() as connection:
                 row = connection.execute("SELECT value FROM store_metadata WHERE key = ?", (MAINTENANCE_EPOCH,)).fetchone()
             previous = float(row[0]) if row is not None else 0.0
-            if not force and now - previous < MAINTENANCE_INTERVAL_SECONDS:
+            current_day = datetime.fromtimestamp(now).astimezone().date()
+            previous_day = datetime.fromtimestamp(previous).astimezone().date() if previous > 0 else None
+            if not force and now - previous < MAINTENANCE_INTERVAL_SECONDS and previous_day == current_day:
                 return {"status": "current", "last_epoch": previous}
 
             hot_cutoff = bucket_start(now, HOT_RESOLUTION_SECONDS)
-            hourly_cutoff = bucket_start(now - HOT_RETENTION_SECONDS, HOURLY_RESOLUTION_SECONDS)
             local_midnight = datetime.fromtimestamp(now).astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+            local_midnight_epoch = local_midnight.timestamp()
+            ai_hourly_cutoff = bucket_start(local_midnight_epoch, HOURLY_RESOLUTION_SECONDS)
+            hourly_cutoff = bucket_start(now - HOT_RETENTION_SECONDS, HOURLY_RESOLUTION_SECONDS)
             daily_offset = int(local_midnight.timestamp()) % DAILY_RESOLUTION_SECONDS
+            ai_daily_cutoff = bucket_start(
+                local_midnight_epoch,
+                DAILY_RESOLUTION_SECONDS,
+                daily_offset,
+            )
             daily_cutoff = bucket_start(
                 now - HOURLY_RETENTION_SECONDS,
                 DAILY_RESOLUTION_SECONDS,
                 daily_offset,
             )
             raw = self._compact_resolution(0, HOT_RESOLUTION_SECONDS, hot_cutoff)
+            ai_hourly = self._compact_resolution(
+                HOT_RESOLUTION_SECONDS,
+                HOURLY_RESOLUTION_SECONDS,
+                ai_hourly_cutoff,
+                resource_id="ai_usage",
+            )
+            ai_daily = self._compact_resolution(
+                HOURLY_RESOLUTION_SECONDS,
+                DAILY_RESOLUTION_SECONDS,
+                ai_daily_cutoff,
+                offset_seconds=daily_offset,
+                resource_id="ai_usage",
+            )
             hourly = self._compact_resolution(HOT_RESOLUTION_SECONDS, HOURLY_RESOLUTION_SECONDS, hourly_cutoff)
             daily = self._compact_resolution(
                 HOURLY_RESOLUTION_SECONDS,
@@ -585,6 +610,14 @@ class MetricStore:
                 daily_cutoff,
                 offset_seconds=daily_offset,
             )
+            hourly = {
+                key: hourly[key] + ai_hourly[key]
+                for key in ("source_points", "target_points")
+            }
+            daily = {
+                key: daily[key] + ai_daily[key]
+                for key in ("source_points", "target_points")
+            }
             with self._transaction(write=True) as connection:
                 connection.execute(
                     "INSERT OR REPLACE INTO store_metadata(key, value) VALUES (?, ?)",

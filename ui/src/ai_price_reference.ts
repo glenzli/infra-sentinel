@@ -10,6 +10,8 @@ export type PriceReference = {
   byModel: Map<string, number>;
   byDay: Map<number, number>;
   byDayModel: Map<number, Map<string, number>>;
+  byBucket: Map<number, number>;
+  byBucketModel: Map<number, Map<string, number>>;
 };
 
 type SampleRate = { costUsd: number; pricedTokens: number };
@@ -59,6 +61,14 @@ function addDayModelValue(target: Map<number, Map<string, number>>, day: number,
   target.set(day, models);
 }
 
+function addSampleRate(target: Map<string, SampleRate>, key: string, costUsd: number, pricedTokens: number): void {
+  if (!key || costUsd <= 0 || pricedTokens <= 0) return;
+  const rate = target.get(key) ?? { costUsd: 0, pricedTokens: 0 };
+  rate.costUsd += costUsd;
+  rate.pricedTokens += pricedTokens;
+  target.set(key, rate);
+}
+
 /**
  * Project daily source references onto the selected local Token window.
  *
@@ -82,6 +92,8 @@ export function projectPriceReference(
   const byDay = new Map<number, number>();
   const byDayModel = new Map<number, Map<string, number>>();
   const codexRates = new Map<string, SampleRate>();
+  const sourceRates = new Map<string, SampleRate>();
+  const sourceModelRates = new Map<string, Map<string, SampleRate>>();
 
   for (const source of providerSources) {
     const sourceId = String(source.source_id ?? "");
@@ -91,7 +103,7 @@ export function projectPriceReference(
       if (epoch === undefined || epoch < since || epoch > until) continue;
       const reference = asRecord(row.reference);
       const kind = String(reference.kind ?? "");
-      if (sourceId === "codex" && kind === "sampled-standard-api-projection") {
+      if (sourceId === "codex" && kind === "local-rollout-standard-api-projection") {
         for (const model of asArray(reference.models)) {
           const id = canonicalModelId(model.id);
           if (!id) continue;
@@ -105,6 +117,7 @@ export function projectPriceReference(
       const tokens = number(reference.priced_tokens);
       if (!kind || tokens <= 0) continue;
       const cost = number(reference.cost_usd);
+      addSampleRate(sourceRates, sourceId, cost, tokens);
       costUsd += cost;
       pricedTokens += tokens;
       unpricedTokens += number(reference.unpriced_tokens);
@@ -114,7 +127,11 @@ export function projectPriceReference(
       for (const model of asArray(reference.models)) {
         const id = canonicalModelId(model.id);
         const modelCost = number(model.cost_usd);
+        const modelTokens = number(model.priced_tokens);
         if (!id || modelCost <= 0) continue;
+        const modelRates = sourceModelRates.get(sourceId) ?? new Map<string, SampleRate>();
+        addSampleRate(modelRates, id, modelCost, modelTokens);
+        sourceModelRates.set(sourceId, modelRates);
         attributedCost += modelCost;
         addValue(byModel, id, modelCost);
         addDayModelValue(byDayModel, epoch, id, modelCost);
@@ -164,5 +181,43 @@ export function projectPriceReference(
       labels.add("Codex");
     }
   }
-  return pricedTokens > 0 ? { costUsd, pricedTokens, unpricedTokens, sources: [...labels], byModel, byDay, byDayModel } : undefined;
+  const byBucket = new Map<number, number>();
+  const byBucketModel = new Map<number, Map<string, number>>();
+  if (range === "today") {
+    for (const interval of usage.intervals) {
+      const epoch = Math.floor(interval.epoch / window.bucketSeconds) * window.bucketSeconds;
+      const modelRates = interval.source === "codex" ? codexRates : sourceModelRates.get(interval.source);
+      const sourceRate = sourceRates.get(interval.source);
+      let intervalCost = 0;
+      let attributedTokens = 0;
+      let unattributedTokens = 0;
+      for (const [rawId, tokens] of interval.models) {
+        const id = canonicalModelId(rawId);
+        if (id === "__unattributed__" || id === "__priced_unattributed__") {
+          unattributedTokens += tokens;
+          continue;
+        }
+        attributedTokens += tokens;
+        const rate = modelRates?.get(id);
+        if (!rate?.pricedTokens) continue;
+        const modelCost = tokens * rate.costUsd / rate.pricedTokens;
+        intervalCost += modelCost;
+        addDayModelValue(byBucketModel, epoch, id, modelCost);
+      }
+      const fallbackTokens = unattributedTokens + Math.max(0, interval.total - attributedTokens - unattributedTokens);
+      if (fallbackTokens > 0 && sourceRate?.pricedTokens) {
+        const fallbackCost = fallbackTokens * sourceRate.costUsd / sourceRate.pricedTokens;
+        intervalCost += fallbackCost;
+        addDayModelValue(byBucketModel, epoch, "__priced_unattributed__", fallbackCost);
+      }
+      addValue(byBucket, epoch, intervalCost);
+    }
+  } else {
+    for (const [epoch, value] of byDay) byBucket.set(epoch, value);
+    for (const [epoch, models] of byDayModel) byBucketModel.set(epoch, new Map(models));
+  }
+  return pricedTokens > 0 ? {
+    costUsd, pricedTokens, unpricedTokens, sources: [...labels],
+    byModel, byDay, byDayModel, byBucket, byBucketModel,
+  } : undefined;
 }

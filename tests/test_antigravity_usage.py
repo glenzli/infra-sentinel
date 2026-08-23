@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
+import os
 import sqlite3
 import sys
 import tempfile
@@ -45,7 +46,7 @@ def _field_bytes(field: int, value: bytes) -> bytes:
 
 def _generation(
     *,
-    timestamp_seconds: int,
+    timestamp_seconds: int | None,
     model: str | None,
     display: str | None,
     response_id: str,
@@ -63,9 +64,11 @@ def _generation(
         _field_varint(10, reasoning),
         _field_bytes(11, response_id.encode("utf-8")),
     ))
-    timestamp = _field_varint(1, timestamp_seconds) + _field_varint(2, 0)
-    generation_timestamp = _field_bytes(4, timestamp)
-    chat = _field_bytes(4, usage) + _field_bytes(9, generation_timestamp)
+    chat = _field_bytes(4, usage)
+    if timestamp_seconds is not None:
+        timestamp = _field_varint(1, timestamp_seconds) + _field_varint(2, 0)
+        generation_timestamp = _field_bytes(4, timestamp)
+        chat += _field_bytes(9, generation_timestamp)
     if model is not None:
         chat += _field_bytes(19, model.encode("utf-8"))
     if display is not None:
@@ -117,6 +120,7 @@ class AntigravityUsageTests(unittest.TestCase):
         self.assertEqual((usage.input_tokens, usage.cache_read_tokens, usage.output_tokens, usage.reasoning_tokens), (410, 500, 50, 10))
         self.assertEqual(usage.total_tokens, 970)
         self.assertEqual(usage.generations, 2)
+        self.assertEqual(sum(values.total_tokens for values in history.hours[timestamp // 3_600 * 3_600].values()), 970)
 
     def test_multiple_stores_deduplicate_response_ids_and_skip_oversized_metadata(self) -> None:
         timestamp = int(datetime(2026, 8, 22, 12).timestamp())
@@ -166,6 +170,8 @@ class AntigravityUsageTests(unittest.TestCase):
         self.assertEqual(result.snapshot["usage"]["cumulative"]["tokens"], 840)
         self.assertEqual(result.snapshot["models"][0]["id"], "gemini-3.7-flash")
         self.assertEqual(result.snapshot["history"]["daily"][0]["tokens"], 840)
+        self.assertEqual(result.snapshot["history"]["hourly"][0]["tokens"], 840)
+        self.assertEqual(result.snapshot["history"]["hourly_unattributed_tokens"], 0)
         daily_reference = result.snapshot["pricing"]["daily"][0]["reference"]
         self.assertEqual(daily_reference["kind"], "catalog-text-api-reference")
         self.assertAlmostEqual(daily_reference["cost_usd"], 0.0004125)
@@ -174,6 +180,34 @@ class AntigravityUsageTests(unittest.TestCase):
         self.assertAlmostEqual(next(item for item in pricing["metrics"] if item["id"] == "antigravity-api-today")["value"], 0.0004125)
         self.assertNotIn("private prompt", repr(result.snapshot))
         self.assertEqual(result.points, ())
+
+    def test_missing_generation_time_is_kept_as_estimated_current_start_bucket(self) -> None:
+        epoch = datetime(2026, 8, 22, 12).timestamp()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            database = root / "conversation.db"
+            _conversation(database, [
+                _generation(
+                    timestamp_seconds=int(epoch), model="gemini-3.7-flash", display=None,
+                    response_id="timed", system=10, input_tokens=20, cache_read=0,
+                    output_tokens=5, reasoning=0,
+                ),
+                _generation(
+                    timestamp_seconds=None, model="gemini-3.7-flash", display=None,
+                    response_id="undated", system=4, input_tokens=6, cache_read=0,
+                    output_tokens=3, reasoning=0,
+                ),
+            ])
+            os.utime(database, (epoch, epoch))
+            result = AntigravityUsageCollector(
+                conversations_finder=lambda: root,
+                poll_seconds=1,
+            ).collect(CollectorContext({"epoch": epoch}, {}))
+
+        self.assertEqual(result.snapshot["usage"]["today"]["tokens"], 48)
+        self.assertEqual(result.snapshot["history"]["hourly"][0]["tokens"], 35)
+        self.assertEqual(result.snapshot["history"]["hourly_unattributed_tokens"], 13)
+        self.assertEqual(result.snapshot["usage"]["today"]["started_at"], datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds"))
 
     def test_exact_gemini_price_reference_rejects_unknown_model_ids(self) -> None:
         estimate = estimate_antigravity_text_api_cost({

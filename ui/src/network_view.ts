@@ -2,7 +2,7 @@ import "./network_view.css";
 import { AgentProjection, ResourceProjection, SourceProjection } from "./bridge";
 import { asArray, asRecord, formatBytes, number } from "./format";
 import { tr } from "./i18n";
-import { DailyBarBucket, DailyBarSeries, renderDailyBarChart } from "./daily_bar_chart";
+import { TimeBucketBarBucket, TimeBucketBarSeries, renderTimeBucketBarChart } from "./time_bucket_bar_chart";
 import { renderDailyActivityCalendar } from "./daily_activity_calendar";
 import { NetworkAnalysisData, NetworkAnalysisSnapshot, NetworkHistoryVisual, NetworkTimeRange, NetworkViewMode, networkPathTotals } from "./network_analysis";
 import { AttentionDiagnostic, renderAttentionDiagnostics } from "./attention_diagnostics";
@@ -172,13 +172,13 @@ function billingHistory(analysis: NetworkAnalysisData, remoteServers: Record<str
   const ranked = [...sourceTotals.entries()].sort((left, right) => right[1] - left[1]);
   const visible = ranked.slice(0, 4).map(([id]) => id);
   const hasOther = ranked.length > visible.length;
-  const series: DailyBarSeries[] = visible.map((id, index) => ({
+  const series: TimeBucketBarSeries[] = visible.map((id, index) => ({
     id,
     label: hostLabels.get(id.replace(/^vps:/, "")) ?? id.replace(/^vps:/, ""),
     color: TRAFFIC_COLORS[index],
   }));
   if (hasOther) series.push({ id: "__other_vps__", label: tr("Other VPS", "其他 VPS"), color: "#7b8794" });
-  const buckets: DailyBarBucket[] = [...valuesByBucket.entries()].sort(([left], [right]) => left - right).map(([epoch, values]) => {
+  const buckets: TimeBucketBarBucket[] = [...valuesByBucket.entries()].sort(([left], [right]) => left - right).map(([epoch, values]) => {
     if (!hasOther) return { epoch, values };
     const normalized = new Map(values);
     for (const [sourceId, value] of values) {
@@ -199,7 +199,7 @@ function billingHistory(analysis: NetworkAnalysisData, remoteServers: Record<str
       footnote: tr("Each cell is one day. Darker cells mean relatively higher billable traffic; hover or focus a cell for its host breakdown. Daily notice and critical levels remain independent per host.", "每格代表一天；颜色越深表示该日相对账单流量越高，悬停或点选可查看主机构成。每日提醒与严重阈值仍由每台主机独立判断。"),
     });
   }
-  return renderDailyBarChart(series, buckets, {
+  return renderTimeBucketBarChart(series, buckets, {
     title: tr("VPS billable usage", "VPS 账单用量"),
     detail: `${rangeLabel(range)} · ${tr("all configured hosts", "全部已配置主机")}`,
     ariaLabel: tr("Billable traffic composition across configured VPS hosts", "已配置 VPS 主机的账单流量构成"),

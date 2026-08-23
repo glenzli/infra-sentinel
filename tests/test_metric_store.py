@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 import sys
 import tempfile
@@ -319,6 +320,50 @@ class MetricStoreTests(unittest.TestCase):
                     )
                 ]
             self.assertEqual(resolutions, [DAILY_RESOLUTION_SECONDS, HOURLY_RESOLUTION_SECONDS])
+
+    def test_ai_history_keeps_current_day_hot_and_rolls_prior_days_to_daily(self) -> None:
+        day = DAILY_RESOLUTION_SECONDS
+        now = 200 * day + 40_000
+        accumulator = MetricAccumulator(HOT_RESOLUTION_SECONDS)
+        accumulator.add_points((
+            MetricPoint(
+                observed_at="2026-08-23T12:00:00+08:00", observed_epoch=now - day,
+                metric="ai.tokens.total", instrument="counter", value=11, unit="tokens",
+                source_id="codex", resource_id="ai_usage",
+            ),
+            MetricPoint(
+                observed_at="2026-08-24T10:00:00+08:00", observed_epoch=now - 1_000,
+                metric="ai.tokens.total", instrument="counter", value=17, unit="tokens",
+                source_id="codex", resource_id="ai_usage",
+            ),
+        ))
+        with tempfile.TemporaryDirectory() as temporary:
+            store = MetricStore(Path(temporary))
+            store.write_buckets(accumulator.buckets())
+
+            store.maintain_history(now_epoch=now, force=True)
+
+            with store._transaction() as connection:
+                resolutions = [
+                    int(row[0])
+                    for row in connection.execute(
+                        "SELECT resolution_seconds FROM metric_points ORDER BY observed_epoch"
+                    )
+                ]
+        self.assertEqual(resolutions, [DAILY_RESOLUTION_SECONDS, HOT_RESOLUTION_SECONDS])
+
+    def test_history_maintenance_runs_after_local_day_rollover(self) -> None:
+        local_midnight = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+        first_run = (local_midnight + timedelta(hours=23, minutes=30)).timestamp()
+        with tempfile.TemporaryDirectory() as temporary:
+            store = MetricStore(Path(temporary))
+            store.maintain_history(now_epoch=first_run, force=True)
+
+            same_day = store.maintain_history(now_epoch=first_run + 10 * 60)
+            next_day = store.maintain_history(now_epoch=first_run + 60 * 60)
+
+        self.assertEqual(same_day["status"], "current")
+        self.assertEqual(next_day["status"], "compacted")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ export type UsageInterval = {
   source: string;
   total: number;
   models: Map<string, number>;
+  estimated: boolean;
 };
 
 export type ProjectedUsage = {
@@ -31,7 +32,10 @@ function rawIntervals(points: Record<string, unknown>[]): UsageInterval[] {
     const source = String(point.source_id || "unknown");
     if (!epoch) continue;
     const key = `${epoch}:${source}`;
-    const interval = intervals.get(key) ?? { epoch, source, total: 0, models: new Map(), rawModels: new Map() };
+    const interval = intervals.get(key) ?? {
+      epoch, source, total: 0, models: new Map(), rawModels: new Map(), estimated: false,
+    };
+    interval.estimated ||= point.estimated === true;
     const model = canonicalModelId(asRecord(point.dimensions).model);
     if (model) interval.rawModels.set(model, (interval.rawModels.get(model) ?? 0) + number(point.value));
     else interval.total += number(point.value);
@@ -45,7 +49,7 @@ function rawIntervals(points: Record<string, unknown>[]): UsageInterval[] {
     const attributed = [...models.values()].reduce((sum, value) => sum + value, 0);
     const residual = Math.max(0, authoritativeTotal - attributed);
     if (residual) models.set("__unattributed__", residual);
-    return { epoch: interval.epoch, source: interval.source, total: authoritativeTotal, models };
+    return { epoch: interval.epoch, source: interval.source, total: authoritativeTotal, models, estimated: interval.estimated };
   }).sort((left, right) => left.epoch - right.epoch || left.source.localeCompare(right.source));
 }
 
@@ -96,7 +100,48 @@ function dailyHistory(
       }
       const attributed = [...models.values()].reduce((sum, value) => sum + value, 0);
       if (attributed < total) models.set("__unattributed__", total - attributed);
-      intervals.push({ epoch, source: sourceId, total, models });
+      intervals.push({ epoch, source: sourceId, total, models, estimated: false });
+    }
+  }
+  return { intervals, availableSources };
+}
+
+function hourlyHistory(
+  providerSources: Record<string, unknown>[],
+  window: AnalysisTimeWindow,
+): { intervals: UsageInterval[]; availableSources: Set<string> } {
+  const intervals: UsageInterval[] = [];
+  const availableSources = new Set<string>();
+  for (const source of providerSources) {
+    const sourceId = String(source.source_id ?? "");
+    const history = asRecord(source.history);
+    if (!sourceId || history.hourly_available !== true) continue;
+    availableSources.add(sourceId);
+    for (const row of asArray(history.hourly)) {
+      const epoch = number(row.epoch);
+      if (!epoch || epoch < window.sinceEpoch || epoch > window.untilEpoch) continue;
+      const total = number(row.tokens);
+      const models = new Map<string, number>();
+      for (const model of asArray(row.models)) {
+        const id = canonicalModelId(model.id);
+        if (id) models.set(id, (models.get(id) ?? 0) + number(model.tokens));
+      }
+      const attributed = [...models.values()].reduce((sum, value) => sum + value, 0);
+      if (attributed < total) models.set("__unattributed__", total - attributed);
+      intervals.push({ epoch, source: sourceId, total, models, estimated: row.estimated === true });
+    }
+    const unattributed = number(history.hourly_unattributed_tokens);
+    if (unattributed > 0) {
+      const today = asRecord(asRecord(source.usage).today);
+      const started = new Date(String(today.started_at ?? ""));
+      const startedEpoch = Number.isNaN(started.getTime()) ? window.sinceEpoch : started.getTime() / 1_000;
+      const epoch = Math.floor(startedEpoch / window.bucketSeconds) * window.bucketSeconds;
+      const existing = intervals.find((interval) => interval.source === sourceId && interval.epoch === epoch);
+      const row = existing ?? { epoch, source: sourceId, total: 0, models: new Map<string, number>(), estimated: true };
+      if (!existing) intervals.push(row);
+      row.total += unattributed;
+      row.estimated = true;
+      row.models.set("__unattributed__", (row.models.get("__unattributed__") ?? 0) + unattributed);
     }
   }
   return { intervals, availableSources };
@@ -131,9 +176,11 @@ function addResidual(
 ): void {
   let residual = Math.max(0, target.tokens - acceptedTotal);
   if (!residual) return;
-  const row = intervals[intervals.length - 1] ?? { epoch: fallbackEpoch, source, total: 0, models: new Map<string, number>() };
-  if (!intervals.length) intervals.push(row);
+  const row = intervals.find((interval) => interval.epoch === fallbackEpoch)
+    ?? { epoch: fallbackEpoch, source, total: 0, models: new Map<string, number>(), estimated: true };
+  if (!intervals.includes(row)) intervals.push(row);
   row.total += residual;
+  row.estimated = true;
   if (remainingModels?.size) {
     for (const [model, value] of remainingModels) {
       const assigned = Math.min(residual, value);
@@ -160,8 +207,14 @@ function resolvedIntervals(
   window: AnalysisTimeWindow,
 ): UsageInterval[] {
   let intervals = rawIntervals(points);
+  const nativeHourlySources = new Set<string>();
   if (window.bucketSeconds === 86_400) {
     const history = dailyHistory(providerSources, window);
+    intervals = intervals.filter((interval) => !history.availableSources.has(interval.source));
+    intervals.push(...history.intervals);
+  } else if (window.bucketSeconds === 3_600) {
+    const history = hourlyHistory(providerSources, window);
+    for (const source of history.availableSources) nativeHourlySources.add(source);
     intervals = intervals.filter((interval) => !history.availableSources.has(interval.source));
     intervals.push(...history.intervals);
   }
@@ -185,12 +238,18 @@ function resolvedIntervals(
         source,
         total: target.tokens,
         models: new Map(target.models),
+        estimated: false,
       });
       todayBySource.delete(source);
       continue;
     }
     const candidates = (todayBySource.get(source) ?? [])
-      .filter((interval) => window.bucketSeconds === 86_400 || !target.startedEpoch || interval.epoch >= target.startedEpoch)
+      .filter((interval) => (
+        window.bucketSeconds === 86_400
+        || nativeHourlySources.has(source)
+        || !target.startedEpoch
+        || interval.epoch >= target.startedEpoch
+      ))
       .sort((left, right) => left.epoch - right.epoch);
     const accepted: UsageInterval[] = [];
     let acceptedTotal = 0;
@@ -208,7 +267,8 @@ function resolvedIntervals(
     }
     // The only un-attributed component is the currently unpersisted tail, not
     // a retrospective reclassification of already observed model increments.
-    addResidual(accepted, target, acceptedTotal, undefined, window.untilEpoch, source);
+    const anchor = Math.floor((target.startedEpoch ?? window.sinceEpoch) / window.bucketSeconds) * window.bucketSeconds;
+    addResidual(accepted, target, acceptedTotal, undefined, anchor, source);
     past.push(...accepted);
     todayBySource.delete(source);
   }
@@ -330,7 +390,7 @@ export function completeDailyBuckets(
   return buckets;
 }
 
-export function completeRateEpochs(window: AnalysisTimeWindow): number[] {
+export function completeIntervalEpochs(window: AnalysisTimeWindow): number[] {
   const bucket = window.bucketSeconds;
   const start = Math.floor(window.sinceEpoch / bucket) * bucket;
   const end = Math.floor(window.untilEpoch / bucket) * bucket;

@@ -22,7 +22,7 @@ from infra_sentinel.resources.ai.codex_sampling import (  # noqa: E402
 from infra_sentinel.resources.ai.codex_pricing import estimate_standard_api_cost  # noqa: E402
 
 
-NOW = datetime(2026, 8, 21, 12, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 22, 12, tzinfo=timezone.utc)
 
 
 def record(record_type: str, payload: dict[str, object], timestamp: str = "2026-08-21T12:00:00Z") -> str:
@@ -92,8 +92,16 @@ class CodexJsonlSamplingTests(unittest.TestCase):
             )
 
         self.assertEqual(ledger.cumulative().total_tokens, 170)
+        self.assertEqual(
+            {int(hour): usage.composition.total_tokens for hour, usage in ledger.hours.items()},
+            {
+                int(datetime(2026, 8, 22, 0, tzinfo=timezone.utc).timestamp()): 100,
+                int(datetime(2026, 8, 22, 1, tzinfo=timezone.utc).timestamp()): 70,
+            },
+        )
         self.assertEqual([increment.usage["total_tokens"] for increment in update.increments], [30])
         self.assertEqual(reloaded.cumulative().total_tokens, 200)
+        self.assertEqual(reloaded.hours[str(int(datetime(2026, 8, 22, 1, tzinfo=timezone.utc).timestamp()))].composition.total_tokens, 100)
         self.assertEqual(repeated.increments, ())
         self.assertEqual(retained.increments, ())
         self.assertEqual(reloaded.days["2026-08-22"].counter_resets, 1)

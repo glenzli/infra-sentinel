@@ -18,7 +18,8 @@ from infra_sentinel.core.collectors import CollectorContext  # noqa: E402
 from infra_sentinel.resources.ai.opencode import (  # noqa: E402
     OPENCODE_COUNTER_SCHEMA, OpenCodeUsageCollector, discover_opencode,
     discover_opencode_desktop_database, parse_opencode_stats,
-    read_opencode_desktop_daily_history, read_opencode_desktop_stats,
+    read_opencode_desktop_daily_history, read_opencode_desktop_hourly_usage,
+    read_opencode_desktop_stats,
 )
 
 
@@ -114,12 +115,23 @@ class OpenCodeStatsTests(unittest.TestCase):
         self.assertEqual(calls, [["/test/opencode", "stats", "--days", "0", "--models"], ["/test/opencode", "stats", "--days", "0", "--models"]])
         self.assertEqual(first.status, "ok")
         self.assertEqual(first.snapshot["usage"]["today"]["tokens"], 11_800)  # type: ignore[index]
-        self.assertEqual(sum(point.value for point in first.points if point.metric == "ai.tokens.total"), 11_800)
-        self.assertEqual(sum(point.value for point in first.points if point.metric == "ai.tokens.input"), 8_000)
+        self.assertEqual(
+            [point.value for point in first.points if point.metric == "ai.tokens.total" and point.dimensions.get("scope") == "all"],
+            [11_800],
+        )
+        self.assertEqual(
+            [point.value for point in first.points if point.metric == "ai.tokens.input" and point.dimensions.get("scope") == "all"],
+            [8_000],
+        )
+        self.assertTrue(all(point.estimated for point in first.points))
         self.assertEqual(cached.points, ())
         self.assertEqual(later.points, ())
         self.assertEqual(
-            {point.dimensions.get("model") for point in first.points if point.metric == "ai.tokens.input"},
+            {
+                point.dimensions.get("model")
+                for point in first.points
+                if point.metric == "ai.tokens.input" and point.dimensions.get("model")
+            },
             {"openai/gpt-5.6", "deepseek/deepseek-chat"},
         )
 
@@ -273,6 +285,30 @@ class OpenCodeStatsTests(unittest.TestCase):
         self.assertAlmostEqual(sum(item["reference"]["cost_usd"] for item in pricing), 0.16)
         self.assertEqual(sum(item["reference"]["priced_tokens"] for item in pricing), 260)
 
+    def test_desktop_database_exposes_exact_current_day_hour_buckets(self) -> None:
+        first_hour = datetime(2026, 8, 9, 9, tzinfo=timezone.utc).timestamp()
+        second_hour = first_hour + 3_600
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "opencode.db"
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute("CREATE TABLE message (session_id TEXT, time_created INTEGER, data TEXT)")
+                connection.executemany("INSERT INTO message VALUES (?, ?, ?)", [
+                    ("one", int(first_hour * 1_000), json.dumps({
+                        "role": "assistant", "providerID": "openai", "modelID": "gpt-5.6",
+                        "tokens": {"input": 10, "output": 2},
+                    })),
+                    ("two", int(second_hour * 1_000), json.dumps({
+                        "role": "assistant", "providerID": "openai", "modelID": "gpt-5.6",
+                        "tokens": {"input": 20, "output": 3},
+                    })),
+                ])
+                connection.commit()
+            history = read_opencode_desktop_hourly_usage(database, second_hour)
+
+        self.assertEqual([(row.epoch, row.total_tokens) for row in history], [
+            (int(first_hour), 12), (int(second_hour), 23),
+        ])
+
     def test_snapshot_keeps_lifetime_models_when_the_desktop_database_is_available(self) -> None:
         stats = parse_opencode_stats(STATS_OUTPUT)
         collector = OpenCodeUsageCollector(desktop_database_finder=lambda: None)
@@ -307,8 +343,12 @@ class OpenCodeStatsTests(unittest.TestCase):
             stats, "2026-08-09T12:00:00+08:00", "cli-session-summary", None, None,
         )
 
-        self.assertEqual(available["history"], {"daily_available": True, "daily": []})
-        self.assertEqual(unavailable["history"], {"daily_available": False, "daily": []})
+        self.assertTrue(available["history"]["daily_available"])
+        self.assertEqual(available["history"]["daily"], [])
+        self.assertFalse(available["history"]["hourly_available"])
+        self.assertFalse(unavailable["history"]["daily_available"])
+        self.assertEqual(unavailable["history"]["daily"], [])
+        self.assertFalse(unavailable["history"]["hourly_available"])
         self.assertEqual(available["pricing"], {"daily_available": True, "daily": []})
         self.assertEqual(unavailable["pricing"], {"daily_available": False, "daily": []})
 

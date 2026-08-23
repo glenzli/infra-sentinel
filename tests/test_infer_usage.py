@@ -67,6 +67,11 @@ class InferRuntimeUsageTests(unittest.TestCase):
 
             snapshot = first.snapshot
             self.assertEqual(first.status, "ok")
+            self.assertEqual(
+                [point.value for point in first.points if point.metric == "ai.tokens.total" and point.dimensions.get("scope")],
+                [129],
+            )
+            self.assertTrue(all(point.estimated for point in first.points))
             self.assertEqual(snapshot["usage"]["today"]["tokens"], 129)  # type: ignore[index]
             self.assertEqual(snapshot["usage"]["cumulative"]["tokens"], 129)  # type: ignore[index]
             self.assertEqual({item["id"] for item in snapshot["models"]}, {"gpt-5.6-sol", "deepseek-v4-flash", "luna"})  # type: ignore[index]
@@ -79,6 +84,7 @@ class InferRuntimeUsageTests(unittest.TestCase):
                 model("luna", "other", input_tokens=9, output_tokens=1, total_tokens=10, cost_usd=0.01),
             )))
             self.assertEqual(repeated.snapshot["usage"]["today"]["tokens"], 129)  # type: ignore[index]
+            self.assertEqual(repeated.points, ())
 
             replacement = collector.collect(CollectorContext({"epoch": EPOCH + 30}, {}, facilities(
                 model("gpt-5.6-sol", "codex", input_tokens=100, output_tokens=10, total_tokens=110, cost_usd=1.1),
@@ -86,6 +92,10 @@ class InferRuntimeUsageTests(unittest.TestCase):
             )))
             self.assertEqual(replacement.snapshot["usage"]["today"]["tokens"], 135)  # type: ignore[index]
             self.assertEqual(replacement.snapshot["usage"]["cumulative"]["tokens"], 135)  # type: ignore[index]
+            self.assertEqual(
+                [point.value for point in replacement.points if point.metric == "ai.tokens.total" and point.dimensions.get("scope")],
+                [6],
+            )
             self.assertEqual(
                 replacement.snapshot["history"]["daily"],  # type: ignore[index]
                 [{"date": "2026-08-13", "tokens": 135, "models": [

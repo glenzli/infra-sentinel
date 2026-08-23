@@ -2,14 +2,14 @@ import "./ai_usage_view.css";
 import { AgentProjection, ResourceProjection, SourceProjection } from "./bridge";
 import { asArray, asRecord, formatTokens, number } from "./format";
 import { currentLocale, tr } from "./i18n";
-import { DailyBarBucket, DailyBarSeries, renderDailyBarChart } from "./daily_bar_chart";
+import { TimeBucketBarBucket, TimeBucketBarSeries, renderTimeBucketBarChart } from "./time_bucket_bar_chart";
 import { renderDailyActivityCalendar } from "./daily_activity_calendar";
 import { AiAnalysisSnapshot, AiHistoryVisual, AiModelMeasure, AiTimeRange, AiViewMode } from "./ai_analysis";
 import { AnalysisTimeWindow } from "./analysis_time";
 import { AttentionDiagnostic, renderAttentionDiagnostics } from "./attention_diagnostics";
 import {
   ProjectedUsage, UsageInterval, aggregateByModel, aggregateBySource, canonicalModelId, completeDailyBuckets,
-  completeRateEpochs, projectUsage,
+  completeIntervalEpochs, projectUsage,
 } from "./ai_usage_series";
 import { PriceReference, projectPriceReference } from "./ai_price_reference";
 
@@ -67,7 +67,7 @@ function windowOf(source: Record<string, unknown>, window: "today" | "cumulative
 function renderControls(snapshot: AiAnalysisSnapshot): string {
   const modes: Array<[AiViewMode, string, string]> = [
     ["overview", tr("Usage overview", "用量总览"), tr("Totals and source composition", "总量与来源构成")],
-    ["models", tr("Model analysis", "模型分析"), tr("Model share and rate", "模型占比与速率")],
+    ["models", tr("Model analysis", "模型分析"), tr("Model share and time buckets", "模型占比与分时用量")],
     ["activity", tr("Agent activity", "Agent 活动"), tr("Provider-specific diagnostics", "来源特有诊断")],
   ];
   const ranges: Array<[AiTimeRange, string]> = [
@@ -103,33 +103,43 @@ function horizontalBars(
   }).join("") || `<div class="chart-empty">${tr("Waiting for recorded Token increments.", "等待已记录的 Token 增量。")}</div>`}</div></article>`;
 }
 
-function dailyHistory(
+function hourLabel(epoch: number): string {
+  return new Date(epoch * 1_000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function usageHistory(
   intervals: UsageInterval[], dimension: "source" | "model", range: AiTimeRange,
   window: AnalysisTimeWindow, visual: AiHistoryVisual, undatedTotal = 0, reference?: PriceReference,
 ): string {
+  const hourly = range === "today";
   const totals = dimension === "source" ? aggregateBySource(intervals) : aggregateByModel(intervals);
   const visible = [...totals.entries()].sort((left, right) => right[1] - left[1]).slice(0, 5).map(([id]) => id);
   const colors = dimension === "source" ? SOURCE_COLORS : MODEL_COLORS;
-  const series: DailyBarSeries[] = visible.map((id, index) => ({
+  const series: TimeBucketBarSeries[] = visible.map((id, index) => ({
     id, label: dimension === "model" ? modelLabel(id) : id, color: colors[index % colors.length],
   }));
   const hasOther = totals.size > visible.length;
   if (hasOther) series.push({ id: "__other__", label: tr("Other", "其他"), color: "#7b8794" });
-  const days = new Map<number, Map<string, number>>();
+  const valuesByBucket = new Map<number, Map<string, number>>();
   for (const interval of intervals) {
-    const day = new Date(interval.epoch * 1_000);
-    const epoch = new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime() / 1_000;
-    const values = days.get(epoch) ?? new Map<string, number>();
+    const date = new Date(interval.epoch * 1_000);
+    const epoch = hourly
+      ? Math.floor(interval.epoch / window.bucketSeconds) * window.bucketSeconds
+      : new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime() / 1_000;
+    const values = valuesByBucket.get(epoch) ?? new Map<string, number>();
     const rows = dimension === "source" ? new Map([[interval.source, interval.total]]) : interval.models;
     for (const [id, value] of rows) {
       const target = visible.includes(id) ? id : "__other__";
       values.set(target, (values.get(target) ?? 0) + value);
     }
-    days.set(epoch, values);
+    valuesByBucket.set(epoch, values);
   }
-  const buckets: DailyBarBucket[] = completeDailyBuckets(days, range, window).map(([epoch, values]) => ({ epoch, values }));
+  const completed = hourly
+    ? completeIntervalEpochs(window).map((epoch) => [epoch, valuesByBucket.get(epoch) ?? new Map<string, number>()] as const)
+    : completeDailyBuckets(valuesByBucket, range, window);
+  const buckets: TimeBucketBarBucket[] = completed.map(([epoch, values]) => ({ epoch, values }));
   if (range === "recorded" && visual === "calendar") {
-    return renderDailyActivityCalendar(series, [...days.entries()].map(([epoch, values]) => ({ epoch, values })), {
+    return renderDailyActivityCalendar(series, [...valuesByBucket.entries()].map(([epoch, values]) => ({ epoch, values })), {
       title: dimension === "source" ? tr("Daily Agent activity", "按 Agent 的每日活动") : tr("Daily model activity", "按模型的每日活动"),
       detail: tr("Latest year of recorded history", "最近一年的已记录历史"),
       ariaLabel: tr("Daily recorded Token activity", "每日已记录 Token 活动"),
@@ -140,49 +150,31 @@ function dailyHistory(
         : tr("Each cell is one day. Darker cells mean relatively higher daily usage; hover or focus a cell for its recorded breakdown.", "每格代表一天；颜色越深表示该日相对用量越高，悬停或点选可查看已记录的构成。"),
     });
   }
-  return renderDailyBarChart(series, buckets, {
-    title: dimension === "source" ? tr("Daily usage by Agent", "按 Agent 的每日用量") : tr("Daily usage by model", "按模型的每日用量"),
-    detail: `${rangeLabel(range)}${days.size > 30 ? ` · ${tr("chart shows latest 30 days", "图表展示最近 30 天")}` : ""}`,
-    ariaLabel: tr("Daily recorded Token usage", "每日已记录 Token 用量"), formatValue: formatTokens, mode: "stacked",
-    overlay: reference?.byDay.size ? {
-      label: tr("≈ cost / day", "≈ 每日估算"), color: "#c7792d", values: reference.byDay, formatValue: formatReferenceUsd,
+  const estimated = hourly && intervals.some((interval) => interval.estimated);
+  return renderTimeBucketBarChart(series, buckets, {
+    title: dimension === "source"
+      ? (hourly ? tr("Hourly usage by Agent", "按 Agent 的每小时用量") : tr("Daily usage by Agent", "按 Agent 的每日用量"))
+      : (hourly ? tr("Hourly usage by model", "按模型的每小时用量") : tr("Daily usage by model", "按模型的每日用量")),
+    detail: `${rangeLabel(range)}${estimated ? ` · ${tr("sampled buckets estimated", "采样桶为估算")}` : ""}${!hourly && valuesByBucket.size > 30 ? ` · ${tr("chart shows latest 30 days", "图表展示最近 30 天")}` : ""}`,
+    ariaLabel: hourly ? tr("Hourly recorded Token usage", "每小时已记录 Token 用量") : tr("Daily recorded Token usage", "每日已记录 Token 用量"),
+    formatValue: formatTokens,
+    mode: "stacked",
+    bucketLabel: hourly ? hourLabel : undefined,
+    overlay: reference?.byBucket.size ? {
+      label: hourly ? tr("≈ cost / hour", "≈ 每小时估算") : tr("≈ cost / day", "≈ 每日估算"),
+      color: "#c7792d", values: reference.byBucket, formatValue: formatReferenceUsd,
     } : undefined,
-    footnote: undatedTotal > 0
+    footnote: hourly
+      ? (estimated
+        ? tr("Each bar is one hour. Colors are additive components; the thin line is the hourly local price estimate. Sampled or unlocated usage is placed in the statistics-start hour and marked estimated.", "每根柱代表一个小时，颜色表示总量中的组成，细线是每小时本地参考价估算；采样或无法定位的用量归入统计开始所在小时，并标记为估算。")
+        : tr("Each bar is one recorded hourly total. Colors are additive components; the thin line is the hourly local price estimate.", "每根柱是一个已记录的小时总量，颜色表示总量中的组成；细线是每小时本地参考价估算。"))
+      : undatedTotal > 0
       ? tr(
         `${formatTokens(undatedTotal)} is included in the range total but has no reliable calendar date, so it is not placed into a daily bar.`,
         `所选总量中另有 ${formatTokens(undatedTotal)} 无可靠日期，因此不强行放入每日柱状图。`,
       )
       : tr("Each bar is one recorded daily total. Colors are additive components of that total; the thin line is the available local price estimate.", "每根柱是一个已记录的每日总量，颜色表示总量中的组成；细线是可用本地参考价的估算。"),
   });
-}
-
-function niceTokenAxisMaximum(value: number): number {
-  if (value <= 0) return 1_000;
-  const magnitude = 10 ** Math.floor(Math.log10(value));
-  const normalized = value * 1.12 / magnitude;
-  return ([1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find((step) => normalized <= step) ?? 10) * magnitude;
-}
-
-function rateTrend(intervals: UsageInterval[], dimension: "source" | "model", window: AnalysisTimeWindow): string {
-  const seriesTotals = dimension === "source" ? aggregateBySource(intervals) : aggregateByModel(intervals);
-  const seriesIds = [...seriesTotals.entries()].sort((left, right) => right[1] - left[1]).slice(0, 5).map(([id]) => id);
-  const epochs = completeRateEpochs(window);
-  if (epochs.length < 2) return `<article class="trend-panel"><div class="detail-panel__heading"><h3>${tr("Token consumption rate", "Token 消耗速率")}</h3><span>${tr("Token / min", "Token / 分钟")}</span></div><div class="chart-empty">${tr("Waiting for another recorded interval.", "等待下一个记录区间。")}</div></article>`;
-  const values = new Map(seriesIds.map((id) => [id, new Map<number, number>()]));
-  for (const interval of intervals) {
-    const rows = dimension === "source" ? new Map([[interval.source, interval.total]]) : interval.models;
-    for (const [id, value] of rows) {
-      const target = values.get(id);
-      if (target) target.set(interval.epoch, (target.get(interval.epoch) ?? 0) + value / (window.bucketSeconds / 60));
-    }
-  }
-  const maximum = niceTokenAxisMaximum(Math.max(...seriesIds.flatMap((id) => epochs.map((epoch) => values.get(id)?.get(epoch) ?? 0)), 1));
-  const start = epochs[0];
-  const span = Math.max(1, epochs[epochs.length - 1] - start);
-  const colors = dimension === "source" ? SOURCE_COLORS : MODEL_COLORS;
-  const points = (id: string) => epochs.map((epoch) => `${(epoch - start) / span * 100},${92 - ((values.get(id)?.get(epoch) ?? 0) / maximum) * 82}`).join(" ");
-  const startLabel = new Date(window.sinceEpoch * 1_000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return `<article class="trend-panel"><div class="detail-panel__heading"><h3>${dimension === "source" ? tr("Agent Token rate", "Agent Token 速率") : tr("Model Token rate", "模型 Token 速率")}</h3><span>${tr("Token / min", "Token / 分钟")}</span></div><div class="traffic-chart-frame"><span class="chart-axis-label chart-axis-label--peak">${formatTokens(maximum)}</span><span class="chart-axis-label chart-axis-label--mid">${formatTokens(maximum / 2)}</span><span class="chart-axis-label chart-axis-label--zero">0</span><svg class="traffic-chart" viewBox="0 0 100 100" preserveAspectRatio="none"><path class="chart-grid chart-grid--reference" d="M0 10H100"/><path class="chart-grid" d="M0 51H100M0 92H100"/>${seriesIds.map((id, index) => `<polyline class="chart-line" style="stroke:${colors[index % colors.length]}" points="${points(id)}"/>`).join("")}</svg></div><div class="traffic-chart__timeline"><span>${escapeHtml(startLabel)}</span><span>${tr("Now", "现在")}</span></div><div class="chart-legend">${seriesIds.map((id, index) => `<span><i class="chart-dot" style="background:${colors[index % colors.length]}"></i>${escapeHtml(dimension === "model" ? modelLabel(id) : id)}</span>`).join("")}</div></article>`;
 }
 
 function referencePriceTag(reference: PriceReference | undefined): string {
@@ -194,26 +186,30 @@ function renderOverview(usage: ProjectedUsage, providerSources: Record<string, u
   const sources = usage.sourceTotals;
   const selectedTotal = [...sources.values()].reduce((sum, value) => sum + value, 0);
   const reference = projectPriceReference(providerSources, usage, range, window);
-  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Selected range total", "所选时段总量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)} · ${sources.size} ${tr("Agents", "个 Agent")}</span>${referencePriceTag(reference)}</aside></div>${horizontalBars(tr("Usage by Agent", "按 Agent 的用量"), rangeLabel(range), sources, SOURCE_COLORS)}${historyVisualControl(range, visual)}${range === "today" ? rateTrend(usage.intervals, "source", window) : dailyHistory(usage.intervals, "source", range, window, visual, usage.undatedTotal, reference)}</section>`;
+  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Selected range total", "所选时段总量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)} · ${sources.size} ${tr("Agents", "个 Agent")}</span>${referencePriceTag(reference)}</aside></div>${horizontalBars(tr("Usage by Agent", "按 Agent 的用量"), rangeLabel(range), sources, SOURCE_COLORS)}${historyVisualControl(range, visual)}${usageHistory(usage.intervals, "source", range, window, visual, usage.undatedTotal, reference)}</section>`;
 }
 
-function dailyValueHistory(reference: PriceReference, range: AiTimeRange, window: AnalysisTimeWindow, visual: AiHistoryVisual): string {
+function valueHistory(reference: PriceReference, range: AiTimeRange, window: AnalysisTimeWindow, visual: AiHistoryVisual): string {
+  const hourly = range === "today";
   const visible = [...reference.byModel.entries()].sort((left, right) => right[1] - left[1]).slice(0, 5).map(([id]) => id);
   const hasOther = reference.byModel.size > visible.length;
-  const series: DailyBarSeries[] = visible.map((id, index) => ({ id, label: modelLabel(id), color: MODEL_COLORS[index % MODEL_COLORS.length] }));
+  const series: TimeBucketBarSeries[] = visible.map((id, index) => ({ id, label: modelLabel(id), color: MODEL_COLORS[index % MODEL_COLORS.length] }));
   if (hasOther) series.push({ id: "__other__", label: tr("Other", "其他"), color: "#7b8794" });
-  const days = new Map<number, Map<string, number>>();
-  for (const [epoch, rows] of reference.byDayModel) {
+  const valuesByBucket = new Map<number, Map<string, number>>();
+  for (const [epoch, rows] of reference.byBucketModel) {
     const values = new Map<string, number>();
     for (const [id, value] of rows) {
       const target = visible.includes(id) ? id : "__other__";
       values.set(target, (values.get(target) ?? 0) + value);
     }
-    days.set(epoch, values);
+    valuesByBucket.set(epoch, values);
   }
-  const buckets = completeDailyBuckets(days, range, window).map(([epoch, values]) => ({ epoch, values }));
+  const completed = hourly
+    ? completeIntervalEpochs(window).map((epoch) => [epoch, valuesByBucket.get(epoch) ?? new Map<string, number>()] as const)
+    : completeDailyBuckets(valuesByBucket, range, window);
+  const buckets = completed.map(([epoch, values]) => ({ epoch, values }));
   if (range === "recorded" && visual === "calendar") {
-    return renderDailyActivityCalendar(series, [...days.entries()].map(([epoch, values]) => ({ epoch, values })), {
+    return renderDailyActivityCalendar(series, [...valuesByBucket.entries()].map(([epoch, values]) => ({ epoch, values })), {
       title: tr("Daily equivalent value by model", "按模型的每日等价价值"),
       detail: tr("Latest year of recorded history", "最近一年的已记录历史"),
       ariaLabel: tr("Daily equivalent API value", "每日等价 API 价值"),
@@ -222,13 +218,16 @@ function dailyValueHistory(reference: PriceReference, range: AiTimeRange, window
       footnote: tr("Only model rows with an available local reference are included. This is not a provider invoice.", "仅包含有本地参考价的模型行；这不是供应商账单。"),
     });
   }
-  return renderDailyBarChart(series, buckets, {
-    title: tr("Daily equivalent value by model", "按模型的每日等价价值"),
-    detail: `${rangeLabel(range)}${days.size > 30 ? ` · ${tr("chart shows latest 30 days", "图表展示最近 30 天")}` : ""}`,
-    ariaLabel: tr("Daily equivalent API value", "每日等价 API 价值"),
+  return renderTimeBucketBarChart(series, buckets, {
+    title: hourly ? tr("Hourly equivalent value by model", "按模型的每小时等价价值") : tr("Daily equivalent value by model", "按模型的每日等价价值"),
+    detail: `${rangeLabel(range)}${!hourly && valuesByBucket.size > 30 ? ` · ${tr("chart shows latest 30 days", "图表展示最近 30 天")}` : ""}`,
+    ariaLabel: hourly ? tr("Hourly equivalent API value", "每小时等价 API 价值") : tr("Daily equivalent API value", "每日等价 API 价值"),
     formatValue: formatReferenceUsd,
     mode: "stacked",
-    footnote: tr("Only model rows with an available local reference are included. This is not a provider invoice.", "仅包含有本地参考价的模型行；这不是供应商账单。"),
+    bucketLabel: hourly ? hourLabel : undefined,
+    footnote: hourly
+      ? tr("Each bar is one hourly local price estimate derived from that hour's priced Token composition. This is not a provider invoice.", "每根柱是根据该小时可计价 Token 构成换算的本地参考价估算；这不是供应商账单。")
+      : tr("Only model rows with an available local reference are included. This is not a provider invoice.", "仅包含有本地参考价的模型行；这不是供应商账单。"),
   });
 }
 
@@ -240,10 +239,10 @@ function renderModels(usage: ProjectedUsage, providerSources: Record<string, unk
     const values = reference?.byModel ?? new Map<string, number>();
     const total = reference?.costUsd ?? 0;
     return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Equivalent value in range", "所选时段等价价值")}</p><strong>${total > 0 ? `≈ ${formatReferenceUsd(total)}` : "—"}</strong></div><aside><span>${rangeLabel(range)}</span></aside></div>${total > 0
-      ? `${horizontalBars(tr("Equivalent value by model", "按模型的等价价值"), rangeLabel(range), values, MODEL_COLORS, modelLabel, undefined, formatReferenceUsd)}${historyVisualControl(range, visual)}${dailyValueHistory(reference!, range, window, visual)}`
+      ? `${horizontalBars(tr("Equivalent value by model", "按模型的等价价值"), rangeLabel(range), values, MODEL_COLORS, modelLabel, undefined, formatReferenceUsd)}${historyVisualControl(range, visual)}${valueHistory(reference!, range, window, visual)}`
       : `<article class="detail-panel ai-analysis-state"><p>${tr("No model rows in this range have an available price reference.", "所选时段没有可用参考价的模型行。")}</p></article>`}</section>`;
   }
-  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Model total in range", "所选时段模型量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)}</span></aside></div>${horizontalBars(tr("Model composition", "模型构成"), rangeLabel(range), models, MODEL_COLORS, modelLabel)}${historyVisualControl(range, visual)}${range === "today" ? rateTrend(usage.intervals, "model", window) : dailyHistory(usage.intervals, "model", range, window, visual, usage.undatedTotal)}</section>`;
+  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Model total in range", "所选时段模型量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)}</span></aside></div>${horizontalBars(tr("Model composition", "模型构成"), rangeLabel(range), models, MODEL_COLORS, modelLabel)}${historyVisualControl(range, visual)}${usageHistory(usage.intervals, "model", range, window, visual, usage.undatedTotal)}</section>`;
 }
 
 function providerDetails(source: Record<string, unknown>, providerPanels: ReadonlyMap<string, boolean>): string {

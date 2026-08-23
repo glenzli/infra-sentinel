@@ -30,6 +30,7 @@ from infra_sentinel.core.model import MetricPoint
 from infra_sentinel.resources.ai.contract import (
     ai_usage_snapshot,
     daily_usage,
+    hourly_usage,
     pricing_day,
     detail_group,
     localized,
@@ -74,6 +75,7 @@ class _TokenTotals:
 @dataclass(frozen=True)
 class AntigravityHistory:
     days: dict[str, dict[str, _TokenTotals]]
+    hours: dict[int, dict[str, _TokenTotals]]
     sessions: int
     stores: int = 0
     skipped_metadata_rows: int = 0
@@ -311,6 +313,7 @@ def read_antigravity_history(directories: tuple[Path, ...]) -> AntigravityHistor
     if not directories:
         raise OSError("AntigravityConversationsMissing")
     days: dict[str, dict[str, _TokenTotals]] = defaultdict(dict)
+    hours: dict[int, dict[str, _TokenTotals]] = defaultdict(dict)
     sessions = 0
     skipped_metadata_rows = 0
     seen_response_ids: set[str] = set()
@@ -342,8 +345,12 @@ def read_antigravity_history(directories: tuple[Path, ...]) -> AntigravityHistor
                 model = row.model or (recovered.get(row.display_model) if row.display_model else None) or "unknown"
                 day = _local_day(row.timestamp_millis or fallback_timestamp)
                 days[day].setdefault(model, _TokenTotals()).add(row.totals)
+                if row.timestamp_millis is not None:
+                    hour = int(row.timestamp_millis / 1_000 // 3_600) * 3_600
+                    hours[hour].setdefault(model, _TokenTotals()).add(row.totals)
     return AntigravityHistory(
         dict(days),
+        dict(hours),
         sessions,
         stores=len(directories),
         skipped_metadata_rows=skipped_metadata_rows,
@@ -370,8 +377,9 @@ def _metric_point(*, timestamp: str, epoch: float, metric: str, value: int, mode
         source_id="antigravity",
         resource_id="ai_usage",
         dimensions={"model": model},
-        attribution_method="local-reported",
+        attribution_method="sampled-delta",
         confidence="medium",
+        estimated=True,
     )
 
 
@@ -399,9 +407,16 @@ class AntigravityUsageCollector:
         self._next_poll_epoch = 0.0
         self._snapshot: dict[str, Any] = {"available": False, "status": "unavailable"}
         self._previous: dict[str, _TokenTotals] = {}
+        self._started_day: str | None = None
+        self._started_at_epoch: float | None = None
 
     @staticmethod
-    def _snapshot_for(history: AntigravityHistory, timestamp: str, epoch: float) -> dict[str, Any]:
+    def _snapshot_for(
+        history: AntigravityHistory,
+        timestamp: str,
+        epoch: float,
+        started_at_epoch: float | None = None,
+    ) -> dict[str, Any]:
         day = _local_day(int(epoch * 1_000))
         today_models = history.days.get(day, {})
         cumulative_models = history.models()
@@ -409,6 +424,21 @@ class AntigravityUsageCollector:
         for values in today_models.values():
             today.add(values)
         cumulative = history.cumulative
+        hourly_rows: list[dict[str, Any]] = []
+        hourly_tokens = 0
+        for hour, model_values in sorted(history.hours.items()):
+            if _local_day(hour * 1_000) != day:
+                continue
+            total = sum(values.total_tokens for values in model_values.values())
+            hourly_tokens += total
+            hourly_rows.append(hourly_usage(
+                hour,
+                total,
+                [
+                    {"id": identifier, "tokens": values.total_tokens}
+                    for identifier, values in sorted(model_values.items())
+                ],
+            ))
         identifiers = sorted(cumulative_models, key=lambda identifier: (-cumulative_models[identifier].total_tokens, identifier))
         models = [
             model_usage(
@@ -471,6 +501,7 @@ class AntigravityUsageCollector:
                 today.total_tokens,
                 method="local-calendar-day",
                 detail=localized("local generation metadata; not remaining account quota", "本地生成元数据；不是账户剩余额度"),
+                started_at=_iso_now(started_at_epoch or epoch),
             ),
             cumulative=usage_window(
                 cumulative.total_tokens,
@@ -503,6 +534,9 @@ class AntigravityUsageCollector:
             confidence="medium",
             privacy="decoded-generation-token-metadata-only",
             daily_history=daily,
+            hourly_history=hourly_rows,
+            hourly_unattributed_tokens=max(0, today.total_tokens - hourly_tokens),
+            hourly_method="generation-event-hour-with-sampled-baseline",
             pricing_history=pricing,
         )
 
@@ -532,6 +566,10 @@ class AntigravityUsageCollector:
 
     def collect(self, context: CollectorContext) -> Collection:
         epoch = float(context.local_sample.get("epoch") or self._clock())
+        day = _local_day(int(epoch * 1_000))
+        if self._started_day != day:
+            self._started_day = day
+            self._started_at_epoch = epoch
         if epoch < self._next_poll_epoch:
             return Collection(status=str(self._snapshot.get("status", "ok")), snapshot=self._snapshot)
         self._next_poll_epoch = epoch + self._poll_seconds
@@ -546,7 +584,7 @@ class AntigravityUsageCollector:
         try:
             timestamp = _iso_now(epoch)
             history = read_antigravity_history(directories)
-            snapshot = self._snapshot_for(history, timestamp, epoch)
+            snapshot = self._snapshot_for(history, timestamp, epoch, self._started_at_epoch or epoch)
             points = self._interval_points(history, timestamp, epoch)
         except (OSError, sqlite3.DatabaseError, ValueError):
             self._snapshot = {**self._snapshot, "available": True, "status": "error", "label": "Antigravity"}

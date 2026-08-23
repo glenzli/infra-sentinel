@@ -83,6 +83,8 @@ class CodexUsageTests(unittest.TestCase):
                 {"id": "gpt-5.6-terra", "tokens": 100},
             ],
         }])
+        self.assertTrue(result.snapshot["history"]["hourly_available"])
+        self.assertEqual(sum(row["tokens"] for row in result.snapshot["history"]["hourly"]), 140)
         self.assertTrue(result.snapshot["pricing"]["daily_available"])
         reference = result.snapshot["pricing"]["daily"][0]["reference"]
         self.assertEqual(reference["kind"], "local-rollout-standard-api-projection")

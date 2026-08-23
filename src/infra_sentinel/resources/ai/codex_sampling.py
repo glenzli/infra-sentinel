@@ -7,7 +7,7 @@ are intentionally account-agnostic: rollouts removed before observation and
 usage from another machine are absent.
 
 No rollout content, task identifiers, paths, or raw JSON records are retained.
-The checkpoint contains only daily aggregate counters plus irreversible file,
+The checkpoint contains daily aggregate counters, current-day hour buckets, plus irreversible file,
 lineage, parser state, and scoped dedup markers with byte offsets, so later sampling does not
 replay the same events.
 """
@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-LEDGER_SCHEMA = "20260824.3"
+LEDGER_SCHEMA = "20260824.4"
 MAX_LEDGER_SCAN_BYTES = 64 * 1024 * 1024
 MAX_LINE_BYTES = 512 * 1024
 MAX_SAMPLED_MODELS = 128
@@ -287,6 +287,7 @@ class CodexRolloutLedger:
     """Durable aggregate ledger that survives rollout deletion after capture."""
 
     days: dict[str, RolloutAuditDay] = field(default_factory=dict)
+    hours: dict[str, RolloutAuditDay] = field(default_factory=dict)
     files: dict[str, dict[str, Any]] = field(default_factory=dict)
     dedup_keys: set[str] = field(default_factory=set)
     updated_at: str | None = None
@@ -297,6 +298,7 @@ class CodexRolloutLedger:
         return {
             "schema": LEDGER_SCHEMA,
             "days": {day: usage.as_payload() for day, usage in sorted(self.days.items())},
+            "hours": {hour: usage.as_payload() for hour, usage in sorted(self.hours.items(), key=lambda item: int(item[0]))},
             "files": self.files,
             "dedup_keys": sorted(self.dedup_keys),
             "updated_at": self.updated_at,
@@ -310,6 +312,7 @@ class CodexRolloutLedger:
         if payload.get("schema") != LEDGER_SCHEMA:
             return cls()
         days_raw = payload.get("days")
+        hours_raw = payload.get("hours")
         files_raw = payload.get("files")
         dedup_keys_raw = payload.get("dedup_keys")
         return cls(
@@ -318,6 +321,11 @@ class CodexRolloutLedger:
                 for day, usage in days_raw.items()
                 if _valid_day(day)
             } if isinstance(days_raw, dict) else {},
+            hours={
+                str(hour): RolloutAuditDay.from_payload(usage)
+                for hour, usage in hours_raw.items()
+                if _valid_hour(hour)
+            } if isinstance(hours_raw, dict) else {},
             files={
                 str(marker): _ledger_file_from_payload(entry)
                 for marker, entry in files_raw.items()
@@ -467,6 +475,12 @@ def update_codex_rollout_ledger(
 ) -> LedgerUpdate:
     """Ingest append-only rollout tails into a durable aggregate ledger."""
     readable_roots = discover_codex_rollout_roots(roots)
+    current_day = now.astimezone(timezone).date().isoformat()
+    ledger.hours = {
+        hour: usage
+        for hour, usage in ledger.hours.items()
+        if datetime.fromtimestamp(int(hour), tz=timezone).date().isoformat() == current_day
+    }
     candidates: dict[str, tuple[int, int, Path, RolloutIdentity]] = {}
     for root in readable_roots:
         try:
@@ -512,7 +526,7 @@ def update_codex_rollout_ledger(
         if remaining is not None:
             remaining -= used
         for increment in file_increments:
-            _add_ledger_increment(ledger, increment)
+            _add_ledger_increment(ledger, increment, current_day=current_day)
             if increment.usage["total_tokens"] > 0:
                 increments.append(increment)
         partial = partial or exhausted
@@ -597,7 +611,12 @@ def _ingest_ledger_file_tail(
     return position, entry, observations, exhausted or (remaining <= 0 and more_bytes)
 
 
-def _add_ledger_increment(ledger: CodexRolloutLedger, increment: LedgerIncrement) -> None:
+def _add_ledger_increment(
+    ledger: CodexRolloutLedger,
+    increment: LedgerIncrement,
+    *,
+    current_day: str,
+) -> None:
     day = ledger.days.setdefault(increment.day, RolloutAuditDay())
     day.token_records += 1
     day.duplicate_snapshots += int(increment.duplicate)
@@ -608,6 +627,12 @@ def _add_ledger_increment(ledger: CodexRolloutLedger, increment: LedgerIncrement
         return
     day.composition.add(increment.model, increment.usage)
     day.source_tokens[increment.source] = day.source_tokens.get(increment.source, 0) + increment.usage["total_tokens"]
+    if increment.day == current_day:
+        hour_key = str(int(increment.epoch // 3_600) * 3_600)
+        hour = ledger.hours.setdefault(hour_key, RolloutAuditDay())
+        hour.token_records += 1
+        hour.composition.add(increment.model, increment.usage)
+        hour.source_tokens[increment.source] = hour.source_tokens.get(increment.source, 0) + increment.usage["total_tokens"]
 
 
 def _audit_rollout_file(
@@ -1154,6 +1179,14 @@ def _valid_day(value: object) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _valid_hour(value: object) -> bool:
+    try:
+        epoch = int(value)
+    except (TypeError, ValueError):
+        return False
+    return epoch > 0 and epoch % 3_600 == 0
 
 
 def _valid_marker(value: object) -> bool:

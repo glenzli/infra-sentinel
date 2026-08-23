@@ -27,7 +27,9 @@ belongs in `resources/` and SQL mechanics belong in `metrics/`.
 Within the AI boundary, `resources/ai/codex_sampling.py` owns privacy-bounded
 Codex rollout token parsing, lineage-aware inherited-prefix suppression,
 scoped cross-file deduplication, durable request-increment ledger updates, and
-read-only reconstruction.
+read-only reconstruction. The ledger retains daily totals plus current-day
+hour buckets; other AI adapters expose exact event hours when their source has
+timestamps and sampled deltas with explicit estimated provenance otherwise.
 `resources/ai/codex.py` consumes that ledger as its
 only Codex usage fact source. `cli/codex_usage_audit.py` only renders an
 aggregate audit; it does not own parsing or persist user rollout data.

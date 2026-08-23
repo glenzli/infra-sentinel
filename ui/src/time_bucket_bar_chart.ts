@@ -1,32 +1,34 @@
-import "./daily_bar_chart.css";
+import "./time_bucket_bar_chart.css";
 import { tr } from "./i18n";
 
-export type DailyBarSeries = {
+export type TimeBucketBarSeries = {
   id: string;
   label: string;
   color: string;
 };
 
-export type DailyBarBucket = {
+export type TimeBucketBarBucket = {
   epoch: number;
   values: Map<string, number>;
 };
 
-export type DailyBarOverlay = {
+export type TimeBucketBarOverlay = {
   label: string;
   color: string;
   values: Map<number, number>;
   formatValue: (value: number) => string;
 };
 
-export type DailyBarChartOptions = {
+export type TimeBucketBarChartOptions = {
   title: string;
   detail: string;
   ariaLabel: string;
   footnote: string;
   formatValue: (value: number) => string;
   mode?: "grouped" | "stacked";
-  overlay?: DailyBarOverlay;
+  overlay?: TimeBucketBarOverlay;
+  bucketLabel?: (epoch: number) => string;
+  showBucketLabel?: (index: number, count: number) => boolean;
 };
 
 function escapeHtml(value: unknown): string {
@@ -38,10 +40,16 @@ function dayLabel(epoch: number): string {
   return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
-function tooltip(bucket: DailyBarBucket, series: DailyBarSeries[], formatValue: (value: number) => string, overlay?: DailyBarOverlay): { label: string; markup: string } {
+function tooltip(
+  bucket: TimeBucketBarBucket,
+  series: TimeBucketBarSeries[],
+  formatValue: (value: number) => string,
+  bucketLabel: (epoch: number) => string,
+  overlay?: TimeBucketBarOverlay,
+): { label: string; markup: string } {
   const visible = series.filter((item) => (bucket.values.get(item.id) ?? 0) > 0);
   const total = visible.reduce((sum, item) => sum + (bucket.values.get(item.id) ?? 0), 0);
-  const heading = `${dayLabel(bucket.epoch)} · ${tr("shown total", "图示合计")} ${formatValue(total)}`;
+  const heading = `${bucketLabel(bucket.epoch)} · ${tr("shown total", "图示合计")} ${formatValue(total)}`;
   const rows = visible.map((item) => `${item.label} ${formatValue(bucket.values.get(item.id) ?? 0)}`);
   const overlayValue = overlay ? overlay.values.get(bucket.epoch) ?? 0 : 0;
   const overlayRow = overlayValue > 0
@@ -70,11 +78,13 @@ function showDayLabel(index: number, count: number): boolean {
  * Render a calendar-aligned daily chart. Grouped series preserve independent
  * boundaries; stacked series are reserved for comparable pieces of one total.
  */
-export function renderDailyBarChart(
-  series: DailyBarSeries[],
-  buckets: DailyBarBucket[],
-  options: DailyBarChartOptions,
+export function renderTimeBucketBarChart(
+  series: TimeBucketBarSeries[],
+  buckets: TimeBucketBarBucket[],
+  options: TimeBucketBarChartOptions,
 ): string {
+  const bucketLabel = options.bucketLabel ?? dayLabel;
+  const showLabel = options.showBucketLabel ?? showDayLabel;
   const usable = series.filter((item) => buckets.some((bucket) => (bucket.values.get(item.id) ?? 0) > 0));
   const stacked = options.mode === "stacked";
   const maximum = niceMaximum(Math.max(...buckets.map((bucket) => stacked
@@ -93,12 +103,12 @@ export function renderDailyBarChart(
   const overlayLegend = overlay ? `<span class="daily-bars__overlay-legend"><i style="background:${overlay.color}"></i>${escapeHtml(overlay.label)}</span>` : "";
   const bucketCount = Math.max(1, buckets.length);
   return `<article class="detail-panel daily-history-chart"><div class="detail-panel__heading"><h3>${escapeHtml(options.title)}</h3><span>${escapeHtml(options.detail)}</span></div>${barLegend || overlayLegend ? `<div class="daily-bars__legend">${barLegend}${overlayLegend}</div>` : ""}<div class="daily-bars-frame" style="--daily-bucket-count:${bucketCount}"><span class="daily-bars__axis">${escapeHtml(options.formatValue(maximum))}</span>${overlay ? `<span class="daily-bars__overlay-axis">${escapeHtml(overlay.formatValue(overlayMaximum))}</span>` : ""}<div class="daily-bars__plot"><div class="daily-bars" role="img" aria-label="${escapeHtml(options.ariaLabel)}">${buckets.map((bucket) => {
-    const hint = tooltip(bucket, usable, options.formatValue, overlay);
+    const hint = tooltip(bucket, usable, options.formatValue, bucketLabel, overlay);
     const empty = usable.every((item) => !(bucket.values.get(item.id) ?? 0));
     return `<div class="daily-bar-day${empty ? " daily-bar-day--empty" : ""}"><button type="button" class="daily-bar-day__trigger" aria-label="${escapeHtml(hint.label)}"><span class="daily-bar-day__bars${stacked ? " daily-bar-day__bars--stacked" : ""}">${usable.map((item) => {
       const value = bucket.values.get(item.id) ?? 0;
       const height = value > 0 ? Math.max(0.2, (value / maximum) * 100) : 0;
       return `<i style="--daily-bar-color:${item.color};height:${height}%"></i>`;
     }).join("")}</span></button><div class="daily-bar-tooltip" aria-hidden="true">${hint.markup}</div></div>`;
-  }).join("")}</div>${overlay ? `<svg class="daily-bars__overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polyline points="${overlayPoints}" style="stroke:${overlay.color}"/></svg>` : ""}</div><div class="daily-bars__labels" aria-hidden="true">${buckets.map((bucket, index) => `<span title="${escapeHtml(dayLabel(bucket.epoch))}">${showDayLabel(index, buckets.length) ? escapeHtml(dayLabel(bucket.epoch)) : ""}</span>`).join("")}</div></div><p class="panel-footnote">${escapeHtml(options.footnote)}</p></article>`;
+  }).join("")}</div>${overlay ? `<svg class="daily-bars__overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polyline points="${overlayPoints}" style="stroke:${overlay.color}"/></svg>` : ""}</div><div class="daily-bars__labels" aria-hidden="true">${buckets.map((bucket, index) => `<span title="${escapeHtml(bucketLabel(bucket.epoch))}">${showLabel(index, buckets.length) ? escapeHtml(bucketLabel(bucket.epoch)) : ""}</span>`).join("")}</div></div><p class="panel-footnote">${escapeHtml(options.footnote)}</p></article>`;
 }

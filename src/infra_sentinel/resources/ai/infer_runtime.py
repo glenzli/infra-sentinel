@@ -18,6 +18,7 @@ import time
 from typing import Any, Callable
 
 from infra_sentinel.core.collectors import Collection, CollectorCapability, CollectorContext
+from infra_sentinel.core.model import MetricPoint
 from infra_sentinel.resources.ai.contract import (
     ai_usage_snapshot,
     daily_usage,
@@ -55,7 +56,7 @@ class InferRuntimeUsageCollector:
         source_id="infer-runtime",
         source_kind="ai.infer-runtime",
         resource_id="ai_usage",
-        metrics=(),
+        metrics=("ai.tokens.total", "ai.tokens.input", "ai.tokens.output"),
     )
 
     def __init__(
@@ -67,6 +68,19 @@ class InferRuntimeUsageCollector:
         self._checkpoint_path = checkpoint_path
         self._clock = clock
         self._history = self._load_history()
+        self._started_at = self._load_started_at()
+
+    def _load_started_at(self) -> dict[str, str]:
+        try:
+            raw = json.loads(self._checkpoint_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        values = raw.get("started_at") if isinstance(raw, dict) else None
+        return {
+            str(day): str(timestamp)
+            for day, timestamp in values.items()
+            if isinstance(day, str) and isinstance(timestamp, str)
+        } if isinstance(values, dict) else {}
 
     def _load_history(self) -> dict[str, dict[str, dict[str, Any]]]:
         try:
@@ -120,6 +134,7 @@ class InferRuntimeUsageCollector:
                 day: {identity: models[identity] for identity in sorted(models)}
                 for day, models in sorted(self._history.items())
             },
+            "started_at": dict(sorted(self._started_at.items())),
         }
         temporary = self._checkpoint_path.with_suffix(".tmp")
         temporary.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
@@ -348,7 +363,12 @@ class InferRuntimeUsageCollector:
             status="ok",
             observed_at=observed_at,
             collection_method="facility-status-daily-upsert",
-            today=usage_window(today_tokens, method="runtime-settled-host-day", detail=today_detail),
+            today=usage_window(
+                today_tokens,
+                method="runtime-settled-host-day",
+                detail=today_detail,
+                started_at=self._started_at.get(current_day),
+            ),
             cumulative=usage_window(sum(cumulative_tokens.values()), method="sentinel-daily-upsert-history", detail=cumulative_detail),
             models=[model_usage(
                 identifier,
@@ -378,13 +398,82 @@ class InferRuntimeUsageCollector:
             pricing_history=self._pricing_history(self._history),
         )
 
+    @staticmethod
+    def _sampled_points(
+        previous: dict[str, dict[str, Any]] | None,
+        current: dict[str, dict[str, Any]],
+        *,
+        epoch: float,
+        timestamp: str,
+    ) -> tuple[MetricPoint, ...]:
+        fields = {
+            "ai.tokens.total": "total_tokens",
+            "ai.tokens.input": "input_tokens",
+            "ai.tokens.output": "output_tokens",
+        }
+        points: list[MetricPoint] = []
+        aggregate_deltas: dict[str, int] = {}
+        for metric, field in fields.items():
+            current_total = sum(max(0, int(row.get(field) or 0)) for row in current.values())
+            previous_total = sum(max(0, int(row.get(field) or 0)) for row in (previous or {}).values())
+            aggregate_deltas[metric] = current_total - previous_total if current_total >= previous_total else 0
+        if aggregate_deltas["ai.tokens.total"] <= 0:
+            return ()
+        for metric, delta in aggregate_deltas.items():
+            if not delta:
+                continue
+            points.append(MetricPoint(
+                observed_at=timestamp,
+                observed_epoch=epoch,
+                metric=metric,
+                instrument="counter",
+                value=delta,
+                unit="tokens",
+                source_id="infer-runtime",
+                resource_id="ai_usage",
+                dimensions={"scope": "sampled-day"},
+                attribution_method="sampled-delta",
+                confidence="medium",
+                estimated=True,
+            ))
+        for identity, row in current.items():
+            prior = (previous or {}).get(identity)
+            for metric, field in fields.items():
+                value = max(0, int(row.get(field) or 0))
+                old = max(0, int(prior.get(field) or 0)) if prior is not None else 0
+                delta = value - old if value >= old else 0
+                if not delta:
+                    continue
+                points.append(MetricPoint(
+                    observed_at=timestamp,
+                    observed_epoch=epoch,
+                    metric=metric,
+                    instrument="counter",
+                    value=delta,
+                    unit="tokens",
+                    source_id="infer-runtime",
+                    resource_id="ai_usage",
+                    dimensions={"model": str(row["id"])},
+                    attribution_method="sampled-delta",
+                    confidence="medium",
+                    estimated=True,
+                ))
+        return tuple(points)
+
     def collect(self, context: CollectorContext) -> Collection:
         epoch = float(context.local_sample.get("epoch") or self._clock())
+        observed_at = _iso_now(epoch)
         usage = self._usage_daily(context.facilities)
         if usage is None:
             return Collection(status="unavailable", snapshot={"available": False, "status": "unavailable"})
         current_day, models = self._runtime_models(usage, _local_day(epoch))
-        if self._history.get(current_day) != models:
+        previous = self._history.get(current_day)
+        points = self._sampled_points(previous, models, epoch=epoch, timestamp=observed_at)
+        changed = previous != models
+        if current_day not in self._started_at:
+            self._started_at[current_day] = observed_at
+            changed = True
+        if changed:
             self._history[current_day] = models
             self._write_history()
-        return Collection(status="ok", snapshot=self._snapshot_for(_iso_now(epoch), current_day))
+        return Collection(points=points, status="ok", snapshot=self._snapshot_for(observed_at, current_day))

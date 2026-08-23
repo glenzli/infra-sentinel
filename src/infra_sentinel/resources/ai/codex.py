@@ -36,6 +36,7 @@ from infra_sentinel.resources.ai.contract import (
     ai_usage_snapshot,
     daily_usage,
     detail_group,
+    hourly_usage,
     localized,
     model_usage,
     pricing_day,
@@ -109,6 +110,21 @@ class CodexUsageCollector:
                 ],
             )
             for day, usage in sorted(ledger.days.items())
+            if usage.composition.total_tokens > 0
+        ]
+
+    @staticmethod
+    def _hourly_history(ledger: CodexRolloutLedger) -> list[dict[str, Any]]:
+        return [
+            hourly_usage(
+                float(hour),
+                usage.composition.total_tokens,
+                [
+                    {"id": identifier, "tokens": tokens}
+                    for identifier, tokens in sorted(usage.composition.models.items())
+                ],
+            )
+            for hour, usage in sorted(ledger.hours.items(), key=lambda item: int(item[0]))
             if usage.composition.total_tokens > 0
         ]
 
@@ -240,6 +256,8 @@ class CodexUsageCollector:
             confidence="medium",
             privacy="aggregate-rollout-token-metadata-only",
             daily_history=cls._daily_history(ledger),
+            hourly_history=cls._hourly_history(ledger),
+            hourly_method="rollout-event-hour",
             pricing_history=cls._pricing_history(ledger),
         )
 

@@ -23,7 +23,7 @@ import subprocess
 import time
 from typing import Any
 
-from infra_sentinel.resources.ai.contract import ai_usage_snapshot, daily_usage, detail_group, localized, model_usage, pricing_day, token_metric, usage_window
+from infra_sentinel.resources.ai.contract import ai_usage_snapshot, daily_usage, detail_group, hourly_usage, localized, model_usage, pricing_day, token_metric, usage_window
 from infra_sentinel.core.collectors import Collection, CollectorCapability, CollectorContext
 from infra_sentinel.core.model import MetricPoint
 
@@ -66,6 +66,13 @@ class OpenCodeDailyUsage:
     cost_usd: float
     priced_tokens: int
     unpriced_tokens: int
+    models: tuple[dict[str, Any], ...]
+
+
+@dataclass(frozen=True)
+class OpenCodeHourlyUsage:
+    epoch: int
+    total_tokens: int
     models: tuple[dict[str, Any], ...]
 
 
@@ -342,6 +349,51 @@ def read_opencode_desktop_daily_history(path: Path) -> tuple[OpenCodeDailyUsage,
     )
 
 
+def read_opencode_desktop_hourly_usage(path: Path, epoch: float) -> tuple[OpenCodeHourlyUsage, ...]:
+    """Read current-day assistant usage grouped by absolute hour and model."""
+    if not path.is_file():
+        raise OSError("OpenCodeDesktopDatabaseMissing")
+    cutoff = _day_start_epoch(epoch)
+    uri = f"{path.resolve().as_uri()}?mode=ro"
+    with closing(sqlite3.connect(uri, uri=True)) as connection:
+        connection.execute("PRAGMA query_only = ON")
+        rows = connection.execute("""
+            SELECT
+                CAST(time_created / 3600000 AS INTEGER) * 3600 AS hour_epoch,
+                COALESCE(NULLIF(json_extract(data, '$.providerID'), ''), 'unknown') AS provider,
+                COALESCE(NULLIF(json_extract(data, '$.modelID'), ''), 'unknown') AS model,
+                SUM(
+                    COALESCE(CAST(json_extract(data, '$.tokens.input') AS INTEGER), 0)
+                    + COALESCE(CAST(json_extract(data, '$.tokens.output') AS INTEGER), 0)
+                    + COALESCE(CAST(json_extract(data, '$.tokens.reasoning') AS INTEGER), 0)
+                    + COALESCE(CAST(json_extract(data, '$.tokens.cache.read') AS INTEGER), 0)
+                    + COALESCE(CAST(json_extract(data, '$.tokens.cache.write') AS INTEGER), 0)
+                ) AS total_tokens
+            FROM message
+            WHERE time_created >= ?
+              AND json_extract(data, '$.role') = 'assistant'
+            GROUP BY hour_epoch, provider, model
+            ORDER BY hour_epoch, total_tokens DESC, provider, model
+        """, (cutoff,)).fetchall()
+    hours: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        hour = _number_from_database(row[0])
+        if not hour:
+            continue
+        hours.setdefault(hour, []).append({
+            "id": f"{str(row[1])}/{str(row[2])}",
+            "tokens": _number_from_database(row[3]),
+        })
+    return tuple(
+        OpenCodeHourlyUsage(
+            epoch=hour,
+            total_tokens=sum(int(model["tokens"]) for model in models),
+            models=tuple(models),
+        )
+        for hour, models in sorted(hours.items())
+    )
+
+
 def _iso_now(epoch: float) -> str:
     return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
 
@@ -359,8 +411,9 @@ def _metric_point(
         source_id="opencode",
         resource_id="ai_usage",
         dimensions=dimensions,
-        attribution_method="exact",
-        confidence="high",
+        attribution_method="sampled-delta",
+        confidence="medium",
+        estimated=True,
     )
 
 
@@ -395,6 +448,7 @@ class OpenCodeUsageCollector:
         self._previous: dict[str, int | float] = {}
         self._checkpoint_path = checkpoint_path
         self._checkpoint_day: str | None = None
+        self._checkpoint_started_at: str | None = None
 
     def _load_checkpoint(self, epoch: float) -> None:
         day = datetime.fromtimestamp(epoch).astimezone().date().isoformat()
@@ -418,6 +472,12 @@ class OpenCodeUsageCollector:
             and isinstance(counters, dict)
         ) else {}
         self._checkpoint_day = day
+        started_at = payload.get("started_at")
+        self._checkpoint_started_at = (
+            str(started_at)
+            if isinstance(started_at, str) and payload.get("day") == day
+            else _iso_now(epoch)
+        )
 
     def _write_checkpoint(self) -> None:
         if self._checkpoint_path is None or self._checkpoint_day is None:
@@ -428,6 +488,7 @@ class OpenCodeUsageCollector:
             "schema": OPENCODE_CHECKPOINT_SCHEMA,
             "counter_schema": OPENCODE_COUNTER_SCHEMA,
             "day": self._checkpoint_day,
+            "started_at": self._checkpoint_started_at,
             "counters": self._previous,
         }, separators=(",", ":")), encoding="utf-8")
         temporary.replace(self._checkpoint_path)
@@ -447,6 +508,7 @@ class OpenCodeUsageCollector:
         lifetime_tokens: int | None,
         lifetime_models: list[dict[str, Any]] | None,
         daily_history: tuple[OpenCodeDailyUsage, ...] | None = None,
+        hourly_history: tuple[OpenCodeHourlyUsage, ...] | None = None,
     ) -> dict[str, Any]:
         today_models = self._models_with_totals(stats)
         today_by_model = {str(model["id"]): int(model["total_tokens"]) for model in today_models}
@@ -475,6 +537,7 @@ class OpenCodeUsageCollector:
                 stats.total_tokens,
                 method="provider-day",
                 detail=localized("provider-reported session metadata", "供应商返回的会话元数据"),
+                started_at=self._checkpoint_started_at,
             ),
             cumulative=usage_window(
                 lifetime_tokens,
@@ -501,6 +564,11 @@ class OpenCodeUsageCollector:
                 daily_usage(day.date, day.total_tokens, list(day.models))
                 for day in daily_history
             ] if daily_history is not None else None,
+            hourly_history=[
+                hourly_usage(hour.epoch, hour.total_tokens, list(hour.models))
+                for hour in hourly_history
+            ] if hourly_history is not None else None,
+            hourly_method="desktop-message-hour" if hourly_history is not None else None,
             pricing_history=[
                 pricing_day(
                     day.date,
@@ -516,7 +584,16 @@ class OpenCodeUsageCollector:
         )
 
     def _interval_points(self, stats: OpenCodeStats, timestamp: str, epoch: float) -> tuple[MetricPoint, ...]:
-        current: dict[str, int | float] = {"all:ai.messages": stats.messages}
+        current: dict[str, int | float] = {
+            "all:ai.tokens.total": stats.total_tokens,
+            "all:ai.tokens.input": stats.input_tokens,
+            "all:ai.tokens.output": stats.output_tokens,
+            "all:ai.tokens.reasoning": stats.reasoning_tokens,
+            "all:ai.tokens.cache_read": stats.cache_read_tokens,
+            "all:ai.tokens.cache_write": stats.cache_write_tokens,
+            "all:ai.cost.usd": stats.cost_usd,
+            "all:ai.messages": stats.messages,
+        }
         fields = {
             "total_tokens": ("ai.tokens.total", "tokens"),
             "input_tokens": ("ai.tokens.input", "tokens"),
@@ -534,17 +611,20 @@ class OpenCodeUsageCollector:
                         int(model["input_tokens"]) + int(model["output_tokens"]) + int(model.get("reasoning_tokens", 0))
                         + int(model["cache_read_tokens"]) + int(model["cache_write_tokens"])
                     ) if field == "total_tokens" else model.get(field, 0)
-        else:
-            current = {
-                "all:ai.tokens.input": stats.input_tokens,
-                "all:ai.tokens.total": stats.total_tokens,
-                "all:ai.tokens.output": stats.output_tokens,
-                "all:ai.tokens.reasoning": stats.reasoning_tokens,
-                "all:ai.tokens.cache_read": stats.cache_read_tokens,
-                "all:ai.tokens.cache_write": stats.cache_write_tokens,
-                "all:ai.cost.usd": stats.cost_usd,
-                "all:ai.messages": stats.messages,
-            }
+            # Checkpoints written before the authoritative scope rows existed
+            # already contain the same per-model counters. Seed only those
+            # missing scope keys so an envelope upgrade cannot replay the day.
+            for metric, _unit in fields.values():
+                scope_key = f"all:{metric}"
+                if scope_key in self._previous:
+                    continue
+                model_values = [
+                    value
+                    for key, value in self._previous.items()
+                    if key.endswith(f":{metric}") and not key.startswith("all:")
+                ]
+                if model_values:
+                    self._previous[scope_key] = sum(model_values)
         points: list[MetricPoint] = []
         for key, total in current.items():
             previous = self._previous.get(key)
@@ -582,6 +662,7 @@ class OpenCodeUsageCollector:
                 stats = read_opencode_desktop_stats(desktop_database, epoch)
                 lifetime_stats = read_opencode_desktop_stats(desktop_database, epoch, since_epoch=0)
                 daily_history = read_opencode_desktop_daily_history(desktop_database)
+                hourly_history = read_opencode_desktop_hourly_usage(desktop_database, epoch)
                 lifetime_tokens = lifetime_stats.total_tokens
                 lifetime_models = self._models_with_totals(lifetime_stats)
                 collection_method = "desktop-session-metadata"
@@ -599,9 +680,10 @@ class OpenCodeUsageCollector:
                 lifetime_tokens = None
                 lifetime_models = None
                 daily_history = None
+                hourly_history = None
                 collection_method = "cli-session-summary"
             snapshot = self._snapshot_for(
-                stats, timestamp, collection_method, lifetime_tokens, lifetime_models, daily_history,
+                stats, timestamp, collection_method, lifetime_tokens, lifetime_models, daily_history, hourly_history,
             )
             points = self._interval_points(stats, timestamp, epoch)
             self._write_checkpoint()

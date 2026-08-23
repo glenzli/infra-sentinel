@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 
-AI_USAGE_SNAPSHOT_SCHEMA = "20260822.1"
+AI_USAGE_SNAPSHOT_SCHEMA = "20260824.1"
 AI_USAGE_PRICE_REFERENCE_SCHEMA = "20260822.1"
 
 
@@ -109,6 +109,25 @@ def daily_usage(day: str, tokens: int, models: list[dict[str, Any]]) -> dict[str
     }
 
 
+def hourly_usage(
+    epoch: float,
+    tokens: int,
+    models: list[dict[str, Any]],
+    *,
+    estimated: bool = False,
+) -> dict[str, Any]:
+    """Create one current-day hour bucket without retaining source events."""
+    return {
+        "epoch": max(0, int(epoch)),
+        "tokens": max(0, int(tokens)),
+        "models": [
+            {"id": str(model.get("id") or "unknown"), "tokens": max(0, int(model.get("tokens") or 0))}
+            for model in models
+        ],
+        "estimated": bool(estimated),
+    }
+
+
 def pricing_day(
     day: str,
     *,
@@ -160,6 +179,9 @@ def ai_usage_snapshot(
     confidence: str,
     privacy: str,
     daily_history: list[dict[str, Any]] | None = None,
+    hourly_history: list[dict[str, Any]] | None = None,
+    hourly_unattributed_tokens: int = 0,
+    hourly_method: str | None = None,
     pricing_history: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the only snapshot shape consumed by AI projection and UI."""
@@ -176,6 +198,10 @@ def ai_usage_snapshot(
         "history": {
             "daily_available": daily_history is not None,
             "daily": daily_history or [],
+            "hourly_available": hourly_history is not None,
+            "hourly": hourly_history or [],
+            "hourly_unattributed_tokens": max(0, int(hourly_unattributed_tokens)),
+            "hourly_method": hourly_method or "unavailable",
         },
         "pricing": {
             "daily_available": pricing_history is not None,
