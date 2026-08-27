@@ -6,7 +6,9 @@
 //! local config/state directories, launch the packaged executable, and relaunch
 //! it after a configuration command asks the Agent to exit cleanly.
 
-use crate::app_paths::{config_path, state_dir, support_dir, STATE_DIRECTORY_ENV};
+use crate::app_paths::{
+    config_path, migrate_legacy_configuration, state_dir, support_dir, STATE_DIRECTORY_ENV,
+};
 use crate::projection_cache::ProjectionCache;
 use std::ffi::OsString;
 use std::fs;
@@ -87,6 +89,7 @@ fn bundled_config_template(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn bootstrap_runtime(app: &AppHandle) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+    migrate_legacy_configuration()?;
     let support = support_dir()?;
     let state = state_dir()?;
     let config = config_path()?;

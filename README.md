@@ -61,6 +61,8 @@ PYTHONPATH=src python3 -m infra_sentinel.cli.codex_usage_audit \
 
 当前桌面包支持 macOS 13+。预编译 App 使用 ad-hoc 签名，未经 Apple 公证；首次启动如被 macOS 拦截，可右键选择“打开”，或在“系统设置 → 隐私与安全性”中确认。
 
+从 Traffic Sentinel 1.0.0 升级时，macOS 会把 Infra Sentinel 识别为独立 App。首次启动仅在新版配置不存在时复制旧的 `Traffic Sentinel/config.toml`；旧目录不会被删除，v1 的历史采样也不会导入新版指标库。
+
 从源码构建需要 Xcode Command Line Tools、Rust、Node.js LTS、Python 3.11+ 与 PyInstaller：
 
 ```sh
@@ -146,6 +148,8 @@ PYTHONPATH=src python3 -m infra_sentinel.cli.codex_usage_audit \
 ### Build
 
 The desktop package supports macOS 13+. Prebuilt apps use ad-hoc signing and are not notarized by Apple. Building from source requires Xcode Command Line Tools, Rust, Node.js LTS, Python 3.11+, and PyInstaller:
+
+When upgrading from Traffic Sentinel 1.0.0, macOS treats Infra Sentinel as a separate app. On first launch it copies the old `Traffic Sentinel/config.toml` only when no Infra Sentinel configuration exists. The legacy directory is retained, and v1 sample history is not imported into the new metric store.
 
 ```sh
 git clone git@github.com:glenzli/infra-sentinel.git
