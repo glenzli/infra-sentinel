@@ -2,39 +2,30 @@
 
 **中文** · [English](#english)
 
-Infra Sentinel 是一个本地优先的个人 AI 基础设施观测工具，用于集中查看网络流量、AI 用量、本机运行状态、上游服务状态和已接入设施。不同数据域保留各自的来源、单位和统计口径。
+Infra Sentinel 是一个 macOS 桌面监控工具，用于查看网络流量、AI 客户端用量、本机资源、远端主机和服务状态。各类数据按来源和单位分别展示。
 
 ![Infra Sentinel 中文概览](assets/overview-zh.png)
 
 > 截图使用匿名演示数据，不含真实主机名、IP、账户、路径或项目内容。
 
-## 观测范围
+## 支持范围
 
-### 本机客户端与资源
-
-- **网络流量**：Mihomo / Clash Meta 兼容内核的连接、域名和代理路径归因。
+- **本机网络**：Mihomo / Clash Meta 兼容内核的连接、域名和代理路径归因。
 - **AI 用量**：Codex 桌面端与 CLI、OpenCode Desktop、Antigravity、Antigravity IDE / CLI，以及已接入的 Infer Runtime。
-- **本机运行**：CPU、内存压力、Swap、磁盘吞吐、IOPS、容量、温度压力，以及尽力而为的 App 磁盘 I/O 归因。
-
-### 远端与云端
-
-- **VPS**：通过本机 `~/.ssh/config` Host 别名读取 Linux 网卡统计；可选接入 Xray 用户逻辑流量。
-- **上游状态**：OpenAI、Claude、DeepSeek、Kimi / Moonshot 与 Cursor 的公开官方状态页。
-- **本地设施**：通过 [Infra Protocol](https://github.com/glenzli/infra-protocol) 自动发现并显示 PCP、Infer Runtime、Dev Mesh Observer 等兼容服务。详细诊断仍在各自 Console 中完成。
-
-采集仅处理可核对的本地聚合数据与公开状态信息，且始终为只读操作：不会抓包，不会读取提示词、响应、项目文件或凭据，也不会修改代理、服务器或本机系统状态。Codex 用量以本机 rollout JSONL 的 `last_token_usage` 请求增量为唯一事实源；fork 状态机会跳过子 Agent 中被重写时间戳的父任务回放，带上游会话作用域的不可逆去重标记再排除跨文件副本。捕获后仅保存不含任务内容的聚合账本、解析状态与去重标记，不再使用 `threads.tokens_used` 推算用量。主图显示本机去重后的原始 Token，不等同于 Codex 官方额度消耗；标准 API 参考值按模型分别代入输入、缓存输入、缓存写入和输出价格。对于短连接、来源离线或统计窗口不一致等无法可靠归因的情况，界面将明确标记为未知、未归因或等待采样；本地统计不作为供应商账单使用。
-
-当日用量按小时展示：有原生时间戳的来源按事件时间归桶，仅提供累计值的来源按采样差分归桶，无法定位的起始余额归入统计开始所在小时并标记为估算。跨日后 AI 历史按自然日汇总；小时参考价值按该小时的可计价 Token 构成换算，仍不是供应商账单。
+- **本机资源**：CPU、内存压力、Swap、磁盘吞吐、IOPS、容量、温度压力，以及尽力而为的 App 磁盘 I/O 归因。
+- **远端主机**：通过本机 `~/.ssh/config` Host 别名读取 Linux 网卡统计；可选接入 Xray 用户逻辑流量。
+- **上游状态**：OpenAI、Claude、DeepSeek、Kimi / Moonshot 和 Cursor 的公开官方状态页。
+- **本地设施**：通过 [Infra Protocol](https://github.com/glenzli/infra-protocol) 发现 PCP、Infer Runtime、Dev Mesh Observer 等兼容服务。
 
 ## 使用方式
 
-启动 App 后，应用负责管理本地采样进程；关闭主窗口后继续驻留菜单栏。首次启动会创建：
+启动 App 后，应用会管理本地采样进程；关闭主窗口后继续驻留菜单栏。首次启动会创建：
 
 ```text
 ~/Library/Application Support/Infra Sentinel/config.toml
 ```
 
-Mihomo 默认自动发现。远端 VPS 只需要在设置中填写已经存在于 `~/.ssh/config` 的 Host 别名；App 不保存私钥、密码或真实地址。
+Mihomo 默认自动发现。远端 VPS 在设置中填写已存在于 `~/.ssh/config` 的 Host 别名；App 只记录别名，不复制 SSH 密钥、密码或 `HostName`。
 
 ```sshconfig
 Host edge-a
@@ -43,14 +34,23 @@ Host edge-a
   IdentityFile ~/.ssh/id_ed25519
 ```
 
-Xray 用户统计是可选项：每个客户端需要独立 `email` 标签，StatsService 应只监听远端回环地址。
+Xray 用户统计为可选功能。每个客户端需要独立的 `email` 标签，StatsService 应只监听远端回环地址。
 
-首次运行新版 Agent 时，会先重建仍可见的 Codex 历史，备份旧 SQLite 与旧 Codex
-检查点，然后只移除 SQLite 中旧的 Codex 指标投影。此后 JSONL 聚合账本按新增记录
-递增，已捕获历史不受后来删除任务影响；其他机器和重建前已经删除的任务仍然缺失。
+## AI 用量统计
 
-如需单独核对某台机器仍可见的 Codex 本地 JSONL 用量，可从源码运行只读审计。它按
-`last_token_usage` 累计请求增量，以 `total_token_usage` 检测重复、回退和 fork 回放；结果同样不是官方额度或账户账单：
+Codex 用量从本机 rollout JSONL 中读取每次请求的 `last_token_usage` 增量，不使用 `threads.tokens_used` 计算。统计会排除 fork 回放和跨文件重复记录。持久化数据只包含聚合用量、解析状态和去重标记，不包含任务内容。
+
+图表显示本机记录到的原始 Token，不是 Codex 账户额度或账单。API 参考价值按模型的输入、缓存输入、缓存写入和输出价格换算。
+
+当日用量按小时展示。有时间戳的来源按事件时间归桶；只提供累计值的来源按采样差分归桶。无法定位的起始余额归入统计开始所在小时，并标记为估算。跨日后按自然日汇总。
+
+![Infra Sentinel AI 用量](assets/ai-usage-zh.png)
+
+*当日 Token 小时桶与本地 API 参考价值；图中为匿名演示数据。*
+
+从旧版本升级时，Agent 会先备份旧 SQLite 和 Codex 检查点，重建当前仍可见的 Codex 历史，再替换旧的 Codex 指标。已记入聚合账本的历史不受后续删除任务影响；其他机器和升级前已删除的任务无法补录。
+
+如需核对本机仍可见的 Codex JSONL，可从源码运行只读审计：
 
 ```sh
 PYTHONPATH=src python3 -m infra_sentinel.cli.codex_usage_audit \
@@ -59,7 +59,7 @@ PYTHONPATH=src python3 -m infra_sentinel.cli.codex_usage_audit \
 
 ## 安装与构建
 
-当前桌面包支持 macOS 13+。预编译 App 使用 ad-hoc 签名、未经过 Apple 公证；首次启动如被 macOS 拦截，可右键选择“打开”，或在“系统设置 → 隐私与安全性”中确认。
+当前桌面包支持 macOS 13+。预编译 App 使用 ad-hoc 签名，未经 Apple 公证；首次启动如被 macOS 拦截，可右键选择“打开”，或在“系统设置 → 隐私与安全性”中确认。
 
 从源码构建需要 Xcode Command Line Tools、Rust、Node.js LTS、Python 3.11+ 与 PyInstaller：
 
@@ -71,9 +71,9 @@ python3 -m pip install pyinstaller
 open "ui/src-tauri/target/release/bundle/macos/Infra Sentinel.app"
 ```
 
-Windows 与 Linux 的系统采集接口已预留，但当前只有 macOS 提供正式桌面包。
-
 ## 数据与隐私
+
+采集为只读操作：不抓包，不采集或保存提示词、响应、项目文件和凭据，也不修改代理或远端服务配置。上游状态检查只访问供应商的公开状态页。
 
 本地状态保存在：
 
@@ -81,7 +81,9 @@ Windows 与 Linux 的系统采集接口已预留，但当前只有 macOS 提供�
 ~/Library/Application Support/Infra Sentinel/state/
 ```
 
-状态数据可能包含聚合域名、模型名、Xray 客户端标签和用户设置的显示名。默认情况下，采集、存储和分析均在本机完成；上游状态检查仅访问供应商公开状态页。实现与架构说明见 [docs](docs/)、[ROADMAP.md](ROADMAP.md) 与 [设施发现说明](docs/facility-discovery.md)。
+状态数据可能包含聚合域名、模型名、Xray 客户端标签和用户设置的显示名。默认情况下，采集、存储和分析均在本机完成。
+
+实现与架构说明见 [docs](docs/)、[ROADMAP.md](ROADMAP.md) 和 [设施发现说明](docs/facility-discovery.md)。
 
 ## 开发验证
 
@@ -97,43 +99,80 @@ cd src-tauri && cargo test --offline
 
 [中文](#infra-sentinel)
 
-Infra Sentinel is a local-first desktop dashboard for personal AI infrastructure. It keeps network traffic, AI usage, host pressure, public provider status, and compatible local facilities as separate, traceable measurements rather than reducing them to one opaque score.
+Infra Sentinel is a macOS desktop monitor for network traffic, local AI-client usage, host resources, remote hosts, and service status. Each source keeps its own units and accounting method.
 
 ![Infra Sentinel overview](assets/overview-en.png)
 
-### Coverage
+### Supported sources
 
-- **Local**: Mihomo / Clash Meta traffic attribution; Codex desktop and CLI, OpenCode Desktop, Antigravity, Antigravity IDE / CLI, and Infer Runtime usage; macOS CPU, memory, disk, thermal, and best-effort per-app disk I/O.
-- **Remote**: Linux VPS interface counters through an existing SSH Host alias, optional Xray user counters, and public status feeds for OpenAI, Claude, DeepSeek, Kimi / Moonshot, and Cursor.
-- **Facilities**: compatible local services discovered through [Infra Protocol](https://github.com/glenzli/infra-protocol), including PCP, Infer Runtime, and Dev Mesh Observer.
+- **Local network**: connection, domain, and proxy-route attribution from Mihomo / Clash Meta-compatible cores.
+- **AI usage**: Codex desktop and CLI, OpenCode Desktop, Antigravity, Antigravity IDE / CLI, and connected Infer Runtime instances.
+- **Host resources**: CPU, memory pressure, swap, disk throughput, IOPS, capacity, thermal pressure, and best-effort per-app disk I/O attribution on macOS.
+- **Remote hosts**: Linux interface counters through an existing SSH Host alias, with optional Xray per-user logical traffic.
+- **Provider status**: public status pages for OpenAI, Claude, DeepSeek, Kimi / Moonshot, and Cursor.
+- **Local facilities**: PCP, Infer Runtime, Dev Mesh Observer, and other compatible services discovered through [Infra Protocol](https://github.com/glenzli/infra-protocol).
 
-The dashboard brings together measurements that can be checked locally while keeping their sources visible. Collection stays read-only: it does not capture packets, inspect prompts or responses, touch project files or credentials, or alter proxy/server configuration. Codex usage has one fact source: per-request `last_token_usage` from local rollout JSONL. A fork state machine skips retimestamped parent replay in subagents, while irreversible dedup keys scoped to the upstream session suppress cross-file copies. After capture, only aggregate usage, parser state, and deduplication markers are retained; `threads.tokens_used` is not an accounting input. Charts show deduplicated local raw Tokens, not official Codex quota consumption, while the standard API reference prices input, cached input, cache writes, and output separately by model. When a measurement cannot be explained reliably, it stays unknown or unattributed rather than becoming a made-up invoice number.
+### Running the app
 
-The current local day is shown in hourly buckets: timestamped sources use their recorded event time, cumulative-only sources use sampled deltas, and an unlocatable opening balance is assigned to the statistics-start hour and marked as estimated. After the local day closes, AI history is summarized by calendar day. Hourly reference value is derived from each hour's priced Token composition and remains a local estimate, not provider billing.
+The app manages the local sampling process and remains in the menu bar after its main window closes. On first launch it creates:
 
-The packaged desktop app currently targets macOS 13+. Build from source with:
-
-```sh
-python3 -m pip install pyinstaller
-./bin/build-desktop-app.sh
-open "ui/src-tauri/target/release/bundle/macos/Infra Sentinel.app"
+```text
+~/Library/Application Support/Infra Sentinel/config.toml
 ```
 
-On first launch, the app creates `~/Library/Application Support/Infra Sentinel/config.toml`. Mihomo is discovered automatically; remote hosts are referenced only by an existing `~/.ssh/config` Host alias.
+Mihomo is discovered automatically. Remote hosts are configured by an existing `~/.ssh/config` Host alias; Infra Sentinel records the alias without copying SSH keys, passwords, or `HostName`. Xray user statistics are optional and require a separate `email` label for each client. StatsService should listen only on the remote loopback interface.
 
-On the first upgraded Agent run, Infra Sentinel rebuilds still-visible Codex
-history, backs up the prior SQLite store and legacy Codex checkpoints, then
-removes only the old Codex metric projection. Later JSONL events extend the
-aggregate ledger, so deleting a rollout after capture does not erase history.
-Other machines and rollouts deleted before the rebuild remain absent.
+### AI usage accounting
 
-For a separate read-only reconstruction of this machine's still-visible Codex
-JSONL usage, run:
+Codex usage is calculated from per-request `last_token_usage` increments in local rollout JSONL. `threads.tokens_used` is not used. Fork replay and duplicate records across files are removed. The persistent ledger contains aggregate usage, parser state, and deduplication markers, but no task content.
+
+Charts show raw Tokens recorded on this machine, not Codex account quota or billing. API reference value is calculated from model-specific input, cached-input, cache-write, and output prices.
+
+The current day is displayed in hourly buckets. Timestamped sources use event time; cumulative-only sources use sampled deltas. An opening balance that cannot be located is assigned to the statistics-start hour and marked as estimated. Older data is summarized by calendar day.
+
+![Infra Sentinel AI usage](assets/ai-usage-en.png)
+
+*Hourly Token buckets and local API reference value for the current day, using anonymous demo data.*
+
+When upgrading from the legacy accounting format, the Agent backs up the old SQLite store and Codex checkpoints, rebuilds the Codex history still visible on this machine, and replaces the old Codex metrics. History already captured in the aggregate ledger remains after a task is deleted. Data from other machines and tasks deleted before the upgrade cannot be recovered.
+
+To audit the Codex JSONL still visible on this machine:
 
 ```sh
 PYTHONPATH=src python3 -m infra_sentinel.cli.codex_usage_audit \
   --from 2026-08-22 --to 2026-08-23 --timezone Asia/Shanghai
 ```
 
-The audit deduplicates cumulative snapshots and handles counter resets. It is
-not account billing.
+### Build
+
+The desktop package supports macOS 13+. Prebuilt apps use ad-hoc signing and are not notarized by Apple. Building from source requires Xcode Command Line Tools, Rust, Node.js LTS, Python 3.11+, and PyInstaller:
+
+```sh
+git clone git@github.com:glenzli/infra-sentinel.git
+cd infra-sentinel
+python3 -m pip install pyinstaller
+./bin/build-desktop-app.sh
+open "ui/src-tauri/target/release/bundle/macos/Infra Sentinel.app"
+```
+
+### Data and privacy
+
+Collection is read-only. Infra Sentinel does not capture packets or retain prompts, responses, project files, or credentials. It does not change proxy or remote-service configuration. Provider-status checks access only public status pages.
+
+Local state is stored under:
+
+```text
+~/Library/Application Support/Infra Sentinel/state/
+```
+
+It may include aggregated domains, model names, Xray client labels, and user-defined display names. Collection, storage, and analysis run locally by default.
+
+Implementation and architecture notes are under [docs](docs/), [ROADMAP.md](ROADMAP.md), and [facility discovery](docs/facility-discovery.md).
+
+### Development checks
+
+```sh
+python3 -m unittest discover -s tests -v
+cd ui && npm run build
+cd src-tauri && cargo test --offline
+```

@@ -12,6 +12,15 @@ export async function requestAgentCommand(
   commandType: string,
   payload: Record<string, unknown>,
 ): Promise<AgentCommandResult> {
+  if (commandType === "metrics.query" && window.__INFRA_SENTINEL_STATIC_DEMO_LOCALE) {
+    return {
+      schema: "static-demo",
+      id: "static-demo-metrics",
+      type: commandType,
+      status: "ok",
+      payload: { points: [] },
+    };
+  }
   const receipt: CommandReceipt = await submitAgentCommand(commandType, payload);
   const deadline = Date.now() + RESULT_TIMEOUT_MS;
   while (Date.now() < deadline) {
