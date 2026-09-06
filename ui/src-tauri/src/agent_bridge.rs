@@ -28,7 +28,11 @@ pub struct CommandReceipt {
 fn command_allowed(command_type: &str) -> bool {
     matches!(
         command_type,
-        "session.reset" | "metrics.query" | "configuration.get" | "configuration.update"
+        "session.reset"
+            | "metrics.query"
+            | "configuration.get"
+            | "configuration.update"
+            | "pricing.catalog.update"
     )
 }
 
@@ -204,6 +208,7 @@ mod tests {
         assert!(command_allowed("metrics.query"));
         assert!(command_allowed("configuration.get"));
         assert!(command_allowed("configuration.update"));
+        assert!(command_allowed("pricing.catalog.update"));
         assert!(!command_allowed("shell.execute"));
         assert!(!command_allowed("configuration.write"));
     }

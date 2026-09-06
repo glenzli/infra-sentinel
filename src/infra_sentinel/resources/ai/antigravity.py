@@ -39,9 +39,9 @@ from infra_sentinel.resources.ai.contract import (
     usage_window,
 )
 from infra_sentinel.resources.ai.antigravity_pricing import (
-    ANTIGRAVITY_TEXT_PRICE_REFERENCES_EFFECTIVE_DATE,
     estimate_antigravity_text_api_cost,
 )
+from infra_sentinel.resources.ai.pricing_catalog import PriceCatalogLookup, bundled_pricing_catalog
 
 
 ANTIGRAVITY_POLL_SECONDS = 300
@@ -398,10 +398,12 @@ class AntigravityUsageCollector:
         self,
         *,
         conversations_finder: Callable[[], Path | tuple[Path, ...] | None] = discover_antigravity_conversations,
+        pricing_catalog: PriceCatalogLookup | None = None,
         clock: Callable[[], float] = time.time,
         poll_seconds: int = ANTIGRAVITY_POLL_SECONDS,
     ) -> None:
         self._conversations_finder = conversations_finder
+        self._pricing_catalog = pricing_catalog or bundled_pricing_catalog()
         self._clock = clock
         self._poll_seconds = poll_seconds
         self._next_poll_epoch = 0.0
@@ -410,8 +412,8 @@ class AntigravityUsageCollector:
         self._started_day: str | None = None
         self._started_at_epoch: float | None = None
 
-    @staticmethod
     def _snapshot_for(
+        self,
         history: AntigravityHistory,
         timestamp: str,
         epoch: float,
@@ -455,7 +457,9 @@ class AntigravityUsageCollector:
         daily = []
         pricing = []
         for date, model_values in sorted(history.days.items()):
-            estimate = estimate_antigravity_text_api_cost(model_values)
+            estimate = estimate_antigravity_text_api_cost(
+                model_values, catalog=self._pricing_catalog, usage_date=date,
+            )
             daily.append(daily_usage(
                 date,
                 sum(values.total_tokens for values in model_values.values()),
@@ -470,8 +474,12 @@ class AntigravityUsageCollector:
                 models=[{"id": identifier, "cost_usd": cost, "priced_tokens": tokens}
                         for identifier, cost, tokens in estimate.model_costs],
             ))
-        today_estimate = estimate_antigravity_text_api_cost(today_models)
-        cumulative_estimate = estimate_antigravity_text_api_cost(cumulative_models)
+        today_estimate = estimate_antigravity_text_api_cost(
+            today_models, catalog=self._pricing_catalog, usage_date=day,
+        )
+        cumulative_estimate = estimate_antigravity_text_api_cost(
+            cumulative_models, catalog=self._pricing_catalog, usage_date=day,
+        )
         price_metrics = [
             token_metric(
                 "antigravity-api-today", localized("Today reference value", "今日参考价"), today_estimate.total_cost_usd,
@@ -525,8 +533,8 @@ class AntigravityUsageCollector:
                 detail_group(
                     "antigravity-api-reference", localized("Antigravity API references", "Antigravity API 参考"), price_metrics,
                     note=localized(
-                        "Maps decoded text input, cache-read, output, and reasoning counters through explicit local model mappings to Gemini Developer API and Google Cloud Claude reference prices checked on " + ANTIGRAVITY_TEXT_PRICE_REFERENCES_EFFECTIVE_DATE + ". Gemini 3.1 Pro uses its <=200k-context tier. It excludes storage, grounding, tools, multimodal legs, opaque aliases, and all Antigravity plan terms. Not a bill or quota balance.",
-                        "仅将已解码文本输入、缓存读取、输出与推理计数，经明确的本地模型映射，换算为 " + ANTIGRAVITY_TEXT_PRICE_REFERENCES_EFFECTIVE_DATE + " 核对的 Gemini Developer API 与 Google Cloud Claude 参考价。Gemini 3.1 Pro 使用 <=200k 上下文档位；缓存存储、检索、工具、多模态、内部别名和全部 Antigravity 套餐条款均不计入；不是账单或额度余额。",
+                        "Maps decoded text input, cache-read, output, and reasoning counters through exact local model IDs in the active api-price catalog checked on " + self._pricing_catalog.checked_at + ". Gemini 3.1 Pro uses its <=200k-context tier. It excludes storage, grounding, tools, multimodal legs, opaque aliases, and all Antigravity plan terms. Not a bill or quota balance.",
+                        "仅将已解码文本输入、缓存读取、输出与推理计数，经 " + self._pricing_catalog.checked_at + " 核对的当前 api-price 目录中的精确本地模型 ID 换算。Gemini 3.1 Pro 使用 <=200k 上下文档位；缓存存储、检索、工具、多模态、内部别名和全部 Antigravity 套餐条款均不计入；不是账单或额度余额。",
                     ),
                     badge=localized("reference · not billing", "估算 · 非账单"),
                 ),

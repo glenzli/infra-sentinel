@@ -37,6 +37,11 @@ aggregate audit; it does not own parsing or persist user rollout data.
 backup, and scoped metric-store replacement without moving those policies into
 the Collector or SQLite owner.
 
+`resources/ai/pricing_catalog.py` owns the exact-model, effective-dated
+api-price contract, the bundled offline fallback, validated Release downloads,
+and the last-known-good local cache. Provider collectors may query this owner;
+they must not fetch pricing or implement their own update cadence.
+
 ## State and privacy boundaries
 
 - `metrics/` is the durable metric boundary. A resource adapter returns points

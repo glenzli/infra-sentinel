@@ -18,7 +18,7 @@ export interface SettingsActions {
   languageChanged(): void;
 }
 
-type SettingsSection = "general" | "integrations" | "network";
+type SettingsSection = "general" | "integrations" | "pricing" | "network";
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({
@@ -160,7 +160,7 @@ export function renderSettings(root: HTMLDivElement, initial: SettingsPayload, a
       <main class="shell">
         <header class="topbar"><button class="brand" id="back" type="button"><span class="brand-mark" aria-hidden="true"><i></i></span><span>Infra Sentinel</span></button><div class="topbar-actions"><button class="button button--subtle" id="back-overview">${icon("arrow-left")}<span>Back to overview / 返回概览</span></button></div></header>
         <section class="settings-header"><p class="eyebrow">CONFIGURATION</p><h1>Settings / 设置</h1><p>Local Mihomo is discovered automatically. Choose how Infra Sentinel appears, which hosts it observes, and when it should notify you.</p></section>
-        <div class="settings-layout"><nav class="settings-nav" aria-label="Settings sections"><button type="button" data-settings-section="general" class="${activeSection === "general" ? "is-active" : ""}">General / 通用</button><button type="button" data-settings-section="integrations" class="${activeSection === "integrations" ? "is-active" : ""}">Local integrations / 本地集成</button><button type="button" data-settings-section="network" class="${activeSection === "network" ? "is-active" : ""}">Network configuration / 网络配置</button></nav>
+        <div class="settings-layout"><nav class="settings-nav" aria-label="Settings sections"><button type="button" data-settings-section="general" class="${activeSection === "general" ? "is-active" : ""}">General / 通用</button><button type="button" data-settings-section="integrations" class="${activeSection === "integrations" ? "is-active" : ""}">Local integrations / 本地集成</button><button type="button" data-settings-section="pricing" class="${activeSection === "pricing" ? "is-active" : ""}">API pricing / API 价格</button><button type="button" data-settings-section="network" class="${activeSection === "network" ? "is-active" : ""}">Network configuration / 网络配置</button></nav>
         <form id="settings-form" class="settings-form">
           <section class="settings-section settings-panel ${activeSection === "general" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">GENERAL</p><h2>Appearance / 外观</h2></div></div>
             <div class="general-grid"><label class="setting-choice"><span>Language / 语言</span>${languagePicker()}</label></div>
@@ -172,6 +172,9 @@ export function renderSettings(root: HTMLDivElement, initial: SettingsPayload, a
               <label><span>OpenCode executable / OpenCode 程序</span><input name="integration-opencode-executable" value="${escapeHtml(settings.integrations.opencode_executable)}" placeholder="Auto discover / 自动发现" /></label>
               <label><span>OpenCode database / OpenCode 数据库</span><input name="integration-opencode-database" value="${escapeHtml(settings.integrations.opencode_database)}" placeholder="Auto discover / 自动发现" /></label>
             </div>
+          </section>
+          <section class="settings-section settings-panel ${activeSection === "pricing" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">API PRICING</p><h2>Price catalog / 价格目录</h2></div><button class="button button--subtle" type="button" id="update-api-price">${icon("refresh")}<span>Check now / 立即检查</span></button></div>
+            <p class="settings-note">Infra Sentinel checks the latest <code>glenzli/api-price</code> GitHub Release daily and when an exact model price is missing. Only the public catalog assets are requested; local model IDs and usage never leave this Mac. A validated downloaded catalog is cached locally, with the bundled catalog kept as an offline fallback.</p>
           </section>
           <section class="settings-section settings-panel ${activeSection === "network" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">NETWORK SOURCES</p><h2>Remote host configuration / 远端主机配置</h2></div><button class="button button--subtle" type="button" id="add-host">${icon("plus")}<span>Add VPS / 添加 VPS</span></button></div>
             <p class="settings-note">Use a Host alias from <code>~/.ssh/config</code>. Xray StatsService remains limited to remote <code>127.0.0.1:10085</code>.</p>
@@ -206,6 +209,23 @@ export function renderSettings(root: HTMLDivElement, initial: SettingsPayload, a
     root.querySelector<HTMLButtonElement>("#add-host")?.addEventListener("click", () => {
       settings.sources.push({ id: nextSourceId(settings), kind: "network.linux-xray", label: "New VPS", enabled: true, ssh_host: "", xray_stats_enabled: false, billing_mode: "both" });
       render();
+    });
+    root.querySelector<HTMLButtonElement>("#update-api-price")?.addEventListener("click", async () => {
+      settings = readForm(form, settings);
+      const button = root.querySelector<HTMLButtonElement>("#update-api-price");
+      if (button) { button.disabled = true; button.textContent = tr("Checking…", "正在检查…"); }
+      try {
+        const result = await requestAgentCommand("pricing.catalog.update", {});
+        if (result.status !== "ok" || !result.payload) throw new Error(result.message ?? "Catalog update failed.");
+        const status = result.payload.status === "updated"
+          ? tr("updated", "已更新")
+          : result.payload.status === "checking"
+            ? tr("check already in progress", "正在检查")
+            : tr("already current", "已是最新");
+        render(`${tr("API price catalog", "API 价格目录")} ${escapeHtml(result.payload.catalog_version)} · ${status}`);
+      } catch (error) {
+        render(`${tr("Could not update API price catalog", "无法更新 API 价格目录")}：${String(error)}`);
+      }
     });
     root.querySelectorAll<HTMLButtonElement>("[data-remove-source]").forEach((button) => button.addEventListener("click", () => {
       const id = button.dataset.removeSource;

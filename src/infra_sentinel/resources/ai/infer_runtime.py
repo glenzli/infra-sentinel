@@ -30,6 +30,7 @@ from infra_sentinel.resources.ai.contract import (
     usage_window,
 )
 from infra_sentinel.resources.ai.codex_pricing import estimate_standard_api_cost
+from infra_sentinel.resources.ai.pricing_catalog import PriceCatalogLookup, bundled_pricing_catalog
 from infra_sentinel.resources.facilities.protocols import (
     INFER_RUNTIME_USAGE_DAILY_SCHEMA,
     INFER_RUNTIME_USAGE_DAILY_VERSION,
@@ -63,9 +64,11 @@ class InferRuntimeUsageCollector:
         self,
         *,
         checkpoint_path: Path,
+        pricing_catalog: PriceCatalogLookup | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self._checkpoint_path = checkpoint_path
+        self._pricing_catalog = pricing_catalog or bundled_pricing_catalog()
         self._clock = clock
         self._history = self._load_history()
         self._started_at = self._load_started_at()
@@ -236,8 +239,7 @@ class InferRuntimeUsageCollector:
             daily.append(daily_usage(day, sum(day_totals.values()), day_models))
         return daily, totals, costs, token_details
 
-    @staticmethod
-    def _pricing_history(history: dict[str, dict[str, dict[str, Any]]]) -> list[dict[str, Any]] | None:
+    def _pricing_history(self, history: dict[str, dict[str, dict[str, Any]]]) -> list[dict[str, Any]] | None:
         """Keep Runtime execution origins honest at the price boundary.
 
         Runtime's own cost value is authoritative only for ``other`` attempts.
@@ -281,7 +283,9 @@ class InferRuntimeUsageCollector:
                 aggregate["cost_usd"] = float(aggregate["cost_usd"]) + cost
                 aggregate["priced_tokens"] = int(aggregate["priced_tokens"]) + tokens
 
-            codex_reference = estimate_standard_api_cost(codex_compositions)
+            codex_reference = estimate_standard_api_cost(
+                codex_compositions, catalog=self._pricing_catalog, usage_date=day,
+            )
             model_rows: dict[str, dict[str, float | int]] = {
                 identifier: dict(row) for identifier, row in direct_models.items()
             }

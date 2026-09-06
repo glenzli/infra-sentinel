@@ -76,6 +76,7 @@ local or remote service.
 | Infra Protocol facility discovery or a facility snapshot | `resources/facilities/` | Protocol and observer tests; Discovery advertises candidates, while a real connection establishes liveness |
 | Network billing, Mihomo/Xray attribution, or remote VPS observation | `resources/network/` | Policy/remote/Xray tests; keep provider billing and local logical traffic distinct |
 | An AI usage adapter | `resources/ai/` | Its contract/collector tests; local estimates and provider-authoritative values must remain labeled as such |
+| API price catalog loading or updates | `resources/ai/pricing_catalog.py` | Exact-ID estimator tests, bundled-data packaging, and the narrow manual-update command |
 | A new WebView analysis or resource page | `ui/src/*_analysis.ts`, `ui/src/*_view.ts` | Projection types in `bridge.ts` and deterministic rendering behavior |
 | A native desktop capability | `ui/src-tauri/src/` | A narrow IPC operation and target build/run verification |
 | A documentation screenshot or deterministic presentation fixture | `scripts/` | Anonymous fixture validation and an opt-in native static-Projection path; never a production collection path |

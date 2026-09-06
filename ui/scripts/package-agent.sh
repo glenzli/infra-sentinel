@@ -15,8 +15,8 @@ build_dir="$root_dir/.build/tauri-agent"
 output_dir="$ui_dir/src-tauri/binaries"
 python_bin=${PYTHON3:-python3}
 
-"$python_bin" -c 'import PyInstaller' 2>/dev/null || {
-  echo "PyInstaller is required to package the Infra Agent. Install it with: $python_bin -m pip install pyinstaller" >&2
+"$python_bin" -c 'import PyInstaller, certifi' 2>/dev/null || {
+  echo "PyInstaller and the Agent dependencies are required. Install them with: $python_bin -m pip install . pyinstaller" >&2
   exit 1
 }
 
@@ -32,7 +32,9 @@ mkdir -p "$build_dir" "$output_dir"
   --workpath "$build_dir/work" \
   --specpath "$build_dir/spec" \
   --paths "$root_dir/src" \
+  --add-data "$root_dir/src/infra_sentinel/resources/ai/api-price.toml:infra_sentinel/resources/ai" \
   --hidden-import infra_sentinel.cli.snapshot \
+  --collect-data certifi \
   --hidden-import infra_sentinel.resources.system.backends.macos \
   --hidden-import infra_sentinel.resources.system.backends.linux \
   --hidden-import infra_sentinel.resources.system.backends.windows \

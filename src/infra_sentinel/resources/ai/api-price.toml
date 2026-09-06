@@ -1,0 +1,153 @@
+schema = "api-price/v1"
+catalog_version = "2026.09.06.1"
+updated_at = "2026-09-06T12:00:00+08:00"
+currency = "USD"
+unit = "per_million_tokens"
+
+[[references]]
+id = "openai-models"
+url = "https://developers.openai.com/api/docs/models"
+checked_at = "2026-09-06"
+
+[[references]]
+id = "openai-gpt-6-astra"
+url = "https://developers.openai.com/api/docs/models/gpt-6-astra"
+checked_at = "2026-09-06"
+
+[[references]]
+id = "google-gemini-api"
+url = "https://ai.google.dev/gemini-api/docs/pricing"
+checked_at = "2026-09-06"
+
+[[references]]
+id = "google-cloud-partner-models"
+url = "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
+checked_at = "2026-09-06"
+
+[[prices]]
+scope = "codex"
+model = "gpt-5.6-sol"
+reference = "openai-models"
+valid_from = "2026-01-01"
+input_per_million = 4.00
+cached_input_per_million = 0.40
+cache_write_per_million = 5.00
+output_per_million = 20.00
+
+[[prices]]
+scope = "codex"
+model = "gpt-5.6-terra"
+reference = "openai-models"
+valid_from = "2026-01-01"
+input_per_million = 2.00
+cached_input_per_million = 0.20
+cache_write_per_million = 2.50
+output_per_million = 12.00
+
+[[prices]]
+scope = "codex"
+model = "gpt-5.6-luna"
+reference = "openai-models"
+valid_from = "2026-01-01"
+input_per_million = 0.20
+cached_input_per_million = 0.02
+cache_write_per_million = 0.25
+output_per_million = 1.20
+
+[[prices]]
+scope = "codex"
+model = "gpt-5.5"
+reference = "openai-models"
+valid_from = "2026-01-01"
+input_per_million = 5.00
+cached_input_per_million = 0.50
+output_per_million = 30.00
+note = "No separately published cache-write tier; consumers retain that subset on the ordinary input leg."
+
+[[prices]]
+scope = "codex"
+model = "gpt-6-astra"
+reference = "openai-gpt-6-astra"
+valid_from = "2026-09-06"
+input_per_million = 10.00
+cached_input_per_million = 1.00
+cache_write_per_million = 12.50
+output_per_million = 50.00
+note = "Base standard text-token rates only; request-level long-context uplift is excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-3.8-flash"
+reference = "google-gemini-api"
+valid_from = "2026-09-06"
+valid_until = "2026-12-31"
+input_per_million = 0.75
+cached_input_per_million = 0.075
+output_per_million = 3.75
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-3.8-flash"
+reference = "google-gemini-api"
+valid_from = "2027-01-01"
+input_per_million = 1.50
+cached_input_per_million = 0.15
+output_per_million = 7.50
+note = "Provider-published scheduled rate effective January 1, 2027."
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-3.7-flash"
+reference = "google-gemini-api"
+valid_from = "2026-08-22"
+input_per_million = 0.75
+cached_input_per_million = 0.075
+output_per_million = 3.75
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-3.7-flash-exp-b"
+reference = "google-gemini-api"
+valid_from = "2026-08-22"
+input_per_million = 0.75
+cached_input_per_million = 0.075
+output_per_million = 3.75
+note = "Observed Antigravity experimental identifier mapped explicitly to the documented Flash rate."
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-3.6-flash"
+reference = "google-gemini-api"
+valid_from = "2026-08-22"
+input_per_million = 0.75
+cached_input_per_million = 0.075
+output_per_million = 3.75
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-3.1-pro-low"
+reference = "google-gemini-api"
+valid_from = "2026-08-22"
+input_per_million = 2.00
+cached_input_per_million = 0.20
+output_per_million = 12.00
+note = "Observed Antigravity alias for the documented Gemini 3.1 Pro Preview <=200k tier."
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-pro-default"
+reference = "google-gemini-api"
+valid_from = "2026-08-22"
+input_per_million = 2.00
+cached_input_per_million = 0.20
+output_per_million = 12.00
+note = "Observed Antigravity alias for the documented Gemini 3.1 Pro Preview <=200k tier."
+
+[[prices]]
+scope = "antigravity"
+model = "claude-opus-4-6-thinking"
+reference = "google-cloud-partner-models"
+valid_from = "2026-08-22"
+input_per_million = 5.00
+cached_input_per_million = 0.50
+output_per_million = 25.00

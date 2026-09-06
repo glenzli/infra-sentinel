@@ -40,7 +40,7 @@ Xray 用户统计为可选功能。每个客户端需要独立的 `email` 标签
 
 Codex 用量从本机 rollout JSONL 中读取每次请求的 `last_token_usage` 增量，不使用 `threads.tokens_used` 计算。统计会排除 fork 回放和跨文件重复记录。持久化数据只包含聚合用量、解析状态和去重标记，不包含任务内容。
 
-图表显示本机记录到的原始 Token，不是 Codex 账户额度或账单。API 参考价值按模型的输入、缓存输入、缓存写入和输出价格换算。
+图表显示本机记录到的原始 Token，不是 Codex 账户额度或账单。API 参考价值按模型的输入、缓存输入、缓存写入和输出价格换算。价格目录来自独立的 [api-price](https://github.com/glenzli/api-price) Release：Agent 每日检查一次，遇到没有精确价格的模型时至多每六小时补查一次，也可在设置中手动检查。下载内容会校验大小、结构和 SHA-256；失败时继续使用最后一个有效版本或 App 内置目录。检查请求不包含本机模型 ID 或用量。
 
 当日用量按小时展示。有时间戳的来源按事件时间归桶；只提供累计值的来源按采样差分归桶。无法定位的起始余额归入统计开始所在小时，并标记为估算。跨日后按自然日汇总。
 
@@ -68,7 +68,7 @@ PYTHONPATH=src python3 -m infra_sentinel.cli.codex_usage_audit \
 ```sh
 git clone git@github.com:glenzli/infra-sentinel.git
 cd infra-sentinel
-python3 -m pip install pyinstaller
+python3 -m pip install . pyinstaller
 ./bin/build-desktop-app.sh
 open "ui/src-tauri/target/release/bundle/macos/Infra Sentinel.app"
 ```
@@ -128,7 +128,7 @@ Mihomo is discovered automatically. Remote hosts are configured by an existing `
 
 Codex usage is calculated from per-request `last_token_usage` increments in local rollout JSONL. `threads.tokens_used` is not used. Fork replay and duplicate records across files are removed. The persistent ledger contains aggregate usage, parser state, and deduplication markers, but no task content.
 
-Charts show raw Tokens recorded on this machine, not Codex account quota or billing. API reference value is calculated from model-specific input, cached-input, cache-write, and output prices.
+Charts show raw Tokens recorded on this machine, not Codex account quota or billing. API reference value is calculated from model-specific input, cached-input, cache-write, and output prices. The price catalog comes from independent [api-price](https://github.com/glenzli/api-price) Releases. The Agent checks daily, checks at most every six hours when an exact model price is missing, and also offers a manual check in Settings. Downloads are validated for size, structure, and SHA-256; failures retain the last valid or bundled catalog. Update requests contain no local model IDs or usage.
 
 The current day is displayed in hourly buckets. Timestamped sources use event time; cumulative-only sources use sampled deltas. An opening balance that cannot be located is assigned to the statistics-start hour and marked as estimated. Older data is summarized by calendar day.
 
@@ -154,7 +154,7 @@ When upgrading from Traffic Sentinel 1.0.0, macOS treats Infra Sentinel as a sep
 ```sh
 git clone git@github.com:glenzli/infra-sentinel.git
 cd infra-sentinel
-python3 -m pip install pyinstaller
+python3 -m pip install . pyinstaller
 ./bin/build-desktop-app.sh
 open "ui/src-tauri/target/release/bundle/macos/Infra Sentinel.app"
 ```

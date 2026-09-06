@@ -1,45 +1,19 @@
-"""Offline reference pricing for explicitly sampled Codex text-token usage.
-
-This is deliberately a small, versioned catalogue rather than an API client.
-The local rollout JSONL format is not a billing interface, so these values are
-only an equivalent *standard API text-price* reference.  Unknown models and
-pricing dimensions the sample cannot establish are excluded rather than
-estimated from names or neighbouring model tiers.
-"""
+"""Standard API reference pricing for explicitly sampled Codex text usage."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Mapping
 
+from infra_sentinel.resources.ai.pricing_catalog import (
+    PriceCatalogLookup,
+    TextTokenPrice,
+    bundled_pricing_catalog,
+)
 
-OPENAI_STANDARD_TEXT_PRICES_EFFECTIVE_DATE = "2026-08-24"
+
 OPENAI_STANDARD_TEXT_PRICES_URL = "https://developers.openai.com/api/docs/models"
-
-
-@dataclass(frozen=True)
-class StandardTextPrice:
-    """Official standard API text prices in USD per million tokens."""
-
-    input_per_million: float
-    cached_input_per_million: float
-    # A few older models have no separately published cache-write rate. In
-    # that case the observed field stays on the ordinary input leg rather than
-    # being presented as free usage.
-    cache_write_per_million: float | None
-    output_per_million: float
-
-
-# Source: OpenAI's official model pages and pricing table, checked on the
-# effective date above.  This is not a subscription, Codex plan, Batch,
-# Priority, regional-processing, long-context, tool, or multimodal price.
-STANDARD_TEXT_PRICES: Mapping[str, StandardTextPrice] = {
-    "gpt-5.6-sol": StandardTextPrice(4.00, 0.40, 5.00, 20.00),
-    "gpt-5.6-terra": StandardTextPrice(2.00, 0.20, 2.50, 12.00),
-    "gpt-5.6-luna": StandardTextPrice(0.20, 0.02, 0.25, 1.20),
-    # GPT-5.5 has no separately published cache-write tier.
-    "gpt-5.5": StandardTextPrice(5.00, 0.50, None, 30.00),
-}
+StandardTextPrice = TextTokenPrice
 
 
 @dataclass(frozen=True)
@@ -57,26 +31,37 @@ class StandardApiEstimate:
     models: tuple[ModelCostEstimate, ...]
 
 
-def estimate_standard_api_cost(model_compositions: Mapping[str, Mapping[str, int]]) -> StandardApiEstimate:
-    """Price explicitly sampled text-token fields without inventing coverage.
+def estimate_standard_api_cost(
+    model_compositions: Mapping[str, Mapping[str, int]],
+    *,
+    catalog: PriceCatalogLookup | None = None,
+    usage_date: str | None = None,
+) -> StandardApiEstimate:
+    """Price exact text-token fields without inventing model coverage.
 
     ``input_tokens`` includes the cached and cache-write subsets reported by
-    Codex.  They are removed from the ordinary-input leg before applying their
-    individual rates.  ``reasoning_output_tokens`` is intentionally not added:
-    it is already part of ``output_tokens`` in the sampled usage object.
+    Codex. They are removed from the ordinary-input leg before applying their
+    individual rates. ``reasoning_output_tokens`` is already included in
+    ``output_tokens`` and is intentionally not added a second time.
     """
+    lookup = catalog or bundled_pricing_catalog()
     estimates: list[ModelCostEstimate] = []
     unpriced_tokens = 0
     for model, raw in model_compositions.items():
         tokens = _tokens(raw.get("total_tokens"))
-        price = STANDARD_TEXT_PRICES.get(model)
+        if tokens <= 0:
+            continue
+        price = lookup.price_for("codex", model, usage_date)
         if price is None:
             unpriced_tokens += tokens
             continue
         input_tokens = _tokens(raw.get("input_tokens"))
         cached_tokens = min(input_tokens, _tokens(raw.get("cached_input_tokens")))
         remaining_input = input_tokens - cached_tokens
-        cache_write_tokens = min(remaining_input, _tokens(raw.get("cache_write_input_tokens"))) if price.cache_write_per_million is not None else 0
+        cache_write_tokens = (
+            min(remaining_input, _tokens(raw.get("cache_write_input_tokens")))
+            if price.cache_write_per_million is not None else 0
+        )
         uncached_input = remaining_input - cache_write_tokens
         output_tokens = _tokens(raw.get("output_tokens"))
         cost = (

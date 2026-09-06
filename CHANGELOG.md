@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 2.0.1 — 2026-09-06
+
+### Changed
+
+- Moved exact text-token reference prices into the independently released
+  `glenzli/api-price` catalog.
+- Added GPT-6 Astra and Gemini 3.8 Flash price periods, including Gemini's
+  published January 1, 2027 change.
+- Added validated daily, missing-model, and manual catalog checks with an
+  offline bundled fallback and no local usage disclosure.
+
 ## 2.0.0 — 2026-08-28
 
 Infra Sentinel replaces the original Traffic Sentinel app with a resource-oriented desktop observer and a separately packaged local Agent.

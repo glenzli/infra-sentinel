@@ -673,6 +673,53 @@ class SessionMeterTests(unittest.TestCase):
             result = json.loads((commands / f"{command_id}.result.json").read_text(encoding="utf-8"))
             self.assertEqual(result["status"], "ok")
 
+    def test_agent_applies_manual_price_catalog_update_through_allowlisted_command(self) -> None:
+        class RemoteMonitor:
+            pass
+
+        class PricingCatalog:
+            def refresh(self, *, force: bool = False) -> dict[str, object]:
+                self.force = force
+                return {
+                    "status": "updated",
+                    "catalog_version": "2026.09.06.1",
+                    "checked_at": "2026-09-06",
+                    "source": "downloaded",
+                    "last_remote_check_at": "2026-09-06T12:00:00+08:00",
+                    "last_error": None,
+                }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary)
+            config = make_config(state_dir)
+            command_id = "c7adfb24-f31b-4c7d-8a2b-6f198844a263"
+            commands = state_dir / "commands"
+            commands.mkdir()
+            (commands / f"{command_id}.request.json").write_text(json.dumps({
+                "schema": COMMAND_SCHEMA,
+                "id": command_id,
+                "type": "pricing.catalog.update",
+                "requested_at": "2026-09-06T12:00:00+08:00",
+                "payload": {},
+            }), encoding="utf-8")
+            catalog = PricingCatalog()
+
+            effects = apply_agent_commands(
+                config,
+                state_dir / "config.toml",
+                100.0,
+                RemoteMonitor(),  # type: ignore[arg-type]
+                SessionMeter(state_dir),
+                logging.getLogger("infra-agent-test"),
+                catalog,  # type: ignore[arg-type]
+            )
+
+            result = json.loads((commands / f"{command_id}.result.json").read_text(encoding="utf-8"))
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["payload"]["catalog_version"], "2026.09.06.1")
+            self.assertTrue(catalog.force)
+            self.assertFalse(effects.restart_requested)
+
     def test_agent_returns_metrics_query_through_the_local_command_protocol(self) -> None:
         class RemoteMonitor:
             def reset_session(self, epoch: float) -> dict[str, object]:

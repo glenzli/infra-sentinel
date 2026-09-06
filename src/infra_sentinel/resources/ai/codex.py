@@ -17,10 +17,7 @@ from typing import Any
 
 from infra_sentinel.core.collectors import Collection, CollectorCapability, CollectorContext
 from infra_sentinel.core.model import MetricPoint
-from infra_sentinel.resources.ai.codex_pricing import (
-    OPENAI_STANDARD_TEXT_PRICES_EFFECTIVE_DATE,
-    estimate_standard_api_cost,
-)
+from infra_sentinel.resources.ai.codex_pricing import estimate_standard_api_cost
 from infra_sentinel.resources.ai.codex_sampling import (
     CodexRolloutLedger,
     LedgerIncrement,
@@ -43,6 +40,7 @@ from infra_sentinel.resources.ai.contract import (
     token_metric,
     usage_window,
 )
+from infra_sentinel.resources.ai.pricing_catalog import PriceCatalogLookup, bundled_pricing_catalog
 
 
 CODEX_POLL_SECONDS = 20
@@ -87,12 +85,14 @@ class CodexUsageCollector:
         *,
         rollout_roots_finder: Callable[[], tuple[Path, ...]] = discover_codex_rollout_roots,
         ledger_path: Path | None = None,
+        pricing_catalog: PriceCatalogLookup | None = None,
         clock: Callable[[], float] = time.time,
         poll_seconds: int = CODEX_POLL_SECONDS,
     ) -> None:
         self._rollout_roots_finder = rollout_roots_finder
         self._ledger_path = ledger_path
         self._ledger = load_codex_rollout_ledger(ledger_path)
+        self._pricing_catalog = pricing_catalog or bundled_pricing_catalog()
         self._clock = clock
         self._poll_seconds = max(1, int(poll_seconds))
         self._next_poll_epoch = 0.0
@@ -128,13 +128,16 @@ class CodexUsageCollector:
             if usage.composition.total_tokens > 0
         ]
 
-    @staticmethod
-    def _pricing_history(ledger: CodexRolloutLedger) -> list[dict[str, Any]]:
+    def _pricing_history(self, ledger: CodexRolloutLedger) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for day, usage in sorted(ledger.days.items()):
             if usage.composition.total_tokens <= 0:
                 continue
-            estimate = estimate_standard_api_cost(_composition_models(usage.composition))
+            estimate = estimate_standard_api_cost(
+                _composition_models(usage.composition),
+                catalog=self._pricing_catalog,
+                usage_date=day,
+            )
             rows.append(pricing_day(
                 day,
                 kind="local-rollout-standard-api-projection",
@@ -148,15 +151,24 @@ class CodexUsageCollector:
             ))
         return rows
 
-    @staticmethod
-    def _details(ledger: CodexRolloutLedger, today: RolloutAuditDay, cumulative: TokenComposition) -> list[dict[str, Any]]:
+    def _details(
+        self,
+        ledger: CodexRolloutLedger,
+        today: RolloutAuditDay,
+        cumulative: TokenComposition,
+        usage_date: str,
+    ) -> list[dict[str, Any]]:
         root_files = sum(1 for entry in ledger.files.values() if entry.get("source") == "user")
         subagent_files = sum(1 for entry in ledger.files.values() if entry.get("source") == "subagent")
         duplicate_snapshots = sum(day.duplicate_snapshots for day in ledger.days.values())
         inherited_snapshots = sum(day.inherited_snapshots for day in ledger.days.values())
         counter_resets = sum(day.counter_resets for day in ledger.days.values())
-        today_estimate = estimate_standard_api_cost(_composition_models(today.composition))
-        cumulative_estimate = estimate_standard_api_cost(_composition_models(cumulative))
+        today_estimate = estimate_standard_api_cost(
+            _composition_models(today.composition), catalog=self._pricing_catalog, usage_date=usage_date,
+        )
+        cumulative_estimate = estimate_standard_api_cost(
+            _composition_models(cumulative), catalog=self._pricing_catalog, usage_date=usage_date,
+        )
         price_metrics = [
             token_metric(
                 "standard-api-today", localized("Today reference value", "今日参考价"),
@@ -203,15 +215,14 @@ class CodexUsageCollector:
             detail_group(
                 "standard-api-reference", localized("Standard API reference", "标准 API 参考"), price_metrics,
                 note=localized(
-                    "Applies the OpenAI standard text-token price snapshot checked on " + OPENAI_STANDARD_TEXT_PRICES_EFFECTIVE_DATE + " to captured input, cached input, cache writes, and output by observed model. Excludes unmatched aliases, long-context uplift, tools, multimodal, priority, regional processing, and subscription terms. Not a bill or quota balance.",
-                    "将 " + OPENAI_STANDARD_TEXT_PRICES_EFFECTIVE_DATE + " 核对的 OpenAI 标准文本 Token 价格，按已观测模型代入捕获的输入、缓存输入、缓存写入和输出；未匹配别名、长上下文加价、工具、多模态、优先级、区域处理与订阅条款均不计入。不是账单或额度余额。",
+                    "Applies the active api-price catalog checked on " + self._pricing_catalog.checked_at + " to captured input, cached input, cache writes, and output by exact observed model. Excludes unmatched aliases, long-context uplift, tools, multimodal, priority, regional processing, and subscription terms. Not a bill or quota balance.",
+                    "将 " + self._pricing_catalog.checked_at + " 核对的当前 api-price 目录，按精确观测模型代入捕获的输入、缓存输入、缓存写入和输出；未匹配别名、长上下文加价、工具、多模态、优先级、区域处理与订阅条款均不计入。不是账单或额度余额。",
                 ),
                 badge=localized("reference · not billing", "估算 · 非账单"),
             ),
         ]
 
-    @classmethod
-    def _snapshot_for(cls, ledger: CodexRolloutLedger, timestamp: str, epoch: float) -> dict[str, Any]:
+    def _snapshot_for(self, ledger: CodexRolloutLedger, timestamp: str, epoch: float) -> dict[str, Any]:
         day_key = datetime.fromtimestamp(epoch).astimezone().date().isoformat()
         today = ledger.days.get(day_key, _empty_day())
         cumulative = ledger.cumulative()
@@ -252,13 +263,13 @@ class CodexUsageCollector:
                 )
                 for identifier in identifiers
             ],
-            details=cls._details(ledger, today, cumulative),
+            details=self._details(ledger, today, cumulative, day_key),
             confidence="medium",
             privacy="aggregate-rollout-token-metadata-only",
-            daily_history=cls._daily_history(ledger),
-            hourly_history=cls._hourly_history(ledger),
+            daily_history=self._daily_history(ledger),
+            hourly_history=self._hourly_history(ledger),
             hourly_method="rollout-event-hour",
-            pricing_history=cls._pricing_history(ledger),
+            pricing_history=self._pricing_history(ledger),
         )
 
     @staticmethod

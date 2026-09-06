@@ -1,46 +1,19 @@
-"""Pinned text-token price references for local Antigravity metadata.
-
-Antigravity individual plans expose quota, not a per-request invoice. This
-module computes an API-price reference only for explicitly mapped local model
-identifiers. It excludes unknown or opaque aliases and non-token charges, and
-is never used as a subscription bill or remaining-quota calculation.
-"""
+"""API price references for local Antigravity generation metadata."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Mapping
 
+from infra_sentinel.resources.ai.pricing_catalog import (
+    PriceCatalogLookup,
+    TextTokenPrice,
+    bundled_pricing_catalog,
+)
 
-ANTIGRAVITY_TEXT_PRICE_REFERENCES_EFFECTIVE_DATE = "2026-08-22"
+
 GEMINI_DEVELOPER_API_PRICES_URL = "https://ai.google.dev/gemini-api/docs/pricing"
 GOOGLE_CLOUD_ANTHROPIC_PRICES_URL = "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
-
-
-@dataclass(frozen=True)
-class TextTokenPrice:
-    """Documented USD prices per million text tokens."""
-
-    input_per_million: float
-    cached_input_per_million: float
-    output_per_million: float
-
-
-# Sources: Google Gemini Developer API and Google Cloud partner-model pricing,
-# checked on the effective date. Mappings are deliberately literal. The only
-# experimental exception is Antigravity's observed `gemini-3.7-flash-exp-b`,
-# which is explicitly treated as a same-rate Flash approximation so it is not
-# silently presented as free usage. It remains a reference, never a plan bill.
-# `gemini-3.1-pro-low` and `gemini-pro-default` are Antigravity local aliases
-# for the documented Gemini 3.1 Pro Preview <=200k-context tier.
-ANTIGRAVITY_TEXT_PRICE_REFERENCES: Mapping[str, TextTokenPrice] = {
-    "gemini-3.7-flash": TextTokenPrice(0.75, 0.075, 3.75),
-    "gemini-3.7-flash-exp-b": TextTokenPrice(0.75, 0.075, 3.75),
-    "gemini-3.6-flash": TextTokenPrice(0.75, 0.075, 3.75),
-    "gemini-3.1-pro-low": TextTokenPrice(2.00, 0.20, 12.00),
-    "gemini-pro-default": TextTokenPrice(2.00, 0.20, 12.00),
-    "claude-opus-4-6-thinking": TextTokenPrice(5.00, 0.50, 25.00),
-}
 
 
 @dataclass(frozen=True)
@@ -51,14 +24,14 @@ class AntigravityApiEstimate:
     model_costs: tuple[tuple[str, float, int], ...]
 
 
-def estimate_antigravity_text_api_cost(model_totals: Mapping[str, object]) -> AntigravityApiEstimate:
-    """Return an explicit-model text API reference, never an Antigravity bill.
-
-    ``input_tokens`` is fresh/system input in decoded metadata;
-    ``cache_read_tokens`` is charged on the cache-read leg; output and reasoning
-    are charged at the documented output rate. Cache storage, grounding, tools,
-    multimodal charges, and Gemini 3.1 contexts above 200k are absent.
-    """
+def estimate_antigravity_text_api_cost(
+    model_totals: Mapping[str, object],
+    *,
+    catalog: PriceCatalogLookup | None = None,
+    usage_date: str | None = None,
+) -> AntigravityApiEstimate:
+    """Return an exact-model text API reference, never an Antigravity bill."""
+    lookup = catalog or bundled_pricing_catalog()
     estimates: list[tuple[str, float, int]] = []
     unpriced_tokens = 0
     for identifier, totals in model_totals.items():
@@ -66,7 +39,9 @@ def estimate_antigravity_text_api_cost(model_totals: Mapping[str, object]) -> An
         cache_read_tokens = _counter(totals, "cache_read_tokens")
         output_tokens = _counter(totals, "output_tokens") + _counter(totals, "reasoning_tokens")
         total_tokens = input_tokens + cache_read_tokens + output_tokens
-        price = ANTIGRAVITY_TEXT_PRICE_REFERENCES.get(identifier)
+        if total_tokens <= 0:
+            continue
+        price = lookup.price_for("antigravity", identifier, usage_date)
         if price is None:
             unpriced_tokens += total_tokens
             continue

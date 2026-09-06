@@ -72,6 +72,7 @@ from infra_sentinel.resources.ai.codex import CodexUsageCollector
 from infra_sentinel.resources.ai.antigravity import AntigravityUsageCollector
 from infra_sentinel.resources.ai.infer_runtime import InferRuntimeUsageCollector
 from infra_sentinel.resources.ai.opencode import OpenCodeUsageCollector, discover_opencode, discover_opencode_desktop_database
+from infra_sentinel.resources.ai.pricing_catalog import PricingCatalogManager
 from infra_sentinel.core.timing import annotate_sample_timing, sample_is_realtime
 from infra_sentinel.resources.network.remote import RemoteFleetMonitor
 from infra_sentinel.resources.network.session import SessionMeter
@@ -671,11 +672,15 @@ def apply_agent_commands(
     remote_monitor: RemoteFleetMonitor,
     session_meter: SessionMeter,
     logger: logging.Logger,
+    pricing_catalog: PricingCatalogManager | None = None,
 ) -> AgentCommandEffects:
     """Apply idempotent local commands before recording the current interval."""
     reset_remote_state: dict[str, Any] | None = None
     restart_requested = False
-    for command in consume_commands(config.state_dir, accepted_types={"configuration.update", "session.reset"}):
+    for command in consume_commands(
+        config.state_dir,
+        accepted_types={"configuration.update", "pricing.catalog.update", "session.reset"},
+    ):
         if command.type == "configuration.update":
             try:
                 settings = write_user_settings(config_path, command.payload)
@@ -686,6 +691,27 @@ def apply_agent_commands(
                 restart_requested = True
             except (OSError, ValueError) as exc:
                 complete_command(command, status="rejected", message=str(exc))
+            continue
+        if command.type == "pricing.catalog.update":
+            if pricing_catalog is None:
+                complete_command(command, status="error", message="API price catalog manager is unavailable")
+                continue
+            result = pricing_catalog.refresh(force=True)
+            if result["status"] == "error":
+                complete_command(
+                    command,
+                    status="error",
+                    message="API price catalog update failed; the last known-good catalog remains active",
+                    payload=result,
+                )
+            else:
+                complete_command(command, status="ok", payload=result)
+            logger.info(
+                "agent command applied id=%s type=%s status=%s",
+                command.id,
+                command.type,
+                result["status"],
+            )
             continue
         if command.type != "session.reset":
             complete_command(command, status="rejected", message="unsupported command")
@@ -714,6 +740,7 @@ def handle_sample(
     billing_alerts: BillingBudgetEngine,
     remote_monitor: RemoteFleetMonitor,
     session_meter: SessionMeter,
+    pricing_catalog: PricingCatalogManager,
     metric_store: MetricStore,
     metric_pipeline: MetricPipeline,
     collector_registry: CollectorRegistry,
@@ -763,6 +790,7 @@ def handle_sample(
         remote_monitor,
         session_meter,
         logger,
+        pricing_catalog,
     )
     if command_effects.remote_state is not None:
         remote_state = command_effects.remote_state
@@ -879,6 +907,8 @@ def main() -> int:
             print_current(client)
             return 0
         logger = configure_logger(config)
+        pricing_catalog = PricingCatalogManager(config.state_dir, logger=logger)
+        pricing_catalog.schedule_periodic_refresh()
         history = load_recent_samples(config, time.time())
         tracker = load_tracker(config.state_dir / "mihomo-baseline.json")
         alerts = AlertEngine()
@@ -912,10 +942,12 @@ def main() -> int:
         ))
         collector_registry.register(CodexUsageCollector(
             ledger_path=config.state_dir / "codex-rollout-ledger.json",
+            pricing_catalog=pricing_catalog,
         ))
-        collector_registry.register(AntigravityUsageCollector())
+        collector_registry.register(AntigravityUsageCollector(pricing_catalog=pricing_catalog))
         collector_registry.register(InferRuntimeUsageCollector(
             checkpoint_path=config.state_dir / "infer-runtime-usage-daily.json",
+            pricing_catalog=pricing_catalog,
         ))
         system_collector = SystemResourceCollector()
         collector_registry.register(system_collector)
@@ -972,6 +1004,7 @@ def main() -> int:
                         billing_alerts,
                         remote_monitor,
                         session_meter,
+                        pricing_catalog,
                         metric_store,
                         metric_pipeline,
                         collector_registry,

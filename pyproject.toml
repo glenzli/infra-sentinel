@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "infra-sentinel-agent"
-version = "2.0.0"
+version = "2.0.1"
 description = "Local-first resource observation sidecar for Infra Sentinel"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["certifi>=2026.1.4"]
 
 [project.scripts]
 infra-sentinel-agent = "infra_sentinel.app.agent:main"
@@ -18,3 +18,6 @@ infra-sentinel-codex-audit = "infra_sentinel.cli.codex_usage_audit:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+infra_sentinel = ["resources/ai/api-price.toml"]

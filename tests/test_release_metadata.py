@@ -7,7 +7,8 @@ import unittest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-RELEASE_VERSION = "2.0.0"
+RELEASE_VERSION = "2.0.1"
+RELEASE_DATE = "2026-09-06"
 
 
 class ReleaseMetadataTests(unittest.TestCase):
@@ -30,9 +31,9 @@ class ReleaseMetadataTests(unittest.TestCase):
 
     def test_release_notes_and_changelog_name_the_release(self) -> None:
         changelog = (PROJECT_ROOT / "CHANGELOG.md").read_text()
-        release_notes = PROJECT_ROOT / "docs/releases/v2.0.0.md"
+        release_notes = PROJECT_ROOT / f"docs/releases/v{RELEASE_VERSION}.md"
 
-        self.assertIn(f"## {RELEASE_VERSION} — 2026-08-28", changelog)
+        self.assertIn(f"## {RELEASE_VERSION} — {RELEASE_DATE}", changelog)
         self.assertTrue(release_notes.is_file())
         self.assertIn(
             f"# Infra Sentinel {RELEASE_VERSION}",
