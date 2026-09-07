@@ -4,7 +4,8 @@ Antigravity, Antigravity IDE, and Antigravity CLI keep local conversation
 databases below ~/.gemini/<store>/conversations. Their generation metadata is an
 opaque protobuf blob. This adapter decodes only bounded token counters, model
 identifiers, response de-duplication identifiers, and generation timestamps. It
-never reads steps or text-bearing conversation payloads, and never persists a
+reads only bounded step metadata for execution-linked timestamps, never
+reads text-bearing conversation payloads, and never persists a
 copied database row or protobuf blob.
 
 This is an internal client format, not an account-quota API. The normalized
@@ -17,7 +18,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Callable, Iterator
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 import os
 from pathlib import Path
@@ -49,6 +50,7 @@ ANTIGRAVITY_POLL_SECONDS = 300
 ANTIGRAVITY_CLI_POLL_SECONDS = ANTIGRAVITY_POLL_SECONDS
 MAX_DATABASE_FILES = 512
 MAX_GENERATIONS_PER_DATABASE = 20_000
+MAX_STEPS_PER_DATABASE = 100_000
 MAX_METADATA_BYTES = 256 * 1024
 
 
@@ -79,6 +81,7 @@ class AntigravityHistory:
     sessions: int
     stores: int = 0
     skipped_metadata_rows: int = 0
+    undated_generations: int = 0
 
     @property
     def cumulative(self) -> _TokenTotals:
@@ -263,16 +266,31 @@ def _local_day(epoch_millis: int) -> str:
     return datetime.fromtimestamp(epoch_millis / 1_000).astimezone().date().isoformat()
 
 
-def _file_mtime_millis(path: Path) -> int:
-    return int(path.stat().st_mtime * 1_000)
-
-
 def _session_rows(path: Path) -> tuple[list[_Generation], int]:
     uri = f"{path.resolve().as_uri()}?mode=ro"
     parsed: list[_Generation] = []
     skipped = 0
     with closing(sqlite3.connect(uri, uri=True)) as connection:
         connection.execute("PRAGMA query_only = ON")
+        # Current clients may omit ChatStartMetadata.created_at. Their schema
+        # links generator.execution_id (#4) to step.metadata.execution_id (#12).
+        # Step metadata.created_at (#1) dates that execution, unlike file mtime.
+        execution_times: dict[str, int] = {}
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(steps)")}
+        if "metadata" in columns:
+            for index, (metadata,) in enumerate(connection.execute(
+                "SELECT CASE WHEN length(metadata) <= ? THEN metadata ELSE NULL END "
+                "FROM steps ORDER BY idx LIMIT ?",
+                (MAX_METADATA_BYTES, MAX_STEPS_PER_DATABASE + 1),
+            )):
+                if index >= MAX_STEPS_PER_DATABASE:
+                    raise ValueError("AntigravityStepLimitExceeded")
+                if not isinstance(metadata, bytes):
+                    continue
+                execution_id = _string_field(metadata, 12)
+                created = _timestamp_millis(_message_field(metadata, 1) or b"")
+                if execution_id and created is not None:
+                    execution_times[execution_id] = min(execution_times.get(execution_id, created), created)
         cursor = connection.execute(
             "SELECT CASE WHEN length(data) <= ? THEN data ELSE NULL END, length(data) "
             "FROM gen_metadata ORDER BY idx LIMIT ?",
@@ -290,6 +308,8 @@ def _session_rows(path: Path) -> tuple[list[_Generation], int]:
                 raise ValueError("AntigravityGenerationMetadataInvalid")
             generation = _parse_generation(value)
             if generation is not None:
+                if generation.timestamp_millis is None:
+                    generation = replace(generation, timestamp_millis=execution_times.get(_string_field(value, 4) or ""))
                 parsed.append(generation)
     return parsed, skipped
 
@@ -317,6 +337,7 @@ def read_antigravity_history(directories: tuple[Path, ...]) -> AntigravityHistor
     sessions = 0
     skipped_metadata_rows = 0
     seen_response_ids: set[str] = set()
+    undated_generations = 0
     for directory in directories:
         for database in _conversation_databases(directory):
             rows, skipped = _session_rows(database)
@@ -336,14 +357,16 @@ def read_antigravity_history(directories: tuple[Path, ...]) -> AntigravityHistor
                 for label, models in display_models.items()
                 if len(models) == 1
             }
-            fallback_timestamp = _file_mtime_millis(database)
             for row in rows:
+                if row.timestamp_millis is None:
+                    undated_generations += 1
+                    continue
                 if row.response_id:
                     if row.response_id in seen_response_ids:
                         continue
                     seen_response_ids.add(row.response_id)
                 model = row.model or (recovered.get(row.display_model) if row.display_model else None) or "unknown"
-                day = _local_day(row.timestamp_millis or fallback_timestamp)
+                day = _local_day(row.timestamp_millis)
                 days[day].setdefault(model, _TokenTotals()).add(row.totals)
                 if row.timestamp_millis is not None:
                     hour = int(row.timestamp_millis / 1_000 // 3_600) * 3_600
@@ -354,6 +377,7 @@ def read_antigravity_history(directories: tuple[Path, ...]) -> AntigravityHistor
         sessions,
         stores=len(directories),
         skipped_metadata_rows=skipped_metadata_rows,
+        undated_generations=undated_generations,
     )
 
 
@@ -528,6 +552,7 @@ class AntigravityUsageCollector:
                     token_metric("stores", localized("Stores", "数据目录"), history.stores, localized("discovered Antigravity conversation stores", "已发现的 Antigravity 会话目录"), unit="count"),
                     token_metric("sessions", localized("Sessions", "会话"), history.sessions, localized("readable local conversation databases", "可读取的本地会话数据库"), unit="count"),
                     token_metric("generations", localized("Generations", "生成"), today.generations, localized("generation metadata rows", "生成元数据行"), unit="count"),
+                    token_metric("undated_generations", localized("Excluded undated generations", "因时间缺失排除的生成记录"), history.undated_generations, localized("excluded from all usage totals", "不计入任何用量统计"), unit="count"),
                     token_metric("skipped_metadata", localized("Skipped oversized metadata", "跳过超大元数据"), history.skipped_metadata_rows, localized("metadata rows larger than the bounded reader limit", "超过受限读取器大小上限的元数据行"), unit="count"),
                 ]),
                 detail_group(
@@ -544,7 +569,7 @@ class AntigravityUsageCollector:
             daily_history=daily,
             hourly_history=hourly_rows,
             hourly_unattributed_tokens=max(0, today.total_tokens - hourly_tokens),
-            hourly_method="generation-event-hour-with-sampled-baseline",
+            hourly_method="generation-or-execution-created-hour",
             pricing_history=pricing,
         )
 

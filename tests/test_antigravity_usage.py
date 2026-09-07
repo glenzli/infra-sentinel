@@ -181,7 +181,7 @@ class AntigravityUsageTests(unittest.TestCase):
         self.assertNotIn("private prompt", repr(result.snapshot))
         self.assertEqual(result.points, ())
 
-    def test_missing_generation_time_is_kept_as_estimated_current_start_bucket(self) -> None:
+    def test_missing_generation_time_is_excluded_from_all_totals(self) -> None:
         epoch = datetime(2026, 8, 22, 12).timestamp()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -204,10 +204,48 @@ class AntigravityUsageTests(unittest.TestCase):
                 poll_seconds=1,
             ).collect(CollectorContext({"epoch": epoch}, {}))
 
-        self.assertEqual(result.snapshot["usage"]["today"]["tokens"], 48)
+        self.assertEqual(result.snapshot["usage"]["today"]["tokens"], 35)
+        self.assertEqual(result.snapshot["usage"]["cumulative"]["tokens"], 35)
+        self.assertEqual(result.snapshot["history"]["daily"][0]["tokens"], 35)
         self.assertEqual(result.snapshot["history"]["hourly"][0]["tokens"], 35)
-        self.assertEqual(result.snapshot["history"]["hourly_unattributed_tokens"], 13)
+        self.assertEqual(result.snapshot["history"]["hourly_unattributed_tokens"], 0)
         self.assertEqual(result.snapshot["usage"]["today"]["started_at"], datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds"))
+
+    def test_execution_metadata_recovers_time_without_using_file_date(self) -> None:
+        epoch = int(datetime(2026, 9, 6, 12).timestamp())
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            database = root / "conversation.db"
+            generation = _generation(
+                timestamp_seconds=None, model="gemini-3.8-flash", display=None,
+                response_id="linked", system=1, input_tokens=2, cache_read=3,
+                output_tokens=4, reasoning=5,
+            ) + _field_bytes(4, b"execution-a")
+            _conversation(database, [generation])
+            with sqlite3.connect(database) as connection:
+                connection.execute("ALTER TABLE steps ADD COLUMN metadata BLOB")
+                for idx, seconds in [(1, epoch + 20), (2, epoch)]:
+                    metadata = _field_bytes(12, b"execution-a") + _field_bytes(1, _field_varint(1, seconds))
+                    connection.execute("INSERT OR REPLACE INTO steps (idx, metadata) VALUES (?, ?)", (idx, metadata))
+            os.utime(database, (epoch + 172800, epoch + 172800))
+            history = read_antigravity_cli_history(root)
+        self.assertEqual(list(history.days), [_local_day(epoch * 1000)])
+        self.assertEqual(history.hours[epoch // 3600 * 3600]["gemini-3.8-flash"].total_tokens, 15)
+        self.assertEqual(history.undated_generations, 0)
+
+    def test_unmatched_execution_is_excluded_but_timed_unknown_model_is_counted(self) -> None:
+        epoch = int(datetime(2026, 9, 6, 12).timestamp())
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            def row(timestamp, model, response):
+                return _generation(timestamp_seconds=timestamp, model=model, display=None,
+                    response_id=response, system=1, input_tokens=2, cache_read=0,
+                    output_tokens=3, reasoning=0) + _field_bytes(4, b"unmatched")
+            _conversation(root / "conversation.db", [row(None, "gemini-3.8-flash", "missing"), row(epoch, None, "timed")])
+            history = read_antigravity_cli_history(root)
+        self.assertEqual(history.undated_generations, 1)
+        self.assertEqual(history.cumulative.total_tokens, 6)
+        self.assertEqual(history.days[_local_day(epoch * 1000)]["unknown"].total_tokens, 6)
 
     def test_exact_gemini_price_reference_rejects_unknown_model_ids(self) -> None:
         estimate = estimate_antigravity_text_api_cost({
