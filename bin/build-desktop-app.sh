@@ -32,7 +32,7 @@ fi
     npm ci
     cp package-lock.json "$dependency_stamp"
   fi
-  npm run tauri -- build
+  npm run tauri -- build --bundles app
 )
 
 if [ ! -d "$app_dir" ]; then

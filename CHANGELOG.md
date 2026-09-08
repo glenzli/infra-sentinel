@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 2.0.2 — 2026-09-08
+
+### Fixed
+
+- Recover Antigravity generation dates from execution-linked step metadata when
+  the generation timestamp is absent, instead of using database modification time.
+- Exclude generations without a reliable timestamp from all usage totals and
+  report their count separately. Dated records retain their model attribution.
+- Build the app bundle directly for ZIP distribution without requiring DMG packaging.
+
 ## 2.0.1 — 2026-09-06
 
 ### Changed
