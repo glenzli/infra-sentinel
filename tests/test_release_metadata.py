@@ -7,8 +7,8 @@ import unittest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-RELEASE_VERSION = "2.0.1"
-RELEASE_DATE = "2026-09-06"
+RELEASE_VERSION = "2.0.2"
+RELEASE_DATE = "2026-09-08"
 
 
 class ReleaseMetadataTests(unittest.TestCase):
