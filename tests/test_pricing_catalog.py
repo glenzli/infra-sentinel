@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+from io import BytesIO
 import json
 from pathlib import Path
 import sys
@@ -9,6 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -21,6 +23,7 @@ from infra_sentinel.resources.ai.pricing_catalog import (  # noqa: E402
     LATEST_MANIFEST_URL,
     PricingCatalog,
     PricingCatalogManager,
+    _fetch,
     bundled_pricing_catalog,
 )
 
@@ -37,6 +40,18 @@ def manifest(raw: bytes, version: str) -> bytes:
 
 
 class PricingCatalogTests(unittest.TestCase):
+    def test_fetch_survives_packaged_ca_file_disappearing_after_startup(self) -> None:
+        class Response(BytesIO):
+            headers = {"Content-Length": "3"}
+
+        with (
+            patch("infra_sentinel.resources.ai.pricing_catalog.certifi.where", side_effect=FileNotFoundError),
+            patch("infra_sentinel.resources.ai.pricing_catalog.urlopen", return_value=Response(b"abc")) as opener,
+        ):
+            self.assertEqual(_fetch(LATEST_MANIFEST_URL, 10), b"abc")
+
+        self.assertIsNotNone(opener.call_args.kwargs["context"])
+
     def test_bundled_catalog_prices_new_exact_models_and_future_period(self) -> None:
         catalog = bundled_pricing_catalog()
         astra = estimate_standard_api_cost({

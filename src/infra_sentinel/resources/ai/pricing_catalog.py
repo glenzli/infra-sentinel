@@ -36,7 +36,11 @@ MAX_CATALOG_BYTES = 512 * 1024
 MAX_MANIFEST_BYTES = 64 * 1024
 PERIODIC_CHECK_SECONDS = 24 * 60 * 60
 MISSING_MODEL_CHECK_SECONDS = 6 * 60 * 60
-REMOTE_TIMEOUT_SECONDS = 4
+REMOTE_TIMEOUT_SECONDS = 30
+
+# PyInstaller one-file resources can disappear during a long-running Agent process.
+# Keep the CA store in memory after startup so later checks still have trust roots.
+_CATALOG_TLS_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 _ROOT_KEYS = {"schema", "catalog_version", "updated_at", "currency", "unit", "references", "prices"}
 _REFERENCE_KEYS = {"id", "url", "checked_at"}
@@ -378,8 +382,7 @@ class PricingCatalogManager:
 
 def _fetch(url: str, maximum: int) -> bytes:
     request = Request(url, headers={"Accept": "application/octet-stream", "User-Agent": "infra-sentinel-api-price/1"})
-    tls_context = ssl.create_default_context(cafile=certifi.where())
-    with urlopen(request, timeout=REMOTE_TIMEOUT_SECONDS, context=tls_context) as response:
+    with urlopen(request, timeout=REMOTE_TIMEOUT_SECONDS, context=_CATALOG_TLS_CONTEXT) as response:
         length = response.headers.get("Content-Length")
         if length is not None and int(length) > maximum:
             raise ValueError("remote asset is too large")

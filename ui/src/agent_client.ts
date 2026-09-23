@@ -1,6 +1,7 @@
 import { AgentCommandResult, CommandReceipt, readAgentCommandResult, submitAgentCommand } from "./bridge";
 
-const RESULT_TIMEOUT_MS = 15_000;
+// A catalog update can download two Release assets through slow TLS redirects.
+const RESULT_TIMEOUT_MS = 90_000;
 const RESULT_POLL_MS = 100;
 
 function pause(milliseconds: number): Promise<void> {
