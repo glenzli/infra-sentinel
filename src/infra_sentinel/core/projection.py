@@ -251,6 +251,7 @@ def build_infra_projection(
     vps = session.get("vps") if isinstance(session.get("vps"), dict) else {}
     local_total = _number(kernel.get("total_bytes"))
     vps_total = _number(vps.get("total_bytes"))
+    mihomo_available = sample.get("mihomo_status") != "error"
     daily_usage_guards = remote.get("daily_usage_guards") if isinstance(remote.get("daily_usage_guards"), list) else []
     active_daily_guards = sum(
         1 for guard in daily_usage_guards
@@ -280,9 +281,9 @@ def build_infra_projection(
         kind="network.mihomo",
         resource_id="network",
         enabled=True,
-        status=_collector_status("local-mihomo", "ok", collector_runs),
+        status=_collector_status("local-mihomo", "ok" if mihomo_available else "error", collector_runs),
         label="Mihomo",
-        updated_at=timestamp or None,
+        updated_at=(timestamp if mihomo_available else sample.get("mihomo_last_success_at")) or None,
     )]
     sources.extend(_remote_sources(remote, collector_runs))
     ai_resource, ai_sources, ai_snapshots = _ai_usage_resource(collector_runs)
@@ -296,8 +297,9 @@ def build_infra_projection(
     source_dicts = [source.as_dict() for source in sources]
     network_sources = [source for source in sources if source.resource_id == "network" and source.enabled]
     online_network_sources = [source for source in network_sources if source.status == "ok"]
-    metrics = [
-        MetricPoint(
+    metrics = []
+    if mihomo_available:
+        metrics.append(MetricPoint(
             observed_at=timestamp,
             metric="network.local_bytes",
             instrument="counter",
@@ -305,8 +307,7 @@ def build_infra_projection(
             unit="bytes",
             source_id="local-mihomo",
             resource_id="network",
-        ).as_dict(),
-    ]
+        ).as_dict())
     if billing_available:
         metrics.append(MetricPoint(
             observed_at=timestamp,

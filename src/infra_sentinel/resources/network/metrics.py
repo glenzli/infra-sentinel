@@ -59,6 +59,8 @@ def _point(
 
 def local_sample_metrics(sample: dict[str, Any]) -> list[MetricPoint]:
     """Convert one exact Mihomo interval into aggregate canonical metrics."""
+    if sample.get("mihomo_status") == "error":
+        return []
     timestamp = str(sample.get("timestamp") or "")
     epoch = sample.get("epoch", 0)
     kernel = sample.get("kernel") if isinstance(sample.get("kernel"), dict) else {}
@@ -240,7 +242,11 @@ def network_collector_registry(servers: Iterable[tuple[str, str]]) -> CollectorR
             resource_id="network",
             metrics=("network.bytes", "network.route_bytes"),
         ),
-        collect=lambda context: local_sample_metrics(context.local_sample),
+        collect=lambda context: (
+            Collection(status="error")
+            if context.local_sample.get("mihomo_status") == "error"
+            else local_sample_metrics(context.local_sample)
+        ),
     )]
     configured = {str(server_id): str(billing_mode) for server_id, billing_mode in servers if str(server_id)}
     for server_id, billing_mode in configured.items():

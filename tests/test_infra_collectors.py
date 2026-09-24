@@ -110,6 +110,30 @@ class CollectorRegistryTests(unittest.TestCase):
 
         self.assertEqual(adapted, legacy)
 
+    def test_mihomo_outage_omits_local_points_but_keeps_remote_points(self) -> None:
+        registry = network_collector_registry((("primary", "both"),))
+        registry.collect(CollectorContext({
+            "timestamp": "2026-09-24T14:00:00+08:00", "epoch": 100.0,
+            "kernel": {"up_bytes": 1, "down_bytes": 1},
+        }, {"servers": []}))
+        remote = {"servers": [{
+            "id": "primary",
+            "vps": {"status": "ok", "last_sample": {
+                "timestamp": "2026-09-24T15:00:00+08:00", "epoch": 110.0,
+                "in_bytes": 20, "out_bytes": 30,
+            }},
+        }]}
+        runs = registry.collect(CollectorContext(
+            {"timestamp": "2026-09-24T15:00:00+08:00", "epoch": 110.0, "mihomo_status": "error"},
+            remote,
+        ))
+
+        self.assertEqual(next(run for run in runs if run.capability.source_id == "local-mihomo").points, ())
+        self.assertEqual(
+            [point.value for point in collected_points(runs) if point.metric == "network.billable_bytes"],
+            [20, 30],
+        )
+
     def test_outbound_billing_collector_omits_incoming_interface_bytes(self) -> None:
         remote = {"servers": [{
             "id": "primary", "billing_mode": "outbound",

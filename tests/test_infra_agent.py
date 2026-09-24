@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+from collections import deque
+from io import BytesIO
 import json
 import logging
 from pathlib import Path
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -31,11 +34,14 @@ from infra_sentinel.app.protocol import (  # noqa: E402
     consume_commands,
     projection_document,
 )
+from infra_sentinel.app.projection_publisher import ProjectionPublisher  # noqa: E402
 from infra_sentinel.resources.network.remote import RemoteServerConfig  # noqa: E402
 from infra_sentinel.app.agent import (  # noqa: E402
     AlertEngine,
     SAMPLE_SCHEMA,
     apply_agent_commands,
+    collect_mihomo_or_unavailable,
+    handle_sample,
     build_billing_event,
     build_system_event,
     build_upstream_event,
@@ -55,6 +61,7 @@ from infra_sentinel.core.timing import (  # noqa: E402
     classify_interval,
 )
 from infra_sentinel.resources.network.session import SessionMeter  # noqa: E402
+from infra_sentinel.resources.network.metrics import network_collector_registry  # noqa: E402
 from infra_sentinel.cli.snapshot import create_snapshot  # noqa: E402
 from infra_sentinel.resources.network.traffic_estimation import (  # noqa: E402
     TrafficEstimationConfig,
@@ -160,6 +167,82 @@ class RuntimeConfigTests(unittest.TestCase):
             self.assertEqual(payload["protocol"]["transport"], "stdio-stream")
             self.assertEqual(payload["protocol"]["checkpoint"], "local-file")
             self.assertEqual(payload["infra"]["resources"][0]["id"], "network")
+
+    def test_missing_mihomo_produces_unavailable_sample_without_measured_bytes(self) -> None:
+        with patch("infra_sentinel.app.agent.collect_interval", side_effect=RuntimeError("Mihomo absent")):
+            with patch("infra_sentinel.app.agent.time.time", return_value=110.0):
+                with patch("infra_sentinel.app.agent.iso_now", return_value="2026-09-24T15:00:00+08:00"):
+                    result, available = collect_mihomo_or_unavailable(
+                        None, None, 5, "2026-09-24T14:00:00+08:00", logging.getLogger("test")
+                    )
+        self.assertFalse(available)
+        self.assertEqual(result["mihomo_status"], "error")
+        self.assertEqual(result["mihomo_last_success_at"], "2026-09-24T14:00:00+08:00")
+        self.assertNotIn("kernel", result)
+        self.assertNotIn("services", result)
+
+    def test_missing_local_sample_preserves_local_totals_and_records_remote_vps(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            meter = SessionMeter(Path(temporary))
+            meter.reset(100.0, "manual")
+            meter.record(sample(105.0, 40, 60), {"servers": []}, persist=False)
+            previous_history = len(meter.history)
+            remote = {"servers": [{
+                "id": "primary", "label": "Primary", "billing_mode": "both",
+                "vps": {"status": "ok", "last_sample": {
+                    "epoch": 110.0, "interval_started_epoch": 105.0,
+                    "in_bytes": 20, "out_bytes": 30,
+                }},
+            }]}
+            meter.record(
+                {"epoch": 110.0, "kernel": {"up_bytes": 999, "down_bytes": 999}},
+                remote, persist=False, local_sample_available=False,
+            )
+            self.assertEqual(meter.kernel, {"up_bytes": 40, "down_bytes": 60})
+            self.assertEqual(len(meter.history), previous_history)
+            self.assertEqual(meter.vps["in_bytes"], 20)
+            self.assertEqual(meter.vps["out_bytes"], 30)
+
+    def test_agent_publishes_current_facility_when_mihomo_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            state_dir = Path(temporary)
+            config = make_config(state_dir)
+            stream = BytesIO()
+            publisher = ProjectionPublisher(state_dir, stream=stream)
+            billing = Mock(level="none")
+            billing.evaluate.return_value = []
+            billing.snapshots.return_value = []
+            remote = Mock()
+            remote.maybe_poll.return_value = {"enabled": False, "status": "disabled", "servers": []}
+            facilities = Mock()
+            facilities.snapshot.return_value = {
+                "schema": "infra.discovery.registration@20260812.1",
+                "status": "healthy", "total": 1, "healthy": 1, "attention": 0,
+                "items": [{"kind": "infer-runtime", "status": "healthy"}],
+            }
+            pipeline = Mock()
+            pipeline.ingest.return_value = SimpleNamespace(flushed_buckets=False)
+            system = Mock()
+            system.drain_transitions.return_value = []
+            upstream = Mock()
+            upstream.snapshot.return_value = {"status": "healthy", "items": []}
+            upstream.drain_transitions.return_value = []
+            with patch("infra_sentinel.app.agent.collect_interval", side_effect=RuntimeError("Mihomo absent")):
+                with patch("infra_sentinel.app.agent.apply_agent_commands", return_value=SimpleNamespace(
+                    remote_state=None, restart_requested=False,
+                )):
+                    observed, restart = handle_sample(
+                        config, state_dir / "config.toml", deque(), None, None,
+                        AlertEngine(), billing, remote, SessionMeter(state_dir), None,
+                        Mock(summary=lambda: {}), pipeline, network_collector_registry(()),
+                        system, facilities, upstream, publisher, logging.getLogger("test"),
+                    )
+            projection = json.loads(stream.getvalue().splitlines()[-1])
+            self.assertFalse(restart)
+            self.assertEqual(observed["mihomo_status"], "error")
+            self.assertEqual(projection["infra"]["facilities"]["items"][0]["status"], "healthy")
+            self.assertEqual(projection["infra"]["overall"]["status"], "degraded")
+            self.assertFalse(any(point["source_id"] == "local-mihomo" for point in projection["infra"]["metrics"]))
 
     def test_unchanged_health_state_is_not_rewritten_every_sample(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -297,6 +297,27 @@ def busiest_service(sample: dict[str, Any]) -> dict[str, Any]:
     return max(candidates, key=lambda item: int(item.get("total_bytes", 0)))
 
 
+def collect_mihomo_or_unavailable(
+    client: MihomoApiClient,
+    tracker: MihomoTrafficTracker,
+    duration_seconds: float,
+    last_success_at: str | None,
+    logger: logging.Logger,
+) -> tuple[dict[str, Any], bool]:
+    try:
+        return collect_interval(client, tracker, duration_seconds), True
+    except Exception as error:
+        logger.warning("Mihomo sample unavailable: %s", error)
+        return {
+            "timestamp": iso_now(),
+            "epoch": time.time(),
+            "observed_seconds": 0.0,
+            "interval_kind": "unavailable",
+            "mihomo_status": "error",
+            "mihomo_last_success_at": last_success_at,
+        }, False
+
+
 def build_event(
     event_type: str,
     level: str,
@@ -522,10 +543,11 @@ def build_projection_state(
         "observed_seconds": sample["observed_seconds"],
         "interval_kind": sample.get("interval_kind", "realtime"),
         "level": level,
-        "busiest_service": busiest_service(sample),
+        "busiest_service": busiest_service(sample) if sample.get("mihomo_status") != "error" else None,
         "alert_group": {"id": "mihomo", "label": "Mihomo"},
         "windows": {"warning": warning, "critical": critical},
         "mihomo": {
+            "status": sample.get("mihomo_status", "ok"),
             "kernel": sample.get("kernel", {}),
             "routes": sample.get("routes", {}),
             "attribution": sample.get("attribution", {}),
@@ -750,10 +772,17 @@ def handle_sample(
     projection_publisher: ProjectionPublisher,
     logger: logging.Logger,
 ) -> tuple[dict[str, Any], bool]:
-    sample = collect_interval(client, tracker, config.monitor.sample_seconds)
+    sample, mihomo_available = collect_mihomo_or_unavailable(
+        client,
+        tracker,
+        config.monitor.sample_seconds,
+        str(history[-1].get("timestamp")) if history else None,
+        logger,
+    )
     sample["schema"] = SAMPLE_SCHEMA
-    annotate_sample_timing(sample, config.monitor.sample_seconds)
-    history.append(sample)
+    if mihomo_available:
+        annotate_sample_timing(sample, config.monitor.sample_seconds)
+        history.append(sample)
     cutoff = sample["epoch"] - config.monitor.critical_window_seconds
     while history and float(history[0].get("epoch", 0)) < cutoff:
         history.popleft()
@@ -769,7 +798,7 @@ def handle_sample(
         config.monitor.critical_window_seconds,
         config.monitor.sample_seconds,
     )
-    transition = alerts.evaluate(warning, critical, config)
+    transition = alerts.evaluate(warning, critical, config) if mihomo_available else None
     if transition is not None:
         event_type, level = transition
         event = build_event(event_type, level, sample, warning, critical, config)
@@ -800,7 +829,7 @@ def handle_sample(
         session_meter.set_vps_baseline(remote_state)
     else:
         remote_state = remote_monitor.maybe_poll(sample["epoch"])
-        session_meter.record(sample, remote_state, persist=False)
+        session_meter.record(sample, remote_state, persist=False, local_sample_available=mihomo_available)
 
     session_snapshot = session_meter.snapshot(
         remote_state,

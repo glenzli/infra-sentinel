@@ -50,6 +50,32 @@ class InfraProjectionTests(unittest.TestCase):
         self.assertEqual(projection["metrics"][0]["value"], 1234)
         self.assertFalse(projection["metrics"][0]["estimated"])
 
+    def test_missing_mihomo_keeps_facility_visible_without_new_local_measurement(self) -> None:
+        unavailable = {
+            "timestamp": "2026-09-24T15:00:00+08:00",
+            "mihomo_status": "error",
+            "mihomo_last_success_at": "2026-09-24T14:00:00+08:00",
+        }
+        facilities = {
+            "schema": "infra.discovery.registration@20260812.1",
+            "status": "healthy", "total": 1, "healthy": 1, "attention": 0,
+            "items": [{"kind": "infer-runtime", "status": "healthy"}],
+        }
+        projection = build_infra_projection(
+            unavailable,
+            {"kernel": {"total_bytes": 1234}, "vps": {"total_bytes": 0}},
+            {"enabled": False, "status": "disabled", "servers": []},
+            "none", facilities=facilities,
+        )
+
+        self.assertEqual(projection["facilities"]["items"][0]["kind"], "infer-runtime")
+        self.assertEqual(projection["overall"]["status"], "degraded")
+        self.assertEqual(projection["resources"][0]["online_source_count"], 0)
+        local = next(source for source in projection["sources"] if source["id"] == "local-mihomo")
+        self.assertEqual(local["status"], "error")
+        self.assertEqual(local["updated_at"], "2026-09-24T14:00:00+08:00")
+        self.assertFalse(any(point["metric"] == "network.local_bytes" for point in projection["metrics"]))
+
     def test_remote_network_projection_exposes_separate_sources_and_billing(self) -> None:
         projection = build_infra_projection(
             sample(),

@@ -269,34 +269,36 @@ class SessionMeter:
         remote_state: dict[str, Any],
         *,
         persist: bool = True,
+        local_sample_available: bool = True,
     ) -> None:
         if self.started_epoch is None:
             self.reset(float(sample["epoch"]), "automatic")
             self.set_vps_baseline(remote_state)
             return
 
-        self._add(self.kernel, sample.get("kernel"))
         interval_services: dict[str, int] = {}
-        for raw_service in sample.get("services", []):
-            if not isinstance(raw_service, dict):
-                continue
-            service_id = str(raw_service.get("id", "unknown_host"))
-            service = self.services.setdefault(service_id, {
-                "id": service_id,
-                "label": str(raw_service.get("label", service_id)),
-                "up_bytes": 0,
-                "down_bytes": 0,
-            })
-            self._add(service, raw_service)
-            interval_services[service_id] = (
-                max(0, int(raw_service.get("up_bytes", 0)))
-                + max(0, int(raw_service.get("down_bytes", 0)))
-            )
-        for route in ROUTES:
-            self._add(self.routes[route], sample.get("routes", {}).get(route))
-        attribution = sample.get("attribution", {})
-        self.attribution_observed_bytes += max(0, int(attribution.get("observed_bytes", 0)))
-        self.attribution_unattributed_bytes += max(0, int(attribution.get("unattributed_bytes", 0)))
+        if local_sample_available:
+            self._add(self.kernel, sample.get("kernel"))
+            for raw_service in sample.get("services", []):
+                if not isinstance(raw_service, dict):
+                    continue
+                service_id = str(raw_service.get("id", "unknown_host"))
+                service = self.services.setdefault(service_id, {
+                    "id": service_id,
+                    "label": str(raw_service.get("label", service_id)),
+                    "up_bytes": 0,
+                    "down_bytes": 0,
+                })
+                self._add(service, raw_service)
+                interval_services[service_id] = (
+                    max(0, int(raw_service.get("up_bytes", 0)))
+                    + max(0, int(raw_service.get("down_bytes", 0)))
+                )
+            for route in ROUTES:
+                self._add(self.routes[route], sample.get("routes", {}).get(route))
+            attribution = sample.get("attribution", {})
+            self.attribution_observed_bytes += max(0, int(attribution.get("observed_bytes", 0)))
+            self.attribution_unattributed_bytes += max(0, int(attribution.get("unattributed_bytes", 0)))
 
         for row in self._remote_rows(remote_state):
             vps_state = row.get("vps", {})
@@ -342,21 +344,22 @@ class SessionMeter:
                     self.vps_packet_intervals += 1
             server["vps_baselined_at"] = vps_epoch
 
-        kernel = sample.get("kernel", {})
-        routes = sample.get("routes", {})
-        self.history.append({
-            "epoch": float(sample["epoch"]),
-            "observed_seconds": float(sample.get("observed_seconds", 0.0)),
-            "interval_kind": sample.get("interval_kind"),
-            "expected_interval_seconds": sample.get(
-                "expected_interval_seconds",
-                self.expected_interval_seconds,
-            ),
-            "services": interval_services,
-            "mihomo_total": max(0, int(kernel.get("total_bytes", 0))),
-            "proxy_observed": max(0, int(routes.get("proxy", {}).get("total_bytes", 0))),
-            "unattributed": max(0, int(attribution.get("unattributed_bytes", 0))),
-        })
+        if local_sample_available:
+            kernel = sample.get("kernel", {})
+            routes = sample.get("routes", {})
+            self.history.append({
+                "epoch": float(sample["epoch"]),
+                "observed_seconds": float(sample.get("observed_seconds", 0.0)),
+                "interval_kind": sample.get("interval_kind"),
+                "expected_interval_seconds": sample.get(
+                    "expected_interval_seconds",
+                    self.expected_interval_seconds,
+                ),
+                "services": interval_services,
+                "mihomo_total": max(0, int(kernel.get("total_bytes", 0))),
+                "proxy_observed": max(0, int(routes.get("proxy", {}).get("total_bytes", 0))),
+                "unattributed": max(0, int(attribution.get("unattributed_bytes", 0))),
+            })
         cutoff = float(sample["epoch"]) - HISTORY_WINDOW_SECONDS
         self.history = [
             point
