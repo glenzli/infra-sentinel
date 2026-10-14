@@ -27,8 +27,10 @@ belongs in `resources/` and SQL mechanics belong in `metrics/`.
 Within the AI boundary, `resources/ai/codex_sampling.py` owns privacy-bounded
 Codex rollout token parsing, lineage-aware inherited-prefix suppression,
 scoped cross-file deduplication, durable request-increment ledger updates, and
-read-only reconstruction. The ledger retains daily totals plus current-day
-hour buckets; other AI adapters expose exact event hours when their source has
+read-only reconstruction. The ledger retains daily totals, current-day hour
+buckets, and optional reported timing for the latest completed main-chat turn.
+Timing is diagnostic metadata and never enters token accounting; turn markers
+are irreversible hashes. Other AI adapters expose exact event hours when their source has
 timestamps and sampled deltas with explicit estimated provenance otherwise.
 `resources/ai/codex.py` consumes that ledger as its
 only Codex usage fact source. `cli/codex_usage_audit.py` only renders an
@@ -36,6 +38,10 @@ aggregate audit; it does not own parsing or persist user rollout data.
 `app/codex_migration.py` coordinates the one-time ledger rebuild, recoverable
 backup, and scoped metric-store replacement without moving those policies into
 the Collector or SQLite owner.
+
+`resources/ai/dsh.py` owns read-only DeepSeek Harness v4 session usage,
+stream/final replacement, retry boundaries, inherited-prefix exclusion, and
+event-time history. Its checkpoint retains only hashed request markers.
 
 `resources/ai/pricing_catalog.py` owns the exact-model, effective-dated
 api-price contract, the bundled offline fallback, validated Release downloads,

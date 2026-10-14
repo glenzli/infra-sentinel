@@ -32,6 +32,10 @@ function localized(value: unknown): string {
 }
 
 function formatMetric(value: unknown, unit: unknown = "tokens"): string {
+  if (unit === "tokens/s" || unit === "seconds") {
+    const amount = new Intl.NumberFormat(undefined, { maximumFractionDigits: unit === "seconds" ? 2 : 1 }).format(number(value));
+    return `${amount} ${unit === "seconds" ? "s" : "tokens/s"}`;
+  }
   if (unit === "count") return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(number(value));
   if (unit === "usd") {
     const amount = number(value);
@@ -308,8 +312,17 @@ export function renderAiUsageResourcePage(projection: AgentProjection, resource:
   const providerSources = asArray(asRecord(projection.infra.ai_usage).sources);
   const sourceNames = providerSources.map((source) => String(source.label ?? source.source_id ?? "")).filter(Boolean).join(" · ");
   const diagnostics = renderAttentionDiagnostics(aiUsageDiagnostics(projection, resource, sources));
-  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("RESOURCE DETAIL", "资源详情")}</p><h2>${tr("AI usage", "AI 用量")}</h2></div><div class="ai-resource-meta"><span class="section-heading__meta">${escapeHtml(sourceNames)}</span><button type="button" class="button button--subtle ai-methodology-link" data-ai-methodology>${tr("Methods & estimates", "口径与估算")}</button></div></div>${diagnostics}<section class="network-detail">${renderCurrentSummary(providerSources, sources)}${renderControls(snapshot)}${analysisBody(snapshot, providerSources)}<article class="sources-card sources-card--footer"><div class="sources-card__heading"><h3>${tr("Collector sources", "采集数据源")}</h3><span>${sources.length}</span></div><ul>${sources.map(sourceRow).join("")}</ul></article></section></section>`;
+  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("RESOURCE DETAIL", "资源详情")}</p><h2>${tr("AI usage", "AI 用量")}</h2></div><div class="ai-resource-meta"><span class="section-heading__meta">${escapeHtml(sourceNames)}</span><button type="button" class="button button--subtle ai-methodology-link" data-ai-methodology>${tr("Methods & estimates", "口径与估算")}</button></div></div>${diagnostics}<section class="network-detail">${renderCurrentSummary(providerSources, sources)}${renderTurnPerformance(providerSources)}${renderControls(snapshot)}${analysisBody(snapshot, providerSources)}<article class="sources-card sources-card--footer"><div class="sources-card__heading"><h3>${tr("Collector sources", "采集数据源")}</h3><span>${sources.length}</span></div><ul>${sources.map(sourceRow).join("")}</ul></article></section></section>`;
 }
+
+function renderTurnPerformance(providerSources: Record<string, unknown>[]): string {
+  return providerSources.map((source) => {
+    const group = asArray(source.details).find((detail) => detail.id === "turn-performance");
+    if (!group) return "";
+    return `<article class="detail-panel ai-turn-performance"><div class="detail-panel__heading"><h3>${escapeHtml(source.label ?? source.source_id)} · ${escapeHtml(localized(group.title))}</h3><span>${escapeHtml(localized(group.badge))}</span></div><dl>${asArray(group.metrics).map((metric) => `<div><dt>${escapeHtml(localized(metric.label))}</dt><dd>${formatMetric(metric.value, metric.unit)}</dd></div>`).join("")}</dl><p>${escapeHtml(localized(group.note))}</p></article>`;
+  }).join("");
+}
+
 function renderCurrentSummary(providerSources: Record<string, unknown>[], sources: SourceProjection[]): string {
   const today = providerSources.reduce((sum, source) => sum + number(windowOf(source, "today").tokens), 0);
   const cumulative = providerSources.reduce((sum, source) => sum + number(windowOf(source, "cumulative").tokens), 0);

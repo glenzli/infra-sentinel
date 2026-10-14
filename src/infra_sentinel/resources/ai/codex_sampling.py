@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, tzinfo
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -268,6 +269,10 @@ class RolloutParseState:
     task_started_turns: set[str] = field(default_factory=set)
     child_is_user_fork: bool = False
     last_accepted_epoch: float | None = None
+    timing_turn: str | None = None
+    timing_model: str = "unknown"
+    timing_output_tokens: int | None = None
+    latest_turn_timing: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -756,6 +761,8 @@ def _consume_rollout_record(
 
     event_timestamp = _event_timestamp(record.get("timestamp"), timezone)
     event_epoch = event_timestamp.timestamp() if event_timestamp is not None else None
+    if state.source == "user" and state.parent is None:
+        _consume_turn_timing(record_type, payload, event_epoch, state)
     if record_type == "turn_context":
         state.model = _model_or_unknown(payload.get("model"))
         state.last_accepted_epoch = event_epoch
@@ -837,6 +844,81 @@ def _consume_rollout_record(
         effective_epoch, state.model, state.source, usage,
         duplicate=duplicate, inherited=inherited, reset=reset,
     )
+
+
+def _json_counter(value: object) -> int | None:
+    return value if type(value) is int and 0 <= value <= 2**53 - 1 else None
+
+
+def _turn_timing_from_payload(raw: object) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    epoch = _positive_float_or_none(raw.get("completed_epoch"))
+    duration = _json_counter(raw.get("duration_ms"))
+    output = _json_counter(raw.get("output_tokens"))
+    if (
+        type(raw.get("completed_epoch")) not in {int, float}
+        or epoch is None or not math.isfinite(epoch)
+        or duration is None or duration == 0 or output is None
+    ):
+        return None
+    try:
+        datetime.fromtimestamp(epoch)
+    except (OSError, OverflowError, ValueError):
+        return None
+    ttft = _json_counter(raw.get("time_to_first_token_ms"))
+    return {
+        "completed_epoch": epoch,
+        "model": _model_or_unknown(raw.get("model")),
+        "output_tokens": output,
+        "duration_ms": duration,
+        "time_to_first_token_ms": ttft if ttft is not None and ttft <= duration else None,
+    }
+
+
+def _consume_turn_timing(
+    record_type: object, payload: dict[str, Any], epoch: float | None, state: RolloutParseState,
+) -> None:
+    """Pair explicit turn totals with reported completion timing, never token-count gaps.
+
+    This runs only for root user sessions after the lineage gate. Timing is an
+    optional diagnostic and never changes usage accounting or its dedup markers.
+    """
+    payload_type = payload.get("type")
+    turn_id = payload.get("turn_id")
+    marker = _opaque_marker("timing-turn", turn_id) if isinstance(turn_id, str) and turn_id else None
+    starts_turn = record_type == "turn_context" or (record_type == "event_msg" and payload_type == "task_started")
+    if starts_turn and marker is not None:
+        if state.timing_turn != marker:
+            state.timing_turn = marker
+            state.timing_model = "unknown"
+            state.timing_output_tokens = None
+        if record_type == "turn_context":
+            model = _model_or_unknown(payload.get("model"))
+            if state.timing_model == "unknown":
+                state.timing_model = model
+            elif model != "unknown" and model != state.timing_model:
+                state.timing_model = "mixed"
+    if marker is None or marker != state.timing_turn:
+        return
+    if record_type == "token_usage_record":
+        usage = payload.get("turn_token_usage")
+        state.timing_output_tokens = _json_counter(usage.get("output_tokens")) if isinstance(usage, dict) else None
+    elif record_type == "event_msg" and payload_type == "task_complete":
+        timing = _turn_timing_from_payload({
+            "completed_epoch": epoch,
+            "model": state.timing_model,
+            "output_tokens": state.timing_output_tokens,
+            "duration_ms": payload.get("duration_ms"),
+            "time_to_first_token_ms": payload.get("time_to_first_token_ms"),
+        })
+        if timing is not None and (
+            state.latest_turn_timing is None
+            or timing["completed_epoch"] >= state.latest_turn_timing["completed_epoch"]
+        ):
+            state.latest_turn_timing = timing
+        state.timing_turn = None
+        state.timing_output_tokens = None
 
 
 def _forked_from_identifier(payload: dict[str, Any]) -> object | None:
@@ -1080,6 +1162,10 @@ def _parse_state_from_payload(raw: object, identity: RolloutIdentity) -> Rollout
         } if isinstance(task_turns, list) else set(),
         child_is_user_fork=bool(payload.get("child_is_user_fork")),
         last_accepted_epoch=_positive_float_or_none(payload.get("last_accepted_epoch")),
+        timing_turn=str(payload["timing_turn"]) if _valid_marker(payload.get("timing_turn")) else None,
+        timing_model=_model_or_unknown(payload.get("timing_model")),
+        timing_output_tokens=_json_counter(payload.get("timing_output_tokens")),
+        latest_turn_timing=_turn_timing_from_payload(payload.get("latest_turn_timing")),
     )
 
 
@@ -1099,6 +1185,12 @@ def _parse_state_as_payload(state: RolloutParseState) -> dict[str, Any]:
         "task_started_turns": sorted(state.task_started_turns),
         "child_is_user_fork": state.child_is_user_fork,
         "last_accepted_epoch": state.last_accepted_epoch,
+        **({
+            "timing_turn": state.timing_turn,
+            "timing_model": state.timing_model,
+            "timing_output_tokens": state.timing_output_tokens,
+            "latest_turn_timing": state.latest_turn_timing,
+        } if state.timing_turn is not None or state.latest_turn_timing is not None else {}),
     }
 
 

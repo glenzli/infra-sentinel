@@ -5,6 +5,14 @@
 .ai-usage-summary article strong { font-size: 27px; letter-spacing: -.045em; }
 .ai-usage-summary article small { color: #777d86; font-size: 10px; margin-top: 7px; }
 
+.ai-turn-performance { display: grid; gap: 12px; }
+.ai-turn-performance .detail-panel__heading { align-items: baseline; flex-wrap: wrap; gap: 6px 12px; }
+.ai-turn-performance .detail-panel__heading > span { overflow-wrap: anywhere; }
+.ai-turn-performance dl { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin: 0; }
+.ai-turn-performance dt { color: #747a82; font-size: 11px; }
+.ai-turn-performance dd { font-size: 22px; font-weight: 720; letter-spacing: -.025em; margin: 5px 0 0; }
+.ai-turn-performance > p { color: #777d86; font-size: 10px; line-height: 1.6; margin: 0; }
+
 .ai-analysis-toolbar { align-items: end; display: flex; gap: 18px; justify-content: space-between; }
 .ai-mode-tabs { background: #edf0f3; border-radius: 10px; display: inline-grid; gap: 3px; grid-template-columns: repeat(3, minmax(128px, 1fr)); padding: 3px; }
 .ai-mode-tab { background: transparent; border: 0; border-radius: 8px; color: #6c737c; cursor: pointer; display: grid; gap: 2px; padding: 8px 12px; text-align: left; }

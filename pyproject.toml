@@ -9,6 +9,9 @@ description = "Local-first resource observation sidecar for Infra Sentinel"
 requires-python = ">=3.11"
 dependencies = ["certifi>=2026.1.4"]
 
+[project.optional-dependencies]
+dsh = ["zstandard>=0.23"]
+
 [project.scripts]
 infra-sentinel-agent = "infra_sentinel.app.agent:main"
 infra-sentinel-config = "infra_sentinel.app.configuration:main"

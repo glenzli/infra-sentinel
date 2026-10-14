@@ -50,7 +50,147 @@ def usage(last_total: int, cumulative_total: int, timestamp: str, *, cached: int
     }, timestamp)
 
 
+def timed_turn(
+    turn_id: str = "private-turn-id", *, output: object = 500,
+    duration: object = 10_000, ttft: object = 2_000,
+    timestamp: str = "2026-08-22T12:00:00Z",
+) -> str:
+    return (
+        record("event_msg", {"type": "task_started", "turn_id": turn_id}, timestamp)
+        + record("turn_context", {"model": "gpt-5.6-sol", "turn_id": turn_id}, timestamp)
+        + record("token_usage_record", {
+            "turn_id": turn_id, "response_id": "private-response-id",
+            "usage": {"output_tokens": 100},
+            "turn_token_usage": {"output_tokens": output},
+        }, timestamp)
+        + record("event_msg", {
+            "type": "task_complete", "turn_id": turn_id, "duration_ms": duration,
+            "time_to_first_token_ms": ttft, "last_agent_message": "private-response-text",
+        }, timestamp)
+    )
+
+
+def timing_metrics(snapshot: dict[str, object]) -> dict[str, dict[str, object]]:
+    group = next((group for group in snapshot["details"] if group["id"] == "turn-performance"), None)
+    return {metric["id"]: metric for metric in group["metrics"]} if group else {}
+
+
 class CodexUsageTests(unittest.TestCase):
+    def test_reported_turn_timing_uses_turn_total_without_changing_accounting(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            root = base / "sessions"
+            root.mkdir()
+            (root / "root.jsonl").write_text(
+                session("user") + usage(100, 100, "2026-08-22T12:00:00Z") + timed_turn(),
+                encoding="utf-8",
+            )
+            checkpoint = base / "ledger.json"
+            collector = CodexUsageCollector(rollout_roots_finder=lambda: (root,), ledger_path=checkpoint)
+            result = collector.collect(CollectorContext({"epoch": EPOCH + 10}, {}))
+            restarted = CodexUsageCollector(
+                rollout_roots_finder=lambda: (root,), ledger_path=checkpoint,
+            ).collect(CollectorContext({"epoch": EPOCH + 40}, {}))
+            persisted = checkpoint.read_text(encoding="utf-8")
+
+        metrics = timing_metrics(result.snapshot)
+        self.assertEqual(metrics["turn-output-rate"]["value"], 50)
+        self.assertEqual(metrics["turn-output-rate"]["unit"], "tokens/s")
+        self.assertEqual(metrics["first-token-latency"]["value"], 2)
+        self.assertEqual(metrics["turn-duration"]["value"], 10)
+        self.assertEqual(result.snapshot["usage"]["today"]["tokens"], 100)
+        self.assertEqual(result.points, ())
+        self.assertEqual(timing_metrics(restarted.snapshot), metrics)
+        for private in ("private-turn-id", "private-response-id", "private-response-text"):
+            self.assertNotIn(private, persisted)
+            self.assertNotIn(private, json.dumps(result.snapshot))
+
+    def test_timing_waits_for_completion_and_survives_midturn_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            root = base / "sessions"
+            root.mkdir()
+            rollout = root / "root.jsonl"
+            lines = timed_turn().splitlines(keepends=True)
+            rollout.write_text(session("user") + "".join(lines[:-1]), encoding="utf-8")
+            checkpoint = base / "ledger.json"
+            before = CodexUsageCollector(
+                rollout_roots_finder=lambda: (root,), ledger_path=checkpoint,
+            ).collect(CollectorContext({"epoch": EPOCH}, {}))
+            with rollout.open("a", encoding="utf-8") as stream:
+                stream.write(lines[-1])
+            restarted = CodexUsageCollector(rollout_roots_finder=lambda: (root,), ledger_path=checkpoint)
+            after = restarted.collect(CollectorContext({"epoch": EPOCH + 30}, {}))
+            with rollout.open("a", encoding="utf-8") as stream:
+                stream.write(lines[-1])
+            repeated = restarted.collect(CollectorContext({"epoch": EPOCH + 60}, {}))
+
+        self.assertEqual(timing_metrics(before.snapshot), {})
+        self.assertEqual(timing_metrics(after.snapshot)["turn-output-rate"]["value"], 50)
+        self.assertEqual(timing_metrics(repeated.snapshot), timing_metrics(after.snapshot))
+        self.assertEqual(after.snapshot["usage"]["cumulative"]["tokens"], 0)
+        self.assertEqual(after.points, ())
+
+    def test_missing_invalid_or_unmatched_timing_never_guesses_a_rate(self) -> None:
+        cases = [
+            timed_turn(duration=0), timed_turn(duration=-1), timed_turn(duration=True),
+            timed_turn(duration="10000"), timed_turn(output=None), timed_turn(output=True),
+            timed_turn().replace('"turn_id":"private-turn-id","duration_ms"', '"turn_id":"unmatched","duration_ms"'),
+            "".join(timed_turn().splitlines(keepends=True)[2:]),
+            context("gpt-5.6-sol") + usage(100, 100, "2026-08-22T12:00:00Z"),
+        ]
+        for index, content in enumerate(cases):
+            with self.subTest(index=index), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / "root.jsonl").write_text(session("user") + content, encoding="utf-8")
+                result = CodexUsageCollector(rollout_roots_finder=lambda: (root,)).collect(
+                    CollectorContext({"epoch": EPOCH}, {}),
+                )
+                self.assertEqual(result.status, "ok")
+                self.assertEqual(timing_metrics(result.snapshot), {})
+
+    def test_unavailable_latency_is_omitted_and_known_zero_values_are_kept(self) -> None:
+        for ttft in (None, -1, 20_000, True):
+            with self.subTest(ttft=ttft), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / "root.jsonl").write_text(session("user") + timed_turn(ttft=ttft), encoding="utf-8")
+                result = CodexUsageCollector(rollout_roots_finder=lambda: (root,)).collect(
+                    CollectorContext({"epoch": EPOCH}, {}),
+                )
+                metrics = timing_metrics(result.snapshot)
+                self.assertEqual(metrics["turn-output-rate"]["value"], 50)
+                self.assertNotIn("first-token-latency", metrics)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "root.jsonl").write_text(session("user") + timed_turn(output=0, ttft=0), encoding="utf-8")
+            result = CodexUsageCollector(rollout_roots_finder=lambda: (root,)).collect(CollectorContext({"epoch": EPOCH}, {}))
+        self.assertEqual(timing_metrics(result.snapshot)["turn-output-rate"]["value"], 0)
+        self.assertEqual(timing_metrics(result.snapshot)["first-token-latency"]["value"], 0)
+
+    def test_subagents_and_fork_replay_do_not_replace_main_chat_timing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "root.jsonl").write_text(session("user") + timed_turn(), encoding="utf-8")
+            (root / "child.jsonl").write_text(
+                record("session_meta", {"id": "child", "forked_from_id": "parent", "thread_source": "subagent"}, "2026-08-22T12:01:00Z")
+                + timed_turn(output=1_000, timestamp="2026-08-22T12:02:00Z"), encoding="utf-8",
+            )
+            (root / "subagent.jsonl").write_text(
+                session("subagent") + timed_turn(output=2_000, timestamp="2026-08-22T12:03:00Z"), encoding="utf-8",
+            )
+            result = CodexUsageCollector(rollout_roots_finder=lambda: (root,)).collect(CollectorContext({"epoch": EPOCH + 300}, {}))
+        self.assertEqual(timing_metrics(result.snapshot)["turn-output-rate"]["value"], 50)
+
+    def test_latest_completion_is_selected_by_event_time_not_file_scan_order(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "newer.jsonl").write_text(
+                session("user") + timed_turn(output=250, timestamp="2026-08-22T12:01:00Z"), encoding="utf-8",
+            )
+            (root / "older.jsonl").write_text(session("user") + timed_turn(), encoding="utf-8")
+            result = CodexUsageCollector(rollout_roots_finder=lambda: (root,)).collect(CollectorContext({"epoch": EPOCH + 120}, {}))
+        self.assertEqual(timing_metrics(result.snapshot)["turn-output-rate"]["value"], 25)
+
     def test_bootstrap_rebuilds_jsonl_history_without_replaying_it_as_live_points(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)

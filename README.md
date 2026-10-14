@@ -11,7 +11,7 @@ Infra Sentinel 是一个 macOS 桌面监控工具，用于查看网络流量、A
 ## 支持范围
 
 - **本机网络**：Mihomo / Clash Meta 兼容内核的连接、域名和代理路径归因。
-- **AI 用量**：Codex 桌面端与 CLI、OpenCode Desktop、Antigravity、Antigravity IDE / CLI，以及已接入的 Infer Runtime。
+- **AI 用量**：Codex 桌面端与 CLI、OpenCode Desktop、DSH（DeepSeek Harness）、Antigravity、Antigravity IDE / CLI，以及已接入的 Infer Runtime。
 - **本机资源**：CPU、内存压力、Swap、磁盘吞吐、IOPS、容量、温度压力，以及尽力而为的 App 磁盘 I/O 归因。
 - **远端主机**：通过本机 `~/.ssh/config` Host 别名读取 Linux 网卡统计；可选接入 Xray 用户逻辑流量。
 - **上游状态**：OpenAI、Claude、DeepSeek、Kimi / Moonshot 和 Cursor 的公开官方状态页。
@@ -39,6 +39,10 @@ Xray 用户统计为可选功能。每个客户端需要独立的 `email` 标签
 ## AI 用量统计
 
 Codex 用量从本机 rollout JSONL 中读取每次请求的 `last_token_usage` 增量，不使用 `threads.tokens_used` 计算。统计会排除 fork 回放和跨文件重复记录。持久化数据只包含聚合用量、解析状态和去重标记，不包含任务内容。
+
+DSH（DeepSeek Harness）从 `~/.dsh/sessions`（或 `$DSH_HOME/sessions`）只读解析 v4 JSONL / Zstd 会话中的供应商用量，每分钟检查一次。统计包含输入、输出、缓存和按模型、自然日、小时的历史；同次调用的流式与最终报告只计一次，重试单独计数，明确的继承前缀不重复计入。旧会话按事件时间归档，不按文件修改时间计入今日。不会读取凭据或保留对话正文，也不推测模型价格别名。压缩日志在 Python 3.14+ 上直接支持；较早 Python 可安装 `.[dsh]`。
+
+新版 Codex 日志提供计时字段时，AI 用量页还会显示主对话最近完成轮次的平均输出 `tokens/s`、首 Token 延迟和整轮耗时。平均速度为本轮输出 Token（含推理）除以 Codex 记录的整轮耗时，包含等待与工具执行，不代表纯生成速度。沿用现有约 20 秒的采集间隔，完成后更新；旧日志或缺少可靠字段时不显示。已有账本无需重建，新完成的轮次会逐步提供计时数据。
 
 图表显示本机记录到的原始 Token，不是 Codex 账户额度或账单。API 参考价值按模型的输入、缓存输入、缓存写入和输出价格换算。价格目录来自独立的 [api-price](https://github.com/glenzli/api-price) Release：Agent 每日检查一次，遇到没有精确价格的模型时至多每六小时补查一次，也可在设置中手动检查。下载内容会校验大小、结构和 SHA-256；失败时继续使用最后一个有效版本或 App 内置目录。检查请求不包含本机模型 ID 或用量。
 
@@ -108,7 +112,7 @@ Infra Sentinel is a macOS desktop monitor for network traffic, local AI-client u
 ### Supported sources
 
 - **Local network**: connection, domain, and proxy-route attribution from Mihomo / Clash Meta-compatible cores.
-- **AI usage**: Codex desktop and CLI, OpenCode Desktop, Antigravity, Antigravity IDE / CLI, and connected Infer Runtime instances.
+- **AI usage**: Codex desktop and CLI, OpenCode Desktop, DSH (DeepSeek Harness), Antigravity, Antigravity IDE / CLI, and connected Infer Runtime instances.
 - **Host resources**: CPU, memory pressure, swap, disk throughput, IOPS, capacity, thermal pressure, and best-effort per-app disk I/O attribution on macOS.
 - **Remote hosts**: Linux interface counters through an existing SSH Host alias, with optional Xray per-user logical traffic.
 - **Provider status**: public status pages for OpenAI, Claude, DeepSeek, Kimi / Moonshot, and Cursor.
@@ -127,6 +131,10 @@ Mihomo is discovered automatically. Remote hosts are configured by an existing `
 ### AI usage accounting
 
 Codex usage is calculated from per-request `last_token_usage` increments in local rollout JSONL. `threads.tokens_used` is not used. Fork replay and duplicate records across files are removed. The persistent ledger contains aggregate usage, parser state, and deduplication markers, but no task content.
+
+DSH (DeepSeek Harness) reads provider usage from local v4 JSONL / Zstd sessions under `~/.dsh/sessions` (or `$DSH_HOME/sessions`), checked once a minute. It includes input, output, cache, model, daily and hourly history. Final usage replaces streaming reports for the same attempt; retries count separately and explicit inherited prefixes are excluded. Historical usage follows event timestamps, not file modification time. Credentials and transcript content are not retained, and model-price aliases are not inferred. Compressed logs work with Python 3.14+; earlier Python versions can install `.[dsh]`.
+
+When newer Codex logs provide timing metadata, AI usage also shows the latest completed main-chat turn's average output `tokens/s`, first-token latency, and duration. The average divides turn output Tokens (including reasoning) by Codex-reported turn duration, including waiting and tool execution; it is not pure generation speed. Results update after completion on the existing roughly 20-second collection cadence. Older or incomplete records stay absent. Existing ledgers need no rebuild; newly completed turns supply timing as they are observed.
 
 Charts show raw Tokens recorded on this machine, not Codex account quota or billing. API reference value is calculated from model-specific input, cached-input, cache-write, and output prices. The price catalog comes from independent [api-price](https://github.com/glenzli/api-price) Releases. The Agent checks daily, checks at most every six hours when an exact model price is missing, and also offers a manual check in Settings. Downloads are validated for size, structure, and SHA-256; failures retain the last valid or bundled catalog. Update requests contain no local model IDs or usage.
 

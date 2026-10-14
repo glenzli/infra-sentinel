@@ -193,6 +193,7 @@ class CodexUsageCollector:
                 localized("no exact official model-price match", "没有精确官方模型价格匹配"),
             ))
         return [
+            *self._timing_details(ledger),
             detail_group("token-breakdown", localized("Token breakdown", "Token 分类明细"), [
                 token_metric("raw-total", localized("Raw total", "原始总量"), today.composition.total_tokens, localized("today · input plus output", "今日 · 输入加输出")),
                 token_metric("input", localized("Input", "输入"), today.composition.input_tokens, localized("today", "今日")),
@@ -221,6 +222,42 @@ class CodexUsageCollector:
                 badge=localized("reference · not billing", "估算 · 非账单"),
             ),
         ]
+
+    @staticmethod
+    def _timing_details(ledger: CodexRolloutLedger) -> list[dict[str, Any]]:
+        timings = [
+            entry["latest_turn_timing"] for entry in ledger.files.values()
+            if entry.get("source") == "user" and not entry.get("parent")
+            and isinstance(entry.get("latest_turn_timing"), dict)
+        ]
+        if not timings:
+            return []
+        latest = max(timings, key=lambda timing: timing["completed_epoch"])
+        duration = latest["duration_ms"] / 1_000
+        metrics = [token_metric(
+            "turn-output-rate", localized("Turn average output", "轮次平均输出"),
+            latest["output_tokens"] / duration,
+            localized("output includes reasoning", "输出包含推理 Token"), unit="tokens/s",
+        )]
+        if latest["time_to_first_token_ms"] is not None:
+            metrics.append(token_metric(
+                "first-token-latency", localized("First Token latency", "首 Token 延迟"),
+                latest["time_to_first_token_ms"] / 1_000,
+                localized("reported by Codex", "Codex 记录"), unit="seconds",
+            ))
+        metrics.append(token_metric(
+            "turn-duration", localized("Turn duration", "整轮耗时"), duration,
+            localized("includes waiting and tools", "包含等待与工具执行"), unit="seconds",
+        ))
+        completed = datetime.fromtimestamp(latest["completed_epoch"]).astimezone().isoformat(timespec="seconds")
+        return [detail_group(
+            "turn-performance", localized("Latest completed turn", "最近完成轮次"), metrics,
+            badge=localized(f"{latest['model']} · {completed}", f"{latest['model']} · {completed}"),
+            note=localized(
+                "Latest completed main-chat turn. Output Tokens (including reasoning) divided by Codex-reported turn duration, including waiting and tool execution. This is a turn average, not pure generation speed. Updates after completion.",
+                "主对话最近完成轮次：输出 Token（含推理）÷ Codex 记录的整轮耗时，包含等待与工具执行；属于轮次平均值，不代表纯生成速度。完成后更新。",
+            ),
+        )]
 
     def _snapshot_for(self, ledger: CodexRolloutLedger, timestamp: str, epoch: float) -> dict[str, Any]:
         day_key = datetime.fromtimestamp(epoch).astimezone().date().isoformat()

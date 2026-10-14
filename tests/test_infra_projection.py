@@ -260,6 +260,38 @@ class InfraProjectionTests(unittest.TestCase):
         self.assertEqual(projection["ai_usage"]["aggregate"]["cumulative"]["tokens"], 84)
         self.assertEqual(projection["sources"][-1]["id"], "infer-runtime")
 
+    def test_dsh_joins_ai_usage_without_mixing_today_and_history(self) -> None:
+        dsh = CollectorRun(
+            capability=CollectorCapability("ai.dsh.local-sessions", "dsh", "ai.dsh", "ai_usage", ("ai.tokens.total",)),
+            status="ok", snapshot=self.ai_snapshot("dsh", "DSH", today=0, cumulative=8455853),
+        )
+        projection = build_infra_projection(
+            sample(), {"kernel": {}, "vps": {}},
+            {"enabled": False, "status": "disabled", "servers": []}, "none", (dsh,),
+        )
+        self.assertEqual(projection["ai_usage"]["aggregate"]["today"]["tokens"], 0)
+        self.assertEqual(projection["ai_usage"]["aggregate"]["cumulative"]["tokens"], 8455853)
+        self.assertEqual(projection["ai_usage"]["sources"][0]["label"], "DSH")
+        self.assertEqual(projection["sources"][-1]["kind"], "ai.dsh")
+
+    def test_turn_performance_preserves_units_without_entering_token_aggregates(self) -> None:
+        snapshot = self.ai_snapshot("codex", "Codex", today=100, cumulative=200)
+        snapshot["details"] = [{
+            "id": "turn-performance",
+            "metrics": [{"id": "turn-output-rate", "unit": "tokens/s", "value": 37.73}],
+        }]
+        codex = CollectorRun(
+            capability=CollectorCapability("ai.codex.local-workload", "codex", "ai.codex", "ai_usage", ("ai.tokens.total",)),
+            status="ok", snapshot=snapshot,
+        )
+        projection = build_infra_projection(
+            sample(), {"kernel": {}, "vps": {}},
+            {"enabled": False, "status": "disabled", "servers": []}, "none", (codex,),
+        )
+        self.assertEqual(projection["ai_usage"]["sources"][0]["details"], snapshot["details"])
+        self.assertEqual(projection["ai_usage"]["aggregate"]["today"]["tokens"], 100)
+        self.assertEqual(projection["ai_usage"]["aggregate"]["cumulative"]["tokens"], 200)
+
     def test_future_ai_provider_is_projected_without_a_provider_specific_branch(self) -> None:
         future = CollectorRun(
             capability=CollectorCapability("ai.future.usage", "future-agent", "ai.future-agent", "ai_usage", ("ai.tokens.total",)),

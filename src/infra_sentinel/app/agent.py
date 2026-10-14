@@ -69,6 +69,7 @@ from infra_sentinel.resources.network.mihomo import (
 )
 from infra_sentinel.resources.network.metrics import network_collector_registry
 from infra_sentinel.resources.ai.codex import CodexUsageCollector
+from infra_sentinel.resources.ai.dsh import DshUsageCollector
 from infra_sentinel.resources.ai.antigravity import AntigravityUsageCollector
 from infra_sentinel.resources.ai.infer_runtime import InferRuntimeUsageCollector
 from infra_sentinel.resources.ai.opencode import OpenCodeUsageCollector, discover_opencode, discover_opencode_desktop_database
@@ -974,6 +975,7 @@ def main() -> int:
             pricing_catalog=pricing_catalog,
         ))
         collector_registry.register(AntigravityUsageCollector(pricing_catalog=pricing_catalog))
+        collector_registry.register(DshUsageCollector(checkpoint_path=config.state_dir / "dsh-usage-seen.json"))
         collector_registry.register(InferRuntimeUsageCollector(
             checkpoint_path=config.state_dir / "infer-runtime-usage-daily.json",
             pricing_catalog=pricing_catalog,
