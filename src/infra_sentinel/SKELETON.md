@@ -29,6 +29,9 @@ Codex rollout token parsing, lineage-aware inherited-prefix suppression,
 scoped cross-file deduplication, durable request-increment ledger updates, and
 read-only reconstruction. The ledger retains daily totals, current-day hour
 buckets, and optional reported timing for the latest completed main-chat turn.
+The AI performance owner in `resources/ai/performance.py` validates optional scalar
+timing and labels turn averages, request averages, and client stream rates. Provider
+adapters own timestamp and usage correlation; missing timing stays absent.
 Timing is diagnostic metadata and never enters token accounting; turn markers
 are irreversible hashes. Other AI adapters expose exact event hours when their source has
 timestamps and sampled deltas with explicit estimated provenance otherwise.

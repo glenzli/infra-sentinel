@@ -65,6 +65,7 @@ def detail_group(
     *,
     note: dict[str, str] | None = None,
     badge: dict[str, str] | None = None,
+    sample: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Create an optional, data-only provider detail group."""
     payload: dict[str, Any] = {"id": identifier, "title": title, "metrics": metrics}
@@ -72,6 +73,8 @@ def detail_group(
         payload["note"] = note
     if badge:
         payload["badge"] = badge
+    if sample:
+        payload["sample"] = sample
     return payload
 
 

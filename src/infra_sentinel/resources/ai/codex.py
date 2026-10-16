@@ -253,6 +253,7 @@ class CodexUsageCollector:
         return [detail_group(
             "turn-performance", localized("Latest completed turn", "最近完成轮次"), metrics,
             badge=localized(f"{latest['model']} · {completed}", f"{latest['model']} · {completed}"),
+            sample={"model": latest["model"], "recorded_at": completed},
             note=localized(
                 "Latest completed main-chat turn. Output Tokens (including reasoning) divided by Codex-reported turn duration, including waiting and tool execution. This is a turn average, not pure generation speed. Updates after completion.",
                 "主对话最近完成轮次：输出 Token（含推理）÷ Codex 记录的整轮耗时，包含等待与工具执行；属于轮次平均值，不代表纯生成速度。完成后更新。",

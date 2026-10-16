@@ -19,10 +19,12 @@ from typing import Any
 
 from infra_sentinel.core.collectors import Collection, CollectorCapability, CollectorContext
 from infra_sentinel.core.model import MetricPoint
+from infra_sentinel.resources.ai.performance import PerformanceSample, performance_details
 from infra_sentinel.resources.ai.contract import (
     ai_usage_snapshot, daily_usage, detail_group, hourly_usage, localized, model_usage,
     token_metric, usage_window,
 )
+
 
 
 POLL_SECONDS = 60
@@ -85,6 +87,7 @@ class DshRequest:
     model: str
     usage: dict[str, int]
     settled: bool
+    performance: PerformanceSample | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +95,51 @@ class DshSession:
     marker: str
     sequence: int
     requests: tuple[DshRequest, ...]
+
+
+def _stream_performance(data: dict[str, Any], epoch: float, model: str, output: int,
+                        started: int | None) -> PerformanceSample | None:
+    stream = data.get("stream")
+    if not isinstance(stream, list) or not stream or data.get("interrupted") is True:
+        return None
+    first = None
+    previous = -1
+    finished = None
+    for index, record in enumerate(stream):
+        if not isinstance(record, dict):
+            return None
+        kind = record.get("type")
+        if kind == "chunk":
+            stamp = record.get("time")
+            chunk = record.get("chunk")
+            if type(stamp) is not int or not 0 <= stamp <= 2**53 - 1 or stamp < previous or not isinstance(chunk, dict):
+                return None
+            previous = stamp
+            if chunk.get("type") in {"text-delta", "reasoning-delta", "tool-call-delta"}:
+                first = stamp if first is None else first
+            if chunk.get("type") == "finish":
+                reason = chunk.get("reason")
+                reason_kind = reason.get("kind", reason.get("type")) if isinstance(reason, dict) else reason
+                if index != len(stream) - 1 or reason_kind not in ("stop", "tool-calls", "max-tokens", "length"):
+                    return None
+                finished = stamp
+        elif kind in {"text-chunks", "reasoning-chunks", "tool-call-chunks"}:
+            stamp, deltas = record.get("time0"), record.get("dt")
+            members = record.get("args" if kind == "tool-call-chunks" else "texts")
+            if (type(stamp) is not int or stamp < previous or not isinstance(deltas, list)
+                    or not isinstance(members, list) or not members or len(deltas) != len(members) - 1
+                    or any(type(dt) is not int or dt < 0 for dt in deltas)):
+                return None
+            previous = stamp + sum(deltas)
+            first = stamp if first is None else first
+        else:
+            return None
+    if first is None or finished is None or finished <= first or finished > round(epoch * 1000):
+        return None
+    reliable_start = type(started) is int and 0 <= started <= first
+    return PerformanceSample(epoch, model, output,
+                             finished - started if reliable_start else None,
+                             first - started if reliable_start else None, finished - first)
 
 
 def read_dsh_session(path: Path) -> DshSession:
@@ -103,6 +151,7 @@ def read_dsh_session(path: Path) -> DshSession:
     route = "unknown"
     sequence = -1
     consumed = 0
+    starts: dict[tuple[int, int], int | None] = {}
     with _open_log(path) as stream:
         line = stream.readline(MAX_LINE_BYTES + 1)
         if len(line) > MAX_LINE_BYTES or not line.endswith(b"\n"):
@@ -137,6 +186,14 @@ def read_dsh_session(path: Path) -> DshSession:
             sequence = seq
             if seq < inherited or not isinstance(data, dict):
                 continue
+            timing_key = (data.get("turn"), data.get("step"))
+            if kind == "step/start" and all(type(v) is int and v >= 0 for v in timing_key):
+                stamp = record.get("time")
+                starts[timing_key] = stamp if type(stamp) is int and stamp >= 0 else None
+            elif kind in {"assistant/attempt", "llm/retry-started"} and all(type(v) is int and v >= 0 for v in timing_key):
+                # A retry has no explicit model-dispatch timestamp. Keep its
+                # observed stream, but never borrow the original attempt start.
+                starts[timing_key] = None
             if kind == "request/context":
                 route = _route(data, route)
             elif kind == "request/header":
@@ -176,6 +233,8 @@ def read_dsh_session(path: Path) -> DshSession:
                 pending = DshRequest(
                     _marker(f"{session_marker}:{key[0]}:{key[1]}:{attempt}"),
                     epoch, model, counters, kind == "assistant/message",
+                    _stream_performance(data, epoch, model, counters["output"], starts.get(key))
+                    if kind == "assistant/message" else None,
                 )
             elif kind in {"step/end", "turn/end"} and pending is not None:
                 samples[pending.marker] = replace(pending, settled=True)
@@ -263,6 +322,9 @@ class DshUsageCollector:
             temporary.replace(self._checkpoint)
         self._seen = seen
         self._snapshot = self._make_snapshot(requests, epoch, len(sessions), errors)
+        timed = [r.performance for r in requests if r.settled and r.performance is not None]
+        if timed:
+            self._snapshot["details"].extend(performance_details(max(timed, key=lambda s: s.recorded_epoch)))
         return Collection(points=tuple(points), status=self._snapshot["status"], snapshot=self._snapshot)
 
     @staticmethod

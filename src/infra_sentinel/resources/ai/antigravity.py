@@ -28,6 +28,7 @@ from typing import Any
 
 from infra_sentinel.core.collectors import Collection, CollectorCapability, CollectorContext
 from infra_sentinel.core.model import MetricPoint
+from infra_sentinel.resources.ai.performance import PerformanceSample, performance_details
 from infra_sentinel.resources.ai.contract import (
     ai_usage_snapshot,
     daily_usage,
@@ -82,6 +83,7 @@ class AntigravityHistory:
     stores: int = 0
     skipped_metadata_rows: int = 0
     undated_generations: int = 0
+    latest_performance: PerformanceSample | None = None
 
     @property
     def cumulative(self) -> _TokenTotals:
@@ -97,6 +99,7 @@ class AntigravityHistory:
             for identifier, values in models.items():
                 totals.setdefault(identifier, _TokenTotals()).add(values)
         return totals
+
 
 
 class _ProtoReader:
@@ -196,6 +199,23 @@ class _Generation:
     response_id: str | None
     timestamp_millis: int | None
     totals: _TokenTotals
+    first_token_ms: float | None = None
+    streaming_ms: float | None = None
+
+
+def _duration_millis(payload: bytes | None) -> float | None:
+    if payload is None:
+        return None
+    values = {}
+    for field, wire, value in _ProtoReader(payload).fields():
+        if field in (1, 2):
+            if field in values or wire != 0 or type(value) is not int:
+                return None
+            values[field] = value
+    seconds, nanos = values.get(1, 0), values.get(2, 0)
+    if not 0 <= seconds <= 315576000000 or not 0 <= nanos < 1000000000:
+        return None
+    return seconds * 1000 + nanos / 1000000
 
 
 def _parse_generation(blob: bytes) -> _Generation | None:
@@ -225,6 +245,8 @@ def _parse_generation(blob: bytes) -> _Generation | None:
         response_id=_string_field(usage, 11),
         timestamp_millis=_timestamp_millis(_message_field(generation_timestamp, 4) or b"") if generation_timestamp else None,
         totals=totals,
+        first_token_ms=_duration_millis(_message_field(chat_model, 11)),
+        streaming_ms=_duration_millis(_message_field(chat_model, 12)),
     )
 
 
@@ -338,6 +360,7 @@ def read_antigravity_history(directories: tuple[Path, ...]) -> AntigravityHistor
     skipped_metadata_rows = 0
     seen_response_ids: set[str] = set()
     undated_generations = 0
+    latest_performance = None
     for directory in directories:
         for database in _conversation_databases(directory):
             rows, skipped = _session_rows(database)
@@ -366,6 +389,15 @@ def read_antigravity_history(directories: tuple[Path, ...]) -> AntigravityHistor
                         continue
                     seen_response_ids.add(row.response_id)
                 model = row.model or (recovered.get(row.display_model) if row.display_model else None) or "unknown"
+                if row.streaming_ms is not None and row.streaming_ms > 0:
+                    sample = PerformanceSample(
+                        row.timestamp_millis / 1000, model,
+                        row.totals.output_tokens + row.totals.reasoning_tokens,
+                        row.first_token_ms + row.streaming_ms if row.first_token_ms is not None else None,
+                        row.first_token_ms, row.streaming_ms,
+                    )
+                    if latest_performance is None or sample.recorded_epoch >= latest_performance.recorded_epoch:
+                        latest_performance = sample
                 day = _local_day(row.timestamp_millis)
                 days[day].setdefault(model, _TokenTotals()).add(row.totals)
                 if row.timestamp_millis is not None:
@@ -378,6 +410,7 @@ def read_antigravity_history(directories: tuple[Path, ...]) -> AntigravityHistor
         stores=len(directories),
         skipped_metadata_rows=skipped_metadata_rows,
         undated_generations=undated_generations,
+        latest_performance=latest_performance,
     )
 
 
@@ -541,7 +574,7 @@ class AntigravityUsageCollector:
                 detail=localized("all readable local generation metadata", "全部可读取的本地生成元数据"),
             ),
             models=models,
-            details=[
+            details=performance_details(history.latest_performance) + [
                 detail_group("token-breakdown", localized("Token breakdown", "Token 分类明细"), [
                     token_metric("input", localized("Input", "输入"), today.input_tokens, localized("locally recorded", "本地记录")),
                     token_metric("output", localized("Output", "输出"), today.output_tokens, localized("locally recorded", "本地记录")),

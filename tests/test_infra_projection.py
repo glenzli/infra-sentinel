@@ -279,6 +279,12 @@ class InfraProjectionTests(unittest.TestCase):
         snapshot["details"] = [{
             "id": "turn-performance",
             "metrics": [{"id": "turn-output-rate", "unit": "tokens/s", "value": 37.73}],
+        }, {
+            "id": "request-performance",
+            "metrics": [{"id": "request-output-rate", "unit": "tokens/s", "value": 24}],
+        }, {
+            "id": "client-stream-performance",
+            "metrics": [{"id": "client-stream-output-rate", "unit": "tokens/s", "value": 40}],
         }]
         codex = CollectorRun(
             capability=CollectorCapability("ai.codex.local-workload", "codex", "ai.codex", "ai_usage", ("ai.tokens.total",)),

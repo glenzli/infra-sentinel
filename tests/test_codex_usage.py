@@ -93,6 +93,9 @@ class CodexUsageTests(unittest.TestCase):
             ).collect(CollectorContext({"epoch": EPOCH + 40}, {}))
             persisted = checkpoint.read_text(encoding="utf-8")
 
+        group = next(group for group in result.snapshot["details"] if group["id"] == "turn-performance")
+        self.assertEqual(group["sample"]["model"], "gpt-5.6-sol")
+        self.assertEqual(datetime.fromisoformat(group["sample"]["recorded_at"]).timestamp(), EPOCH)
         metrics = timing_metrics(result.snapshot)
         self.assertEqual(metrics["turn-output-rate"]["value"], 50)
         self.assertEqual(metrics["turn-output-rate"]["unit"], "tokens/s")

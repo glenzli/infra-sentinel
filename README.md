@@ -44,6 +44,8 @@ DSH（DeepSeek Harness）从 `~/.dsh/sessions`（或 `$DSH_HOME/sessions`）只�
 
 新版 Codex 日志提供计时字段时，AI 用量页还会显示主对话最近完成轮次的平均输出 `tokens/s`、首 Token 延迟和整轮耗时。平均速度为本轮输出 Token（含推理）除以 Codex 记录的整轮耗时，包含等待与工具执行，不代表纯生成速度。沿用现有约 20 秒的采集间隔，完成后更新；旧日志或缺少可靠字段时不显示。已有账本无需重建，新完成的轮次会逐步提供计时数据。
 
+OpenCode 按已完成用户轮次汇总输出并显示轮次平均（含工具）；DSH 从带时间戳的响应流读取请求平均与客户端流速；Antigravity 使用生成元数据中的首 Token 延迟和流式耗时。请求平均包含首输出等待，客户端流速不含该等待且可能受缓冲交付影响；三种口径分别标注，不作为可互比的纯模型生成速度。缺少可靠起止或重试起点时保持缺失，不改动 Token 用量账本。
+
 图表显示本机记录到的原始 Token，不是 Codex 账户额度或账单。API 参考价值按模型的输入、缓存输入、缓存写入和输出价格换算。价格目录来自独立的 [api-price](https://github.com/glenzli/api-price) Release：Agent 每日检查一次，遇到没有精确价格的模型时至多每六小时补查一次，也可在设置中手动检查。下载内容会校验大小、结构和 SHA-256；失败时继续使用最后一个有效版本或 App 内置目录。检查请求不包含本机模型 ID 或用量。
 
 当日用量按小时展示。有时间戳的来源按事件时间归桶；只提供累计值的来源按采样差分归桶。无法定位的起始余额归入统计开始所在小时，并标记为估算。跨日后按自然日汇总。
@@ -135,6 +137,8 @@ Codex usage is calculated from per-request `last_token_usage` increments in loca
 DSH (DeepSeek Harness) reads provider usage from local v4 JSONL / Zstd sessions under `~/.dsh/sessions` (or `$DSH_HOME/sessions`), checked once a minute. It includes input, output, cache, model, daily and hourly history. Final usage replaces streaming reports for the same attempt; retries count separately and explicit inherited prefixes are excluded. Historical usage follows event timestamps, not file modification time. Credentials and transcript content are not retained, and model-price aliases are not inferred. Compressed logs work with Python 3.14+; earlier Python versions can install `.[dsh]`.
 
 When newer Codex logs provide timing metadata, AI usage also shows the latest completed main-chat turn's average output `tokens/s`, first-token latency, and duration. The average divides turn output Tokens (including reasoning) by Codex-reported turn duration, including waiting and tool execution; it is not pure generation speed. Results update after completion on the existing roughly 20-second collection cadence. Older or incomplete records stay absent. Existing ledgers need no rebuild; newly completed turns supply timing as they are observed.
+
+OpenCode shows a completed user-turn average including tools. DSH reads request averages and client stream rates from timed response streams; Antigravity uses recorded first-token and streaming durations. Request averages include first-output waiting. Client stream rates exclude it and may be inflated by buffering; these scopes remain separately labeled. Missing timing or an unknown retry start stays absent and never changes Token accounting.
 
 Charts show raw Tokens recorded on this machine, not Codex account quota or billing. API reference value is calculated from model-specific input, cached-input, cache-write, and output prices. The price catalog comes from independent [api-price](https://github.com/glenzli/api-price) Releases. The Agent checks daily, checks at most every six hours when an exact model price is missing, and also offers a manual check in Settings. Downloads are validated for size, structure, and SHA-256; failures retain the last valid or bundled catalog. Update requests contain no local model IDs or usage.
 

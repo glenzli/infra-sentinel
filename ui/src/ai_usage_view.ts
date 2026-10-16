@@ -98,12 +98,13 @@ function horizontalBars(
   labelFor: (identifier: string) => string = (identifier) => identifier,
   estimates?: Map<string, number>,
   formatValue: (value: number) => string = formatTokens,
+  annotations?: (identifier: string) => string,
 ): string {
   const ranked = [...totals.entries()].filter(([, value]) => value > 0).sort((left, right) => right[1] - left[1]).slice(0, 8);
   const maximum = Math.max(...ranked.map(([, value]) => value), 1);
   return `<article class="detail-panel ai-ranked-panel"><div class="detail-panel__heading"><h3>${escapeHtml(title)}</h3><span>${escapeHtml(detail)}</span></div><div class="ai-ranked-bars">${ranked.map(([label, value], index) => {
     const estimate = estimates?.get(label) ?? 0;
-    return `<div class="ai-ranked-bar"><div><span><i class="chart-dot" style="background:${colors[index % colors.length]}"></i>${escapeHtml(labelFor(label))}</span><span class="ai-ranked-bar__value"><strong>${formatValue(value)}</strong>${estimate > 0 ? `<small>≈ ${formatReferenceUsd(estimate)}</small>` : ""}</span></div><p><i style="background:${colors[index % colors.length]};width:${Math.max(.2, value / maximum * 100)}%"></i></p></div>`;
+    return `<div class="ai-ranked-bar"><div><span class="ai-ranked-bar__identity"><span><i class="chart-dot" style="background:${colors[index % colors.length]}"></i>${escapeHtml(labelFor(label))}</span>${annotations?.(label) ?? ""}</span><span class="ai-ranked-bar__value"><strong>${formatValue(value)}</strong>${estimate > 0 ? `<small>≈ ${formatReferenceUsd(estimate)}</small>` : ""}</span></div><p><i style="background:${colors[index % colors.length]};width:${Math.max(.2, value / maximum * 100)}%"></i></p></div>`;
   }).join("") || `<div class="chart-empty">${tr("Waiting for recorded Token increments.", "等待已记录的 Token 增量。")}</div>`}</div></article>`;
 }
 
@@ -190,7 +191,7 @@ function renderOverview(usage: ProjectedUsage, providerSources: Record<string, u
   const sources = usage.sourceTotals;
   const selectedTotal = [...sources.values()].reduce((sum, value) => sum + value, 0);
   const reference = projectPriceReference(providerSources, usage, range, window);
-  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Selected range total", "所选时段总量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)} · ${sources.size} ${tr("Agents", "个 Agent")}</span>${referencePriceTag(reference)}</aside></div>${horizontalBars(tr("Usage by Agent", "按 Agent 的用量"), rangeLabel(range), sources, SOURCE_COLORS)}${historyVisualControl(range, visual)}${usageHistory(usage.intervals, "source", range, window, visual, usage.undatedTotal, reference)}</section>`;
+  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Selected range total", "所选时段总量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)} · ${sources.size} ${tr("Agents", "个 Agent")}</span>${referencePriceTag(reference)}</aside></div>${horizontalBars(tr("Usage by Agent", "按 Agent 的用量"), rangeLabel(range), sources, SOURCE_COLORS, undefined, undefined, undefined, (id) => performanceAnnotations(providerSources, "source", id))}${historyVisualControl(range, visual)}${usageHistory(usage.intervals, "source", range, window, visual, usage.undatedTotal, reference)}</section>`;
 }
 
 function valueHistory(reference: PriceReference, range: AiTimeRange, window: AnalysisTimeWindow, visual: AiHistoryVisual): string {
@@ -243,10 +244,10 @@ function renderModels(usage: ProjectedUsage, providerSources: Record<string, unk
     const values = reference?.byModel ?? new Map<string, number>();
     const total = reference?.costUsd ?? 0;
     return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Equivalent value in range", "所选时段等价价值")}</p><strong>${total > 0 ? `≈ ${formatReferenceUsd(total)}` : "—"}</strong></div><aside><span>${rangeLabel(range)}</span></aside></div>${total > 0
-      ? `${horizontalBars(tr("Equivalent value by model", "按模型的等价价值"), rangeLabel(range), values, MODEL_COLORS, modelLabel, undefined, formatReferenceUsd)}${historyVisualControl(range, visual)}${valueHistory(reference!, range, window, visual)}`
+      ? `${horizontalBars(tr("Equivalent value by model", "按模型的等价价值"), rangeLabel(range), values, MODEL_COLORS, modelLabel, undefined, formatReferenceUsd, (id) => performanceAnnotations(providerSources, "model", id))}${historyVisualControl(range, visual)}${valueHistory(reference!, range, window, visual)}`
       : `<article class="detail-panel ai-analysis-state"><p>${tr("No model rows in this range have an available price reference.", "所选时段没有可用参考价的模型行。")}</p></article>`}</section>`;
   }
-  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Model total in range", "所选时段模型量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)}</span></aside></div>${horizontalBars(tr("Model composition", "模型构成"), rangeLabel(range), models, MODEL_COLORS, modelLabel)}${historyVisualControl(range, visual)}${usageHistory(usage.intervals, "model", range, window, visual, usage.undatedTotal)}</section>`;
+  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Model total in range", "所选时段模型量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)}</span></aside></div>${horizontalBars(tr("Model composition", "模型构成"), rangeLabel(range), models, MODEL_COLORS, modelLabel, undefined, undefined, (id) => performanceAnnotations(providerSources, "model", id))}${historyVisualControl(range, visual)}${usageHistory(usage.intervals, "model", range, window, visual, usage.undatedTotal)}</section>`;
 }
 
 function providerDetails(source: Record<string, unknown>, providerPanels: ReadonlyMap<string, boolean>): string {
@@ -312,15 +313,40 @@ export function renderAiUsageResourcePage(projection: AgentProjection, resource:
   const providerSources = asArray(asRecord(projection.infra.ai_usage).sources);
   const sourceNames = providerSources.map((source) => String(source.label ?? source.source_id ?? "")).filter(Boolean).join(" · ");
   const diagnostics = renderAttentionDiagnostics(aiUsageDiagnostics(projection, resource, sources));
-  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("RESOURCE DETAIL", "资源详情")}</p><h2>${tr("AI usage", "AI 用量")}</h2></div><div class="ai-resource-meta"><span class="section-heading__meta">${escapeHtml(sourceNames)}</span><button type="button" class="button button--subtle ai-methodology-link" data-ai-methodology>${tr("Methods & estimates", "口径与估算")}</button></div></div>${diagnostics}<section class="network-detail">${renderCurrentSummary(providerSources, sources)}${renderTurnPerformance(providerSources)}${renderControls(snapshot)}${analysisBody(snapshot, providerSources)}<article class="sources-card sources-card--footer"><div class="sources-card__heading"><h3>${tr("Collector sources", "采集数据源")}</h3><span>${sources.length}</span></div><ul>${sources.map(sourceRow).join("")}</ul></article></section></section>`;
+  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("RESOURCE DETAIL", "资源详情")}</p><h2>${tr("AI usage", "AI 用量")}</h2></div><div class="ai-resource-meta"><span class="section-heading__meta">${escapeHtml(sourceNames)}</span><button type="button" class="button button--subtle ai-methodology-link" data-ai-methodology>${tr("Methods & estimates", "口径与估算")}</button></div></div>${diagnostics}<section class="network-detail">${renderCurrentSummary(providerSources, sources)}${renderControls(snapshot)}${analysisBody(snapshot, providerSources)}<article class="sources-card sources-card--footer"><div class="sources-card__heading"><h3>${tr("Collector sources", "采集数据源")}</h3><span>${sources.length}</span></div><ul>${sources.map(sourceRow).join("")}</ul></article></section></section>`;
 }
 
-function renderTurnPerformance(providerSources: Record<string, unknown>[]): string {
-  return providerSources.map((source) => {
-    const group = asArray(source.details).find((detail) => detail.id === "turn-performance");
-    if (!group) return "";
-    return `<article class="detail-panel ai-turn-performance"><div class="detail-panel__heading"><h3>${escapeHtml(source.label ?? source.source_id)} · ${escapeHtml(localized(group.title))}</h3><span>${escapeHtml(localized(group.badge))}</span></div><dl>${asArray(group.metrics).map((metric) => `<div><dt>${escapeHtml(localized(metric.label))}</dt><dd>${formatMetric(metric.value, metric.unit)}</dd></div>`).join("")}</dl><p>${escapeHtml(localized(group.note))}</p></article>`;
-  }).join("");
+function performanceAnnotations(providerSources: Record<string, unknown>[], dimension: "source" | "model", identifier: string): string {
+  const labels: Record<string, string> = {
+    "turn-performance": tr("Turn average", "轮次平均"),
+    "request-performance": tr("Request average", "请求平均"),
+    "client-stream-performance": tr("Client stream", "客户端流速"),
+  };
+  const annotations = providerSources.flatMap((source) => {
+    if (dimension === "source" && source.source_id !== identifier) return [];
+    const sourceLabel = String(source.label ?? source.source_id ?? "");
+    const tags = asArray(source.details).flatMap((group) => {
+      const label = labels[String(group.id)];
+      if (!label) return [];
+      const sample = asRecord(group.sample);
+      const model = canonicalModelId(sample.model);
+      if (dimension === "model" && (!model || model === "mixed" || model === "unknown" || model !== identifier)) return [];
+      const rate = asArray(group.metrics).find((metric) => metric.unit === "tokens/s");
+      if (!rate || typeof rate.value !== "number" || !Number.isFinite(rate.value) || rate.value < 0) return [];
+      const recorded = new Date(String(sample.recorded_at ?? ""));
+      const recordedLabel = Number.isNaN(recorded.getTime()) ? localized(group.badge) : recorded.toLocaleString();
+      const context = `${sourceLabel} · ${String(sample.model ?? "")}`;
+      const timing = asArray(group.metrics).filter((metric) => metric.unit === "seconds")
+        .map((metric) => `${localized(metric.label)} ${formatMetric(metric.value, metric.unit)}`).join(" · ");
+      const note = localized(group.note);
+      const value = formatMetric(rate.value, rate.unit);
+      const hint = [context, `${tr("Latest recorded sample", "最近样本")} · ${recordedLabel}`, `${label} ${value}`, timing, note].filter(Boolean).join("\n");
+      return [`<button type="button" class="ai-performance-tag" aria-label="${escapeHtml(hint)}"><span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b><span class="ai-performance-tooltip" aria-hidden="true"><b>${escapeHtml(context)}</b><time>${escapeHtml(recordedLabel)}</time>${timing ? `<span>${escapeHtml(timing)}</span>` : ""}<span>${escapeHtml(note)}</span></span></button>`];
+    });
+    if (!tags.length) return [];
+    return [`<span class="ai-performance-source">${dimension === "model" ? `<small>${escapeHtml(sourceLabel)}</small>` : ""}${tags.join("")}</span>`];
+  });
+  return annotations.length ? `<span class="ai-performance-samples"><small>${tr("Latest sample", "最近样本")}</small>${annotations.join("")}</span>` : "";
 }
 
 function renderCurrentSummary(providerSources: Record<string, unknown>[], sources: SourceProjection[]): string {
