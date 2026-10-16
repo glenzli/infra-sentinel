@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import hashlib
 from io import BytesIO
 import json
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -93,10 +94,10 @@ class PricingCatalogTests(unittest.TestCase):
 
     def test_manager_installs_only_manifest_matching_catalog(self) -> None:
         base = bundled_pricing_catalog().raw
-        updated = base.replace(b'catalog_version = "2026.09.06.1"', b'catalog_version = "2026.09.07.1"')
+        updated = re.sub(rb'catalog_version = "[^"]+"', b'catalog_version = "2099.01.01.1"', base, count=1)
         updated = updated.replace(b'input_per_million = 10.00', b'input_per_million = 11.00', 1)
         payloads = {
-            LATEST_MANIFEST_URL: manifest(updated, "2026.09.07.1"),
+            LATEST_MANIFEST_URL: manifest(updated, "2099.01.01.1"),
             LATEST_CATALOG_URL: updated,
         }
         calls: list[str] = []
@@ -115,14 +116,14 @@ class PricingCatalogTests(unittest.TestCase):
             installed = (Path(temporary) / "api-price.toml").read_bytes()
 
         self.assertEqual(result["status"], "updated")
-        self.assertEqual(result["catalog_version"], "2026.09.07.1")
+        self.assertEqual(result["catalog_version"], "2099.01.01.1")
         self.assertEqual(installed, updated)
         self.assertEqual(calls, [LATEST_MANIFEST_URL, LATEST_CATALOG_URL])
         self.assertEqual(manager.price_for("codex", "gpt-6-astra", "2026-09-07").input_per_million, 11.0)
 
     def test_bad_download_preserves_bundled_catalog(self) -> None:
         base = bundled_pricing_catalog().raw
-        bad_manifest = json.loads(manifest(base, "2026.09.06.1"))
+        bad_manifest = json.loads(manifest(base, bundled_pricing_catalog().catalog_version))
         bad_manifest["sha256"] = "0" * 64
 
         def fetch(url: str, _maximum: int) -> bytes:
@@ -133,7 +134,7 @@ class PricingCatalogTests(unittest.TestCase):
             result = manager.refresh(force=True)
 
         self.assertEqual(result["status"], "error")
-        self.assertEqual(manager.catalog_version, "2026.09.06.1")
+        self.assertEqual(manager.catalog_version, bundled_pricing_catalog().catalog_version)
 
     def test_missing_model_check_sends_no_model_or_usage_data(self) -> None:
         current = bundled_pricing_catalog().raw
@@ -143,7 +144,7 @@ class PricingCatalogTests(unittest.TestCase):
         def fetch(url: str, _maximum: int) -> bytes:
             calls.append(url)
             checked.set()
-            return manifest(current, "2026.09.06.1")
+            return manifest(current, bundled_pricing_catalog().catalog_version)
 
         with tempfile.TemporaryDirectory() as temporary:
             manager = PricingCatalogManager(Path(temporary), fetcher=fetch)

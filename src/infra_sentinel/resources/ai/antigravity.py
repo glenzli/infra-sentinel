@@ -41,7 +41,9 @@ from infra_sentinel.resources.ai.contract import (
     usage_window,
 )
 from infra_sentinel.resources.ai.antigravity_pricing import (
+    AntigravityApiEstimate,
     estimate_antigravity_text_api_cost,
+    resolve_antigravity_reference,
 )
 from infra_sentinel.resources.ai.pricing_catalog import PriceCatalogLookup, bundled_pricing_catalog
 
@@ -508,15 +510,19 @@ class AntigravityUsageCollector:
                 today_detail=localized("locally recorded generation metadata", "本地记录的生成元数据"),
                 cumulative_method="local-conversation-history",
                 cumulative_detail=localized("all readable local generation metadata", "全部可读取的本地生成元数据"),
+                price_reference=resolve_antigravity_reference(identifier, catalog=self._pricing_catalog, usage_date=day).projection(),
             )
             for identifier in identifiers
         ]
         daily = []
         pricing = []
+        daily_estimates = []
         for date, model_values in sorted(history.days.items()):
             estimate = estimate_antigravity_text_api_cost(
                 model_values, catalog=self._pricing_catalog, usage_date=date,
             )
+            daily_estimates.append(estimate)
+            matches = dict(estimate.model_matches)
             daily.append(daily_usage(
                 date,
                 sum(values.total_tokens for values in model_values.values()),
@@ -528,33 +534,43 @@ class AntigravityUsageCollector:
                 cost_usd=estimate.total_cost_usd,
                 priced_tokens=estimate.priced_tokens,
                 unpriced_tokens=estimate.unpriced_tokens,
-                models=[{"id": identifier, "cost_usd": cost, "priced_tokens": tokens}
+                models=[{"id": identifier, "cost_usd": cost, "priced_tokens": tokens,
+                         "price_reference": matches[identifier].projection()}
                         for identifier, cost, tokens in estimate.model_costs],
             ))
         today_estimate = estimate_antigravity_text_api_cost(
             today_models, catalog=self._pricing_catalog, usage_date=day,
         )
-        cumulative_estimate = estimate_antigravity_text_api_cost(
-            cumulative_models, catalog=self._pricing_catalog, usage_date=day,
+        cumulative_estimate = AntigravityApiEstimate(
+            total_cost_usd=sum(item.total_cost_usd for item in daily_estimates),
+            priced_tokens=sum(item.priced_tokens for item in daily_estimates),
+            unpriced_tokens=sum(item.unpriced_tokens for item in daily_estimates),
+            model_costs=(),
+            base_reference_tokens=sum(item.base_reference_tokens for item in daily_estimates),
         )
         price_metrics = [
             token_metric(
                 "antigravity-api-today", localized("Today reference value", "今日参考价"), today_estimate.total_cost_usd,
-                localized("explicit local model mappings only", "仅明确的本地模型映射"), unit="usd",
+                localized("dated exact matches or labeled base-reference estimates", "按使用日期精确匹配，或标明本体参考估算"), unit="usd",
             ),
             token_metric(
                 "antigravity-api-cumulative", localized("Local-history reference value", "本地历史参考价"), cumulative_estimate.total_cost_usd,
-                localized("explicit local model mappings only", "仅明确的本地模型映射"), unit="usd",
+                localized("dated exact matches or labeled base-reference estimates", "按使用日期精确匹配，或标明本体参考估算"), unit="usd",
             ),
             token_metric(
                 "antigravity-api-priced-tokens", localized("Price-matched local Tokens", "可计价本地 Token"), cumulative_estimate.priced_tokens,
-                localized("models with an explicit documented price mapping", "有明确官方价格映射的模型"),
+                localized("exact matches plus labeled base-reference estimates", "精确匹配与已标明的本体参考估算"),
             ),
         ]
+        if cumulative_estimate.base_reference_tokens:
+            price_metrics.append(token_metric(
+                "antigravity-api-base-reference-tokens", localized("Base-reference estimated Tokens", "按本体参考估算的 Token"), cumulative_estimate.base_reference_tokens,
+                localized("subset of priced Tokens; observed IDs are preserved", "可计价 Token 的子集；保留原始模型名"),
+            ))
         if cumulative_estimate.unpriced_tokens:
             price_metrics.append(token_metric(
                 "antigravity-api-unpriced-tokens", localized("Unpriced local Tokens", "未计价本地 Token"), cumulative_estimate.unpriced_tokens,
-                localized("no explicit official price mapping", "没有明确的官方价格映射"),
+                localized("no dated exact price or supported base reference", "没有适用日期的精确价格或受支持的本体参考价"),
             ))
         return ai_usage_snapshot(
             source_id="antigravity",
@@ -591,8 +607,8 @@ class AntigravityUsageCollector:
                 detail_group(
                     "antigravity-api-reference", localized("Antigravity API references", "Antigravity API 参考"), price_metrics,
                     note=localized(
-                        "Maps decoded text input, cache-read, output, and reasoning counters through exact local model IDs in the active api-price catalog checked on " + self._pricing_catalog.checked_at + ". Gemini 3.1 Pro uses its <=200k-context tier. It excludes storage, grounding, tools, multimodal legs, opaque aliases, and all Antigravity plan terms. Not a bill or quota balance.",
-                        "仅将已解码文本输入、缓存读取、输出与推理计数，经 " + self._pricing_catalog.checked_at + " 核对的当前 api-price 目录中的精确本地模型 ID 换算。Gemini 3.1 Pro 使用 <=200k 上下文档位；缓存存储、检索、工具、多模态、内部别名和全部 Antigravity 套餐条款均不计入；不是账单或额度余额。",
+                        "Uses usage-date prices from the api-price catalog checked on " + self._pricing_catalog.checked_at + ". Exact model prices win. Only bounded rollout/effort suffixes may use a labeled base-model reference; a rollout marker does not prove identical backend identity or billing. Observed IDs stay unchanged; unknown bases and unsupported suffixes remain unpriced. Text input, cache-read, output and reasoning only; storage, grounding, tools, multimodal legs, context uplifts and Antigravity plan terms are excluded. Not a bill or quota balance.",
+                        "按使用日期选取 " + self._pricing_catalog.checked_at + " 核对的 api-price 价格，精确模型价优先。仅有限的灰度/推理后缀可采用标明的本体参考估算；灰度标记不能证明后端身份或实际计费相同。原始模型名不变；未知本体与未支持后缀保持未计价。仅含文本输入、缓存读取、输出和推理；存储、检索、工具、多模态、上下文加价及 Antigravity 套餐条款不计入；不是账单或额度余额。",
                     ),
                     badge=localized("reference · not billing", "估算 · 非账单"),
                 ),

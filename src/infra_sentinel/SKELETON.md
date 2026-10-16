@@ -50,6 +50,9 @@ event-time history. Its checkpoint retains only hashed request markers.
 api-price contract, the bundled offline fallback, validated Release downloads,
 and the last-known-good local cache. Provider collectors may query this owner;
 they must not fetch pricing or implement their own update cadence.
+`resources/ai/antigravity_pricing.py` owns bounded suffix classification and
+dated exact-versus-base price references; it preserves observed model IDs and
+exposes rollout suspicion and estimate provenance as optional model metadata.
 
 ## State and privacy boundaries
 

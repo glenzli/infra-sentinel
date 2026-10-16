@@ -87,13 +87,18 @@ def model_usage(
     today_detail: dict[str, str] | None = None,
     cumulative_method: str = "source-history",
     cumulative_detail: dict[str, str] | None = None,
+    price_reference: dict[str, object] | None = None,
 ) -> dict[str, Any]:
     """Create a normalized per-model usage row."""
-    return {
+    payload: dict[str, Any] = {
         "id": identifier,
         "today": usage_window(today_tokens, method=today_method, detail=today_detail or localized("provider model total", "提供方模型累计")),
         "cumulative": usage_window(cumulative_tokens, method=cumulative_method, detail=cumulative_detail or localized("readable local history", "可读本地历史")),
     }
+    if price_reference:
+        payload["price_reference"] = dict(price_reference)
+    return payload
+
 
 def daily_usage(day: str, tokens: int, models: list[dict[str, Any]]) -> dict[str, Any]:
     """Create one provider-normalized calendar-day usage row.
@@ -154,6 +159,7 @@ def pricing_day(
             "cost_usd": max(0.0, float(model.get("cost_usd") or 0.0)),
             "priced_tokens": max(0, int(model.get("priced_tokens") or 0)),
             "unpriced_tokens": max(0, int(model.get("unpriced_tokens") or 0)),
+            **({"price_reference": dict(model["price_reference"])} if isinstance(model.get("price_reference"), dict) else {}),
         })
     return {
         "date": day,

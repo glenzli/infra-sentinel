@@ -299,10 +299,13 @@ class InfraProjectionTests(unittest.TestCase):
         self.assertEqual(projection["ai_usage"]["aggregate"]["cumulative"]["tokens"], 200)
 
     def test_future_ai_provider_is_projected_without_a_provider_specific_branch(self) -> None:
+        reference = {"model": "gemini-4-argon", "match": "base-reference", "suspected_rollout": True, "available": True}
+        snapshot = self.ai_snapshot("future-agent", "Future Agent", today=42, cumulative=420)
+        snapshot["models"] = [{"id": "gemini-4-argon-trial", "price_reference": reference}]
         future = CollectorRun(
             capability=CollectorCapability("ai.future.usage", "future-agent", "ai.future-agent", "ai_usage", ("ai.tokens.total",)),
             status="ok",
-            snapshot=self.ai_snapshot("future-agent", "Future Agent", today=42, cumulative=420),
+            snapshot=snapshot,
         )
         projection = build_infra_projection(
             sample(), {"kernel": {}, "vps": {}}, {"enabled": False, "status": "disabled", "servers": []}, "none", (future,),
@@ -313,6 +316,8 @@ class InfraProjectionTests(unittest.TestCase):
         self.assertEqual(projection["ai_usage"]["aggregate"]["today"]["tokens"], 42)
         self.assertEqual(projection["ai_usage"]["sources"][0]["source_id"], "future-agent")
         self.assertIn("future-agent", {item["id"] for item in projection["sources"]})
+
+        self.assertEqual(projection["ai_usage"]["sources"][0]["models"][0]["price_reference"], reference)
 
     def test_facility_health_is_separate_from_resources_and_contributes_to_overall_status(self) -> None:
         facilities = {

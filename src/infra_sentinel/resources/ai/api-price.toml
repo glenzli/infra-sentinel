@@ -1,13 +1,13 @@
 schema = "api-price/v1"
-catalog_version = "2026.09.06.1"
-updated_at = "2026-09-06T12:00:00+08:00"
+catalog_version = "2026.10.16.1"
+updated_at = "2026-10-16T20:03:26+08:00"
 currency = "USD"
 unit = "per_million_tokens"
 
 [[references]]
 id = "openai-models"
 url = "https://developers.openai.com/api/docs/models"
-checked_at = "2026-09-06"
+checked_at = "2026-09-23"
 
 [[references]]
 id = "openai-gpt-6-astra"
@@ -15,14 +15,89 @@ url = "https://developers.openai.com/api/docs/models/gpt-6-astra"
 checked_at = "2026-09-06"
 
 [[references]]
+id = "openai-gpt-6-sol"
+url = "https://developers.openai.com/api/docs/models/gpt-6-sol"
+checked_at = "2026-09-23"
+
+[[references]]
+id = "openai-gpt-6-luna"
+url = "https://developers.openai.com/api/docs/models/gpt-6-luna"
+checked_at = "2026-09-23"
+
+[[references]]
+id = "openai-gpt-5.4"
+url = "https://developers.openai.com/api/docs/models/gpt-5.4"
+checked_at = "2026-09-23"
+
+[[references]]
+id = "openai-gpt-5.4-mini"
+url = "https://developers.openai.com/api/docs/models/gpt-5.4-mini"
+checked_at = "2026-09-23"
+
+[[references]]
+id = "openai-gpt-5.4-nano"
+url = "https://developers.openai.com/api/docs/models/gpt-5.4-nano"
+checked_at = "2026-09-23"
+
+[[references]]
+id = "openai-gpt-5.2-codex"
+url = "https://developers.openai.com/api/docs/models/gpt-5.2-codex"
+checked_at = "2026-09-23"
+
+[[references]]
+id = "openai-gpt-5-3-codex"
+url = "https://developers.openai.com/api/docs/models/gpt-5.3-codex"
+checked_at = "2026-09-23"
+
+[[references]]
 id = "google-gemini-api"
 url = "https://ai.google.dev/gemini-api/docs/pricing"
-checked_at = "2026-09-06"
+checked_at = "2026-09-23"
 
 [[references]]
 id = "google-cloud-partner-models"
 url = "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
-checked_at = "2026-09-06"
+checked_at = "2026-10-12"
+
+[[references]]
+id = "openai-gpt-6.1-sol"
+url = "https://developers.openai.com/api/docs/models/gpt-6.1-sol"
+checked_at = "2026-10-12"
+
+[[references]]
+id = "openai-changelog"
+url = "https://developers.openai.com/api/docs/changelog"
+checked_at = "2026-10-12"
+
+[[references]]
+id = "google-cloud-claude-sonnet-5-5"
+url = "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/sonnet-5-5"
+checked_at = "2026-10-12"
+
+[[references]]
+id = "google-cloud-claude-haiku-5-5"
+url = "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/haiku-5-5"
+checked_at = "2026-10-12"
+
+[[references]]
+id = "openai-pricing-20261016"
+url = "https://developers.openai.com/api/docs/pricing"
+checked_at = "2026-10-16"
+
+[[references]]
+id = "google-gemini-pricing-20261016"
+url = "https://ai.google.dev/gemini-api/docs/pricing"
+checked_at = "2026-10-16"
+
+[[references]]
+id = "google-gemini-4-argon-launch"
+url = "https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-argon/"
+checked_at = "2026-10-16"
+
+[[references]]
+id = "google-cloud-pricing-20261016"
+url = "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
+checked_at = "2026-10-16"
 
 [[prices]]
 scope = "codex"
@@ -76,6 +151,39 @@ output_per_million = 50.00
 note = "Base standard text-token rates only; request-level long-context uplift is excluded."
 
 [[prices]]
+scope = "codex"
+model = "gpt-6-sol"
+reference = "openai-gpt-6-sol"
+valid_from = "2026-09-22"
+input_per_million = 2.00
+cached_input_per_million = 0.20
+cache_write_per_million = 2.50
+output_per_million = 10.00
+note = "Base standard text-token rates only; request-level long-context uplift is excluded."
+
+[[prices]]
+scope = "codex"
+model = "gpt-6.1-sol"
+reference = "openai-gpt-6.1-sol"
+valid_from = "2026-09-29"
+input_per_million = 2.00
+cached_input_per_million = 0.10
+cache_write_per_million = 2.50
+output_per_million = 10.00
+note = "Standard short-context text-token rates (<=272K input tokens); long-context, Fast/Ultrafast, and regional uplifts excluded. Rates and launch date are documented in the OpenAI API changelog."
+
+[[prices]]
+scope = "codex"
+model = "gpt-6-luna"
+reference = "openai-gpt-6-luna"
+valid_from = "2026-09-22"
+input_per_million = 0.10
+cached_input_per_million = 0.01
+cache_write_per_million = 0.125
+output_per_million = 0.50
+note = "Base standard text-token rates only; request-level long-context uplift is excluded."
+
+[[prices]]
 scope = "antigravity"
 model = "gemini-3.8-flash"
 reference = "google-gemini-api"
@@ -100,15 +208,27 @@ scope = "antigravity"
 model = "gemini-3.7-flash"
 reference = "google-gemini-api"
 valid_from = "2026-08-22"
+valid_until = "2026-12-31"
 input_per_million = 0.75
 cached_input_per_million = 0.075
 output_per_million = 3.75
 
 [[prices]]
 scope = "antigravity"
+model = "gemini-3.7-flash"
+reference = "google-gemini-api"
+valid_from = "2027-01-01"
+input_per_million = 1.50
+cached_input_per_million = 0.15
+output_per_million = 7.50
+note = "Provider-published scheduled rate effective January 1, 2027."
+
+[[prices]]
+scope = "antigravity"
 model = "gemini-3.7-flash-exp-b"
 reference = "google-gemini-api"
 valid_from = "2026-08-22"
+valid_until = "2026-12-31"
 input_per_million = 0.75
 cached_input_per_million = 0.075
 output_per_million = 3.75
@@ -119,9 +239,20 @@ scope = "antigravity"
 model = "gemini-3.6-flash"
 reference = "google-gemini-api"
 valid_from = "2026-08-22"
+valid_until = "2026-12-31"
 input_per_million = 0.75
 cached_input_per_million = 0.075
 output_per_million = 3.75
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-3.6-flash"
+reference = "google-gemini-api"
+valid_from = "2027-01-01"
+input_per_million = 1.50
+cached_input_per_million = 0.15
+output_per_million = 7.50
+note = "Provider-published scheduled rate effective January 1, 2027."
 
 [[prices]]
 scope = "antigravity"
@@ -151,3 +282,295 @@ valid_from = "2026-08-22"
 input_per_million = 5.00
 cached_input_per_million = 0.50
 output_per_million = 25.00
+
+[[prices]]
+scope = "codex"
+model = "gpt-5.4"
+reference = "openai-gpt-5.4"
+valid_from = "2026-09-23"
+input_per_million = 2.50
+cached_input_per_million = 0.25
+output_per_million = 15.00
+note = "Base standard text-token rate; >272K input-token session uplift excluded."
+
+[[prices]]
+scope = "codex"
+model = "gpt-5.4-mini"
+reference = "openai-gpt-5.4-mini"
+valid_from = "2026-09-23"
+input_per_million = 0.75
+cached_input_per_million = 0.075
+output_per_million = 4.50
+note = "Base standard text-token rate."
+
+[[prices]]
+scope = "codex"
+model = "gpt-5.4-nano"
+reference = "openai-gpt-5.4-nano"
+valid_from = "2026-09-23"
+input_per_million = 0.20
+cached_input_per_million = 0.02
+output_per_million = 1.25
+note = "Base standard text-token rate."
+
+[[prices]]
+scope = "codex"
+model = "gpt-5.3-codex"
+reference = "openai-gpt-5-3-codex"
+valid_from = "2026-09-23"
+input_per_million = 1.75
+cached_input_per_million = 0.175
+output_per_million = 14.00
+note = "Base standard text-token rate."
+
+[[prices]]
+scope = "codex"
+model = "gpt-5.2-codex"
+reference = "openai-gpt-5.2-codex"
+valid_from = "2026-09-23"
+input_per_million = 1.75
+cached_input_per_million = 0.175
+output_per_million = 14.00
+note = "Base standard text-token rate."
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-3.5-flash"
+reference = "google-gemini-api"
+valid_from = "2026-09-23"
+input_per_million = 1.50
+cached_input_per_million = 0.15
+output_per_million = 9.00
+note = "Standard text-token rate; cache storage and tool charges excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-3.5-flash-lite"
+reference = "google-gemini-api"
+valid_from = "2026-09-23"
+input_per_million = 0.30
+cached_input_per_million = 0.03
+output_per_million = 2.50
+note = "Standard text-token rate; cache storage and tool charges excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-3.1-flash-lite"
+reference = "google-gemini-api"
+valid_from = "2026-09-23"
+input_per_million = 0.25
+cached_input_per_million = 0.025
+output_per_million = 1.50
+note = "Standard text-token rate; cache storage and tool charges excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-3.1-pro-preview"
+reference = "google-gemini-api"
+valid_from = "2026-09-23"
+input_per_million = 2.00
+cached_input_per_million = 0.20
+output_per_million = 12.00
+note = "Standard text-token rate for prompts <=200K; higher tier and cache storage excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-3-flash-preview"
+reference = "google-gemini-api"
+valid_from = "2026-09-23"
+input_per_million = 0.50
+cached_input_per_million = 0.05
+output_per_million = 3.00
+note = "Standard text-token rate; audio, cache storage, and tool charges excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-2.5-pro"
+reference = "google-gemini-api"
+valid_from = "2026-09-23"
+input_per_million = 1.25
+cached_input_per_million = 0.125
+output_per_million = 10.00
+note = "Standard text-token rate for prompts <=200K; higher tier and cache storage excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-2.5-flash"
+reference = "google-gemini-api"
+valid_from = "2026-09-23"
+input_per_million = 0.30
+cached_input_per_million = 0.03
+output_per_million = 2.50
+note = "Standard text-token rate; audio, cache storage, and tool charges excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-2.5-flash-lite"
+reference = "google-gemini-api"
+valid_from = "2026-09-23"
+input_per_million = 0.10
+cached_input_per_million = 0.01
+output_per_million = 0.40
+note = "Standard text-token rate; audio, cache storage, and tool charges excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "claude-sonnet-5-5"
+reference = "google-cloud-partner-models"
+valid_from = "2026-09-28"
+input_per_million = 2.00
+cached_input_per_million = 0.10
+output_per_million = 10.00
+note = "Google Cloud global standard text-token rates; cache writes and regional uplift excluded. Exact model ID and release date are documented in the Sonnet 5.5 model reference."
+
+[[prices]]
+scope = "antigravity"
+model = "claude-haiku-5-5"
+reference = "google-cloud-partner-models"
+valid_from = "2026-10-07"
+input_per_million = 0.10
+cached_input_per_million = 0.01
+output_per_million = 0.50
+note = "Google Cloud global standard text-token rates for short context (<100K input tokens); the 5x long-context tier, cache writes, and regional uplift are excluded. Exact model ID and release date are documented in the Haiku 5.5 model reference."
+
+[[prices]]
+scope = "antigravity"
+model = "claude-opus-5-5"
+reference = "google-cloud-partner-models"
+valid_from = "2026-09-23"
+input_per_million = 4.00
+cached_input_per_million = 0.20
+output_per_million = 20.00
+note = "Google Cloud global standard rate; cache writes and regional uplift excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "claude-opus-5"
+reference = "google-cloud-partner-models"
+valid_from = "2026-09-23"
+input_per_million = 5.00
+cached_input_per_million = 0.50
+output_per_million = 25.00
+note = "Google Cloud global standard rate; cache writes and regional uplift excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "claude-sonnet-5"
+reference = "google-cloud-partner-models"
+valid_from = "2026-09-23"
+input_per_million = 2.00
+cached_input_per_million = 0.20
+output_per_million = 10.00
+note = "Google Cloud global standard rate; cache writes and regional uplift excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "claude-fable-5-1"
+reference = "google-cloud-partner-models"
+valid_from = "2026-09-23"
+input_per_million = 10.00
+cached_input_per_million = 0.25
+output_per_million = 50.00
+note = "Google Cloud global standard rate; cache writes and regional uplift excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "claude-fable-5"
+reference = "google-cloud-partner-models"
+valid_from = "2026-09-23"
+input_per_million = 10.00
+cached_input_per_million = 1.00
+output_per_million = 50.00
+note = "Google Cloud global standard rate; cache writes and regional uplift excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "claude-opus-4-8"
+reference = "google-cloud-partner-models"
+valid_from = "2026-09-23"
+input_per_million = 5.00
+cached_input_per_million = 0.50
+output_per_million = 25.00
+note = "Google Cloud global standard rate; cache writes and regional uplift excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "claude-opus-4-7"
+reference = "google-cloud-partner-models"
+valid_from = "2026-09-23"
+input_per_million = 5.00
+cached_input_per_million = 0.50
+output_per_million = 25.00
+note = "Google Cloud global standard rate; cache writes and regional uplift excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "claude-opus-4-6"
+reference = "google-cloud-partner-models"
+valid_from = "2026-09-23"
+input_per_million = 5.00
+cached_input_per_million = 0.50
+output_per_million = 25.00
+note = "Google Cloud global standard rate; cache writes and regional uplift excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "claude-sonnet-4-6"
+reference = "google-cloud-partner-models"
+valid_from = "2026-09-23"
+input_per_million = 3.00
+cached_input_per_million = 0.30
+output_per_million = 15.00
+note = "Google Cloud global standard rate; cache writes and regional uplift excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "claude-sonnet-4-5"
+reference = "google-cloud-partner-models"
+valid_from = "2026-09-23"
+input_per_million = 3.00
+cached_input_per_million = 0.30
+output_per_million = 15.00
+note = "Google Cloud global <=200K rate; long-context, cache writes, and regional uplift excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "claude-haiku-4-5"
+reference = "google-cloud-partner-models"
+valid_from = "2026-09-23"
+input_per_million = 1.00
+cached_input_per_million = 0.10
+output_per_million = 5.00
+note = "Google Cloud global standard rate; cache writes and regional uplift excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-4-argon"
+reference = "google-gemini-pricing-20261016"
+valid_from = "2026-10-13"
+valid_until = "2026-11-30"
+input_per_million = 2.00
+cached_input_per_million = 0.10
+output_per_million = 10.00
+note = "Public API introductory Standard rates from the October 13 general release through November 30, 2026. Implicit caching only; explicit cache writes, tools, grounding, non-text legs and non-Standard service tiers are excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-4-argon"
+reference = "google-gemini-pricing-20261016"
+valid_from = "2026-12-01"
+input_per_million = 4.00
+cached_input_per_million = 0.20
+output_per_million = 20.00
+note = "Provider-published Standard rates effective December 1, 2026 after introductory pricing. Implicit caching only; tools, grounding, non-text legs and non-Standard service tiers are excluded."
+
+[[prices]]
+scope = "codex"
+model = "gpt-5.6-cyber"
+reference = "openai-pricing-20261016"
+valid_from = "2026-10-16"
+input_per_million = 12.50
+cached_input_per_million = 1.25
+cache_write_per_million = 15.625
+output_per_million = 75.00
+note = "Standard short-context text-token rate first verified October 16, 2026. This is an exact API model ID, not a mapping from Daybreak display names."

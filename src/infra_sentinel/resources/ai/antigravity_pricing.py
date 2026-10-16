@@ -1,8 +1,9 @@
-"""API price references for local Antigravity generation metadata."""
+"""Text API references with bounded, explicitly labeled Antigravity variants."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Mapping
 
 from infra_sentinel.resources.ai.pricing_catalog import (
@@ -15,6 +16,59 @@ from infra_sentinel.resources.ai.pricing_catalog import (
 GEMINI_DEVELOPER_API_PRICES_URL = "https://ai.google.dev/gemini-api/docs/pricing"
 GOOGLE_CLOUD_ANTHROPIC_PRICES_URL = "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
 
+# Only these metadata markers may select a documented base-model reference.
+# In particular, preview, lite, image, TTS, live and service tiers are not stripped.
+_GEMINI_BASE = r"gemini-[0-9]+(?:\.[0-9]+)?-(?:argon|pro|flash(?:-lite)?)"
+_ROLLOUT_ID = re.compile(rf"(?P<base>{_GEMINI_BASE})(?P<marker>-(?:trial|[a-z]|exp(?:-[a-z0-9]+)?))\Z")
+_EFFORT_ID = re.compile(
+    rf"(?P<base>{_GEMINI_BASE}|claude-(?:opus|sonnet|haiku|fable)-[0-9]+(?:-[0-9]+)?)"
+    r"(?P<marker>-(?:low|medium|high|thinking))\Z"
+)
+
+
+@dataclass(frozen=True)
+class AntigravityModelReference:
+    model: str
+    match: str
+    suspected_rollout: bool
+    marker: str | None
+    price: TextTokenPrice | None
+
+    def projection(self) -> dict[str, object]:
+        return {
+            "model": self.model,
+            "match": self.match,
+            "available": self.price is not None,
+            "suspected_rollout": self.suspected_rollout,
+            **({"marker": self.marker} if self.marker else {}),
+        }
+
+
+def resolve_antigravity_reference(
+    identifier: str,
+    *,
+    catalog: PriceCatalogLookup | None = None,
+    usage_date: str | None = None,
+) -> AntigravityModelReference:
+    """Keep observed identity; exact dated prices win over a bounded base estimate.
+
+    A marker suggests a rollout, not a proven server identity or billing contract.
+    An unknown base or unsupported suffix never borrows a neighboring model's price.
+    """
+    lookup = catalog or bundled_pricing_catalog()
+    rollout = _ROLLOUT_ID.fullmatch(identifier)
+    variant = rollout or _EFFORT_ID.fullmatch(identifier)
+    marker = variant.group("marker") if variant else None
+    price = lookup.price_for("antigravity", identifier, usage_date)
+    if price is not None:
+        return AntigravityModelReference(identifier, "exact", bool(rollout), marker, price)
+    base = variant.group("base") if variant else identifier
+    if base != identifier:
+        price = lookup.price_for("antigravity", base, usage_date)
+    return AntigravityModelReference(
+        base, "base-reference" if price is not None else "unpriced", bool(rollout), marker, price,
+    )
+
 
 @dataclass(frozen=True)
 class AntigravityApiEstimate:
@@ -22,6 +76,8 @@ class AntigravityApiEstimate:
     priced_tokens: int
     unpriced_tokens: int
     model_costs: tuple[tuple[str, float, int], ...]
+    base_reference_tokens: int = 0
+    model_matches: tuple[tuple[str, AntigravityModelReference], ...] = ()
 
 
 def estimate_antigravity_text_api_cost(
@@ -30,10 +86,12 @@ def estimate_antigravity_text_api_cost(
     catalog: PriceCatalogLookup | None = None,
     usage_date: str | None = None,
 ) -> AntigravityApiEstimate:
-    """Return an exact-model text API reference, never an Antigravity bill."""
+    """Return a dated text API reference, never an Antigravity bill."""
     lookup = catalog or bundled_pricing_catalog()
     estimates: list[tuple[str, float, int]] = []
+    matches: list[tuple[str, AntigravityModelReference]] = []
     unpriced_tokens = 0
+    base_reference_tokens = 0
     for identifier, totals in model_totals.items():
         input_tokens = _counter(totals, "input_tokens")
         cache_read_tokens = _counter(totals, "cache_read_tokens")
@@ -41,7 +99,9 @@ def estimate_antigravity_text_api_cost(
         total_tokens = input_tokens + cache_read_tokens + output_tokens
         if total_tokens <= 0:
             continue
-        price = lookup.price_for("antigravity", identifier, usage_date)
+        reference = resolve_antigravity_reference(identifier, catalog=lookup, usage_date=usage_date)
+        matches.append((identifier, reference))
+        price = reference.price
         if price is None:
             unpriced_tokens += total_tokens
             continue
@@ -51,12 +111,16 @@ def estimate_antigravity_text_api_cost(
             + output_tokens * price.output_per_million
         ) / 1_000_000
         estimates.append((identifier, cost, total_tokens))
+        if reference.match == "base-reference":
+            base_reference_tokens += total_tokens
     estimates.sort(key=lambda item: (-item[1], item[0]))
     return AntigravityApiEstimate(
         total_cost_usd=sum(item[1] for item in estimates),
         priced_tokens=sum(item[2] for item in estimates),
         unpriced_tokens=unpriced_tokens,
         model_costs=tuple(estimates),
+        base_reference_tokens=base_reference_tokens,
+        model_matches=tuple(matches),
     )
 
 

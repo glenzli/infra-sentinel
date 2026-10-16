@@ -276,6 +276,35 @@ class AntigravityUsageTests(unittest.TestCase):
         self.assertAlmostEqual(estimate.total_cost_usd, 9.75)
         self.assertEqual(estimate.priced_tokens, 4_000_000)
         self.assertEqual(estimate.unpriced_tokens, 0)
+    def test_variant_projection_retains_observed_id_and_uses_each_usage_dates_price(self) -> None:
+        dates = (datetime(2026, 10, 12, 12), datetime(2026, 11, 30, 12), datetime(2026, 12, 1, 12))
+        model = "gemini-4-argon-trial"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _conversation(root / "conversation.db", [
+                _generation(timestamp_seconds=int(day.timestamp()), model=model, display=None,
+                            response_id=f"price-{index}", system=0, input_tokens=1_000_000,
+                            cache_read=0, output_tokens=0, reasoning=0)
+                for index, day in enumerate(dates)
+            ])
+            result = AntigravityUsageCollector(conversations_finder=lambda: root).collect(
+                CollectorContext({"epoch": datetime(2026, 12, 2, 12).timestamp()}, {}))
+        self.assertEqual(result.snapshot["usage"]["cumulative"]["tokens"], 3_000_000)
+        self.assertEqual([row["id"] for row in result.snapshot["models"]], [model])
+        reference = result.snapshot["models"][0]["price_reference"]
+        self.assertEqual(reference["model"], "gemini-4-argon")
+        self.assertEqual(reference["match"], "base-reference")
+        self.assertTrue(reference["suspected_rollout"])
+        daily = result.snapshot["pricing"]["daily"]
+        self.assertEqual([row["reference"]["cost_usd"] for row in daily], [0, 2, 4])
+        self.assertEqual(daily[0]["reference"]["unpriced_tokens"], 1_000_000)
+        self.assertEqual(daily[1]["reference"]["models"][0]["id"], model)
+        self.assertEqual(daily[1]["reference"]["models"][0]["price_reference"]["model"], "gemini-4-argon")
+        metrics = {metric["id"]: metric["value"] for group in result.snapshot["details"] for metric in group["metrics"]}
+        self.assertEqual(metrics["antigravity-api-cumulative"], 6)
+        self.assertEqual(metrics["antigravity-api-base-reference-tokens"], 2_000_000)
+        self.assertEqual(metrics["antigravity-api-unpriced-tokens"], 1_000_000)
+
     def test_collector_deltas_only_new_local_generation_metadata(self) -> None:
         epoch = datetime(2026, 8, 22, 12).timestamp()
         with tempfile.TemporaryDirectory() as temporary:
