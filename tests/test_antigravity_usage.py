@@ -294,12 +294,14 @@ class AntigravityUsageTests(unittest.TestCase):
         reference = result.snapshot["models"][0]["price_reference"]
         self.assertEqual(reference["model"], "gemini-4-argon")
         self.assertEqual(reference["match"], "base-reference")
-        self.assertTrue(reference["suspected_rollout"])
+        self.assertFalse(reference["suspected_rollout"])
+        self.assertEqual(reference["marker_kind"], "trial")
         daily = result.snapshot["pricing"]["daily"]
         self.assertEqual([row["reference"]["cost_usd"] for row in daily], [0, 2, 4])
         self.assertEqual(daily[0]["reference"]["unpriced_tokens"], 1_000_000)
         self.assertEqual(daily[1]["reference"]["models"][0]["id"], model)
         self.assertEqual(daily[1]["reference"]["models"][0]["price_reference"]["model"], "gemini-4-argon")
+        self.assertEqual(daily[1]["reference"]["models"][0]["price_reference"]["marker_kind"], "trial")
         metrics = {metric["id"]: metric["value"] for group in result.snapshot["details"] for metric in group["metrics"]}
         self.assertEqual(metrics["antigravity-api-cumulative"], 6)
         self.assertEqual(metrics["antigravity-api-base-reference-tokens"], 2_000_000)

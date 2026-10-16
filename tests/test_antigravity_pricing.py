@@ -11,7 +11,7 @@ from infra_sentinel.resources.ai.pricing_catalog import bundled_pricing_catalog
 
 class AntigravityPricingTests(unittest.TestCase):
     def test_known_rollout_markers_use_only_the_same_dated_base(self):
-        for marker in ("-n", "-trial", "-exp-a"):
+        for marker in ("-n", "-exp-a"):
             with self.subTest(marker=marker):
                 result = resolve_antigravity_reference("gemini-3.8-flash" + marker, usage_date="2026-10-16")
                 self.assertEqual(result.model, "gemini-3.8-flash")
@@ -23,10 +23,58 @@ class AntigravityPricingTests(unittest.TestCase):
         self.assertEqual(exact.match, "exact")
         self.assertTrue(exact.suspected_rollout)
 
+    def test_trial_and_free_markers_use_base_reference_without_rollout_warning(self):
+        for marker, kind in (("-trial", "trial"), ("-trail", "trial"), ("-free", "free")):
+            with self.subTest(marker=marker):
+                result = resolve_antigravity_reference("gemini-3.8-flash" + marker, usage_date="2026-10-16")
+                self.assertEqual(result.model, "gemini-3.8-flash")
+                self.assertEqual(result.match, "base-reference")
+                self.assertFalse(result.suspected_rollout)
+                self.assertEqual(result.marker, marker)
+                self.assertEqual(result.projection()["marker_kind"], kind)
+                self.assertEqual(result.price.input_per_million, .75)
+                unknown = resolve_antigravity_reference("gemini-99-argon" + marker, usage_date="2026-10-16")
+                self.assertEqual(unknown.match, "unpriced")
+                self.assertIsNone(unknown.price)
+                self.assertEqual(unknown.marker_kind, kind)
+                self.assertFalse(unknown.suspected_rollout)
+        claude = resolve_antigravity_reference("claude-opus-5-5-free", usage_date="2026-10-16")
+        self.assertEqual(claude.model, "claude-opus-5-5")
+        self.assertEqual(claude.price.input_per_million, 4)
+        stacked = resolve_antigravity_reference("gemini-3.8-flash-n-free", usage_date="2026-10-16")
+        self.assertEqual(stacked.model, "gemini-3.8-flash-n")
+        self.assertIsNone(stacked.price)
+
+    def test_free_marker_does_not_imply_zero_reference_value_but_exact_price_wins(self):
+        identifier = "gemini-3.8-flash-free"
+        totals = {identifier: {"input_tokens": 1_000_000}}
+        estimate = estimate_antigravity_text_api_cost(totals, usage_date="2026-10-16")
+        self.assertAlmostEqual(estimate.total_cost_usd, .75)
+        self.assertEqual(estimate.priced_tokens, 1_000_000)
+        self.assertEqual(estimate.base_reference_tokens, 1_000_000)
+        self.assertEqual(estimate.model_costs[0][0], identifier)
+        base = bundled_pricing_catalog().price_for("antigravity", "gemini-3.8-flash", "2026-10-16")
+        calls = []
+        class Catalog:
+            def price_for(self, scope, model, usage_date=None):
+                calls.append(model)
+                return replace(base, input_per_million=0) if model == identifier else base
+        exact = estimate_antigravity_text_api_cost(totals, catalog=Catalog(), usage_date="2026-10-16")
+        self.assertEqual(exact.total_cost_usd, 0)
+        self.assertEqual(exact.priced_tokens, 1_000_000)
+        self.assertEqual(exact.base_reference_tokens, 0)
+        reference = dict(exact.model_matches)[identifier]
+        self.assertEqual(reference.model, identifier)
+        self.assertEqual(reference.match, "exact")
+        self.assertEqual(reference.marker_kind, "free")
+        self.assertFalse(reference.suspected_rollout)
+        self.assertEqual(calls, [identifier])
+
     def test_argon_trial_respects_release_and_scheduled_price_boundaries(self):
         before = resolve_antigravity_reference("gemini-4-argon-trial", usage_date="2026-10-12")
         self.assertIsNone(before.price)
-        self.assertTrue(before.suspected_rollout)
+        self.assertFalse(before.suspected_rollout)
+        self.assertEqual(before.marker_kind, "trial")
         for day, price in (("2026-10-13", 2), ("2026-11-30", 2), ("2026-12-01", 4)):
             with self.subTest(day=day):
                 result = resolve_antigravity_reference("gemini-4-argon-trial", usage_date=day)
@@ -53,12 +101,14 @@ class AntigravityPricingTests(unittest.TestCase):
 
     def test_unknown_bases_and_pricing_relevant_suffixes_are_not_stripped(self):
         unknown = resolve_antigravity_reference("gemini-99-argon-trial", usage_date="2026-10-16")
-        self.assertTrue(unknown.suspected_rollout)
+        self.assertFalse(unknown.suspected_rollout)
+        self.assertEqual(unknown.marker_kind, "trial")
         self.assertEqual(unknown.match, "unpriced")
         self.assertEqual(unknown.model, "gemini-99-argon")
         for model in ("gemini-3.8-flash-turbo", "gemini-3.8-flash-tts", "gemini-3.8-flash-image",
                       "gemini-3.8-flash-lite", "gemini-3.8-flash-n-extra", "gemini-3.8-flash-preview",
-                      "codex-auto-review", "claude-opus-5-5-turbo"):
+                      "gemini-3.8-flash-trail-extra", "gemini-3.8-flash-free-extra",
+                      "gemini-3.8-flash-free-preview", "codex-auto-review", "claude-opus-5-5-turbo"):
             with self.subTest(model=model):
                 result = resolve_antigravity_reference(model, usage_date="2026-10-16")
                 self.assertEqual(result.model, model)

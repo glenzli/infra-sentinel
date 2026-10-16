@@ -607,8 +607,8 @@ class AntigravityUsageCollector:
                 detail_group(
                     "antigravity-api-reference", localized("Antigravity API references", "Antigravity API 参考"), price_metrics,
                     note=localized(
-                        "Uses usage-date prices from the api-price catalog checked on " + self._pricing_catalog.checked_at + ". Exact model prices win. Only bounded rollout/effort suffixes may use a labeled base-model reference; a rollout marker does not prove identical backend identity or billing. Observed IDs stay unchanged; unknown bases and unsupported suffixes remain unpriced. Text input, cache-read, output and reasoning only; storage, grounding, tools, multimodal legs, context uplifts and Antigravity plan terms are excluded. Not a bill or quota balance.",
-                        "按使用日期选取 " + self._pricing_catalog.checked_at + " 核对的 api-price 价格，精确模型价优先。仅有限的灰度/推理后缀可采用标明的本体参考估算；灰度标记不能证明后端身份或实际计费相同。原始模型名不变；未知本体与未支持后缀保持未计价。仅含文本输入、缓存读取、输出和推理；存储、检索、工具、多模态、上下文加价及 Antigravity 套餐条款不计入；不是账单或额度余额。",
+                        "Uses usage-date prices from the api-price catalog checked on " + self._pricing_catalog.checked_at + ". Exact model prices win. Only bounded access/rollout/effort suffixes may use a labeled base-model reference. Trial/free name markers are separate from suspected rollouts and do not imply zero API reference value; suffixes do not prove identical backend identity or billing. Observed IDs stay unchanged; unknown bases and unsupported suffixes remain unpriced. Text input, cache-read, output and reasoning only; storage, grounding, tools, multimodal legs, context uplifts and Antigravity plan terms are excluded. Not a bill or quota balance.",
+                        "按使用日期选取 " + self._pricing_catalog.checked_at + " 核对的 api-price 价格，精确模型价优先。仅有限后缀可采用标明的本体参考估算；试用（-trial/-trail）、免费版（-free）与疑似灰度分开，名称标记不代表 API 参考价值为零，也不能证明后端身份或实际计费相同。原始模型名不变；未知本体与未支持后缀保持未计价。仅含文本输入、缓存读取、输出和推理；存储、检索、工具、多模态、上下文加价及 Antigravity 套餐条款不计入；不是账单或额度余额。",
                     ),
                     badge=localized("reference · not billing", "估算 · 非账单"),
                 ),

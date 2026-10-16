@@ -317,31 +317,46 @@ export function renderAiUsageResourcePage(projection: AgentProjection, resource:
 }
 
 function modelReferenceAnnotations(providerSources: Record<string, unknown>[], dimension: "source" | "model", identifier: string): string {
+  const labels: Record<string, string> = {
+    trial: tr("Trial", "试用"),
+    free: tr("Free tier", "免费版"),
+    rollout: tr("Suspected rollout", "疑似灰度"),
+    base: tr("Base estimate", "本体估算"),
+  };
   return providerSources.flatMap((source) => {
     if (dimension === "source" && source.source_id !== identifier) return [];
     const models = asArray(source.models).filter((model) => dimension === "source" || canonicalModelId(model.id) === identifier);
-    const variants = models.filter((model) => {
+    const groups = new Map<string, Record<string, unknown>[]>();
+    for (const model of models) {
       const reference = asRecord(model.price_reference);
-      return reference.suspected_rollout === true || (dimension === "model" && reference.match === "base-reference");
+      const kind = reference.marker_kind === "trial" || reference.marker_kind === "free" ? reference.marker_kind
+        : reference.suspected_rollout === true ? "rollout"
+        : dimension === "model" && reference.match === "base-reference" ? "base" : null;
+      if (!kind) continue;
+      const variants = groups.get(kind) ?? [];
+      variants.push(model);
+      groups.set(kind, variants);
+    }
+    return Array.from(groups, ([kind, variants]) => {
+      const label = labels[kind];
+      const count = dimension === "source" ? ` ${variants.length}` : "";
+      const lines = variants.map((model) => {
+        const reference = asRecord(model.price_reference);
+        const pricing = reference.available !== true
+          ? tr(`No dated price for ${reference.model}; remains unpriced.`, `${reference.model} 没有适用日期的价格，保持未计价。`)
+          : reference.match === "exact"
+          ? tr("Uses this variant's exact catalog price.", "使用目录内该变体的精确价格。")
+          : tr(`Estimated using ${reference.model}'s dated public text API price.`, `按 ${reference.model} 适用日期的公开文本 API 价格参考估算。`);
+        return `${source.label ?? source.source_id} · ${model.id}\n${pricing}`;
+      });
+      const caveat = kind === "trial" || kind === "free"
+        ? tr(`“${label}” is a model-name marker, not a zero API reference value. Actual charges depend on provider terms. Raw model IDs and Token totals are preserved.`, `“${label}”来自名称标记，不代表 API 参考价值为零；实际扣费以供应商为准。原始模型名与 Token 统计保持不变。`)
+        : tr("A suffix suggests a variant; it does not confirm the backend model or actual billing. Raw model IDs and Token totals are preserved.", "后缀只提示可能存在变体，不能确认后端模型或实际同价；原始模型名与 Token 统计保持不变。");
+      const scopeNote = dimension === "source"
+        ? tr(`Recorded ${label.toLowerCase()} model count across local history; not requests in the selected usage range.`, `本机历史已记录的${label}模型数，不代表当前所选时段的请求数。`) : "";
+      const hint = [label + count, scopeNote, ...lines, caveat].filter(Boolean).join("\n");
+      return `<button type="button" class="ai-performance-tag ai-model-reference-tag${kind === "rollout" ? " ai-model-reference-tag--rollout" : ""}" aria-label="${escapeHtml(hint)}">${escapeHtml(label + count)}<span class="ai-performance-tooltip" aria-hidden="true"><b>${escapeHtml(label)}</b>${scopeNote ? `<span>${escapeHtml(scopeNote)}</span>` : ""}${lines.map((line) => `<span>${escapeHtml(line).replace(/\n/g, "<br>")}</span>`).join("")}<span>${escapeHtml(caveat)}</span></span></button>`;
     });
-    if (!variants.length) return [];
-    const suspected = variants.some((model) => asRecord(model.price_reference).suspected_rollout === true);
-    const label = suspected ? tr("Suspected rollout", "疑似灰度") : tr("Base estimate", "本体估算");
-    const count = dimension === "source" ? ` ${variants.length}` : "";
-    const lines = variants.map((model) => {
-      const reference = asRecord(model.price_reference);
-      const pricing = reference.available !== true
-        ? tr(`No dated price for ${reference.model}; remains unpriced.`, `${reference.model} 没有适用日期的价格，保持未计价。`)
-        : reference.match === "exact"
-        ? tr("Uses this variant's exact catalog price.", "使用目录内该变体的精确价格。")
-        : tr(`Estimated using ${reference.model}'s dated public text API price.`, `按 ${reference.model} 适用日期的公开文本 API 价格参考估算。`);
-      return `${source.label ?? source.source_id} · ${model.id}\n${pricing}`;
-    });
-    const caveat = tr("A suffix suggests a variant; it does not confirm the backend model or actual billing. Raw model IDs and Token totals are preserved.", "后缀只提示可能存在变体，不能确认后端模型或实际同价；原始模型名与 Token 统计保持不变。");
-    const scopeNote = dimension === "source"
-      ? tr("Recorded model variants across local history; independent of the selected usage range.", "本机历史已记录的模型变体，不代表当前所选时段的灰度请求数。") : "";
-    const hint = [label + count, scopeNote, ...lines, caveat].filter(Boolean).join("\n");
-    return [`<button type="button" class="ai-performance-tag ai-model-reference-tag${suspected ? " ai-model-reference-tag--rollout" : ""}" aria-label="${escapeHtml(hint)}">${escapeHtml(label + count)}<span class="ai-performance-tooltip" aria-hidden="true"><b>${escapeHtml(label)}</b>${lines.map((line) => `<span>${escapeHtml(line).replace(/\n/g, "<br>")}</span>`).join("")}<span>${escapeHtml(caveat)}</span></span></button>`];
   }).join("");
 }
 

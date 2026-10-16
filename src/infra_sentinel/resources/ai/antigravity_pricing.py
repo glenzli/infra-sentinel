@@ -16,10 +16,12 @@ from infra_sentinel.resources.ai.pricing_catalog import (
 GEMINI_DEVELOPER_API_PRICES_URL = "https://ai.google.dev/gemini-api/docs/pricing"
 GOOGLE_CLOUD_ANTHROPIC_PRICES_URL = "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
 
-# Only these metadata markers may select a documented base-model reference.
-# In particular, preview, lite, image, TTS, live and service tiers are not stripped.
+# Known access markers select only an exact, dated base-model catalog entry.
+# They describe the name, not actual charges. Other pricing-relevant markers
+# such as preview, lite, image, TTS, live and service tiers are not stripped.
+_ACCESS_ID = re.compile(r"(?P<base>.+)(?P<marker>-(?:trial|trail|free))\Z")
 _GEMINI_BASE = r"gemini-[0-9]+(?:\.[0-9]+)?-(?:argon|pro|flash(?:-lite)?)"
-_ROLLOUT_ID = re.compile(rf"(?P<base>{_GEMINI_BASE})(?P<marker>-(?:trial|[a-z]|exp(?:-[a-z0-9]+)?))\Z")
+_ROLLOUT_ID = re.compile(rf"(?P<base>{_GEMINI_BASE})(?P<marker>-(?:[a-z]|exp(?:-[a-z0-9]+)?))\Z")
 _EFFORT_ID = re.compile(
     rf"(?P<base>{_GEMINI_BASE}|claude-(?:opus|sonnet|haiku|fable)-[0-9]+(?:-[0-9]+)?)"
     r"(?P<marker>-(?:low|medium|high|thinking))\Z"
@@ -33,6 +35,7 @@ class AntigravityModelReference:
     suspected_rollout: bool
     marker: str | None
     price: TextTokenPrice | None
+    marker_kind: str | None = None
 
     def projection(self) -> dict[str, object]:
         return {
@@ -41,6 +44,7 @@ class AntigravityModelReference:
             "available": self.price is not None,
             "suspected_rollout": self.suspected_rollout,
             **({"marker": self.marker} if self.marker else {}),
+            **({"marker_kind": self.marker_kind} if self.marker_kind else {}),
         }
 
 
@@ -52,21 +56,25 @@ def resolve_antigravity_reference(
 ) -> AntigravityModelReference:
     """Keep observed identity; exact dated prices win over a bounded base estimate.
 
-    A marker suggests a rollout, not a proven server identity or billing contract.
-    An unknown base or unsupported suffix never borrows a neighboring model's price.
+    Trial/free access markers are separate from opaque rollout markers. Neither
+    proves a server identity or billing contract, and free never implies zero API
+    reference value. Unknown bases never borrow a neighboring model's price.
     """
     lookup = catalog or bundled_pricing_catalog()
+    access = _ACCESS_ID.fullmatch(identifier)
     rollout = _ROLLOUT_ID.fullmatch(identifier)
-    variant = rollout or _EFFORT_ID.fullmatch(identifier)
+    effort = _EFFORT_ID.fullmatch(identifier)
+    variant = access or rollout or effort
     marker = variant.group("marker") if variant else None
+    marker_kind = ("free" if marker == "-free" else "trial") if access else "rollout" if rollout else "effort" if effort else None
     price = lookup.price_for("antigravity", identifier, usage_date)
     if price is not None:
-        return AntigravityModelReference(identifier, "exact", bool(rollout), marker, price)
+        return AntigravityModelReference(identifier, "exact", bool(rollout), marker, price, marker_kind)
     base = variant.group("base") if variant else identifier
     if base != identifier:
         price = lookup.price_for("antigravity", base, usage_date)
     return AntigravityModelReference(
-        base, "base-reference" if price is not None else "unpriced", bool(rollout), marker, price,
+        base, "base-reference" if price is not None else "unpriced", bool(rollout), marker, price, marker_kind,
     )
 
 

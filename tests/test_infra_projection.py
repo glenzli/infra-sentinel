@@ -299,7 +299,7 @@ class InfraProjectionTests(unittest.TestCase):
         self.assertEqual(projection["ai_usage"]["aggregate"]["cumulative"]["tokens"], 200)
 
     def test_future_ai_provider_is_projected_without_a_provider_specific_branch(self) -> None:
-        reference = {"model": "gemini-4-argon", "match": "base-reference", "suspected_rollout": True, "available": True}
+        reference = {"model": "gemini-4-argon", "match": "base-reference", "suspected_rollout": False, "available": True, "marker_kind": "trial", "marker": "-trial"}
         snapshot = self.ai_snapshot("future-agent", "Future Agent", today=42, cumulative=420)
         snapshot["models"] = [{"id": "gemini-4-argon-trial", "price_reference": reference}]
         future = CollectorRun(
