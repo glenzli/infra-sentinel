@@ -250,15 +250,61 @@ function renderModels(usage: ProjectedUsage, providerSources: Record<string, unk
   return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Model total in range", "所选时段模型量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)}</span></aside></div>${horizontalBars(tr("Model composition", "模型构成"), rangeLabel(range), models, MODEL_COLORS, modelLabel, undefined, undefined, (id) => modelReferenceAnnotations(providerSources, "model", id) + performanceAnnotations(providerSources, "model", id))}${historyVisualControl(range, visual)}${usageHistory(usage.intervals, "model", range, window, visual, usage.undatedTotal)}</section>`;
 }
 
+/** Keep diagnostic hints visible at window edges without changing metric state. */
+export function bindAiActivityHints(root: ParentNode): void {
+  root.querySelectorAll<HTMLButtonElement>(".ai-activity-hint").forEach((hint) => {
+    const tooltip = hint.querySelector<HTMLElement>(".ai-activity-tooltip");
+    if (!tooltip) return;
+    const place = () => {
+      delete hint.dataset.dismissed;
+      const anchor = hint.getBoundingClientRect();
+      const box = tooltip.getBoundingClientRect();
+      const top = anchor.bottom + 6 + box.height <= window.innerHeight - 12
+        ? anchor.bottom + 6 : Math.max(12, anchor.top - box.height - 6);
+      tooltip.style.left = `${Math.max(12, Math.min(anchor.right - box.width, window.innerWidth - box.width - 12))}px`;
+      tooltip.style.top = `${top}px`;
+    };
+    hint.addEventListener("mouseenter", place);
+    hint.addEventListener("focus", place);
+    hint.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        hint.dataset.dismissed = "true";
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        tooltip.scrollTop += event.key === "ArrowDown" ? 40 : -40;
+      }
+    });
+  });
+}
+
+function activityDetailGroup(group: Record<string, unknown>): string {
+  const title = localized(group.title);
+  const badge = localized(group.badge);
+  const metrics = asArray(group.metrics);
+  const explanations = [badge, ...metrics.map((metric) => {
+    const detail = localized(metric.detail);
+    return detail ? `${localized(metric.label)}: ${detail}` : "";
+  }), localized(group.note)].filter(Boolean).join("\n\n");
+  const hint = explanations ? `<button type="button" class="ai-activity-hint" aria-label="${escapeHtml(title + "\n" + explanations)}"><span aria-hidden="true">ⓘ</span><span class="ai-activity-tooltip" aria-hidden="true">${escapeHtml(explanations)}</span></button>` : "";
+  return `<section class="ai-activity-group"><header><h3>${escapeHtml(title)}</h3><span title="${escapeHtml(badge)}">${escapeHtml(badge)}</span>${hint}</header><dl>${metrics.map((metric) => {
+    const label = localized(metric.label);
+    const detail = localized(metric.detail);
+    return `<div><dt title="${escapeHtml(detail)}" aria-label="${escapeHtml([label, detail].filter(Boolean).join(": "))}">${escapeHtml(label)}</dt><dd>${formatMetric(metric.value, metric.unit)}</dd></div>`;
+  }).join("")}</dl></section>`;
+}
+
 function providerDetails(source: Record<string, unknown>, providerPanels: ReadonlyMap<string, boolean>): string {
   const sourceId = String(source.source_id ?? "");
-  const open = providerPanels.get(sourceId) !== false;
+  const open = providerPanels.get(sourceId) === true;
   const today = windowOf(source, "today");
   const cumulative = windowOf(source, "cumulative");
   const groups = asArray(source.details);
   const started = shortStartedAt(today.started_at);
   const todaySource = [started ? tr(`since ${started}`, `${started} 起`) : "", localized(today.detail)].filter(Boolean).join(" · ");
-  return `<details class="ai-provider-panel" data-ai-provider-id="${escapeHtml(sourceId)}"${open ? " open" : ""}><summary><span><strong>${escapeHtml(source.label ?? source.source_id)}</strong><small>${escapeHtml(String(source.collection_method ?? ""))}</small></span><span><small>${tr("Today", "今日")}</small><strong>${today.available ? formatTokens(today.tokens) : "—"}</strong></span><span><small>${tr("Cumulative", "累计")}</small><strong>${cumulative.available ? formatTokens(cumulative.tokens) : "—"}</strong></span><em>${escapeHtml(todaySource)}</em></summary><div class="ai-provider-body">${groups.map((group) => `<section><div class="detail-panel__heading"><h3>${escapeHtml(localized(group.title))}</h3><span>${escapeHtml(localized(group.badge))}</span></div><dl>${asArray(group.metrics).map((metric) => `<div><dt>${escapeHtml(localized(metric.label))}<small>${escapeHtml(localized(metric.detail))}</small></dt><dd>${formatMetric(metric.value, metric.unit)}</dd></div>`).join("")}</dl>${group.note ? `<p>${escapeHtml(localized(group.note))}</p>` : ""}</section>`).join("")}</div></details>`;
+  return `<details class="ai-provider-panel" data-ai-provider-id="${escapeHtml(sourceId)}"${open ? " open" : ""}><summary title="${escapeHtml(todaySource)}"><strong title="${escapeHtml(String(source.collection_method ?? ""))}">${escapeHtml(source.label ?? source.source_id)}</strong><span><small>${tr("Today", "今日")}</small><strong>${today.available ? formatTokens(today.tokens) : "—"}</strong></span><span><small>${tr("Cumulative", "累计")}</small><strong>${cumulative.available ? formatTokens(cumulative.tokens) : "—"}</strong></span></summary><div class="ai-provider-body">${todaySource ? `<p class="ai-provider-basis">${escapeHtml(todaySource)}</p>` : ""}${groups.map(activityDetailGroup).join("")}</div></details>`;
 }
 
 function renderActivity(providerSources: Record<string, unknown>[], providerPanels: ReadonlyMap<string, boolean>): string {
@@ -313,7 +359,7 @@ export function renderAiUsageResourcePage(projection: AgentProjection, resource:
   const providerSources = asArray(asRecord(projection.infra.ai_usage).sources);
   const sourceNames = providerSources.map((source) => String(source.label ?? source.source_id ?? "")).filter(Boolean).join(" · ");
   const diagnostics = renderAttentionDiagnostics(aiUsageDiagnostics(projection, resource, sources));
-  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("RESOURCE DETAIL", "资源详情")}</p><h2>${tr("AI usage", "AI 用量")}</h2></div><div class="ai-resource-meta"><span class="section-heading__meta">${escapeHtml(sourceNames)}</span><button type="button" class="button button--subtle ai-methodology-link" data-ai-methodology>${tr("Methods & estimates", "口径与估算")}</button></div></div>${diagnostics}<section class="network-detail">${renderCurrentSummary(providerSources, sources)}${renderControls(snapshot)}${analysisBody(snapshot, providerSources)}<article class="sources-card sources-card--footer"><div class="sources-card__heading"><h3>${tr("Collector sources", "采集数据源")}</h3><span>${sources.length}</span></div><ul>${sources.map(sourceRow).join("")}</ul></article></section></section>`;
+  return `<section class="resource-section resource-section--detail${snapshot.mode === "activity" ? " ai-activity-page" : ""}"><div class="section-heading"><div><p class="eyebrow">${tr("RESOURCE DETAIL", "资源详情")}</p><h2>${tr("AI usage", "AI 用量")}</h2></div><div class="ai-resource-meta"><span class="section-heading__meta">${escapeHtml(sourceNames)}</span><button type="button" class="button button--subtle ai-methodology-link" data-ai-methodology>${tr("Methods & estimates", "口径与估算")}</button></div></div>${diagnostics}<section class="network-detail">${renderCurrentSummary(providerSources, sources)}${renderControls(snapshot)}${analysisBody(snapshot, providerSources)}<article class="sources-card sources-card--footer"><div class="sources-card__heading"><h3>${tr("Collector sources", "采集数据源")}</h3><span>${sources.length}</span></div><ul>${sources.map(sourceRow).join("")}</ul></article></section></section>`;
 }
 
 function modelReferenceAnnotations(providerSources: Record<string, unknown>[], dimension: "source" | "model", identifier: string): string {

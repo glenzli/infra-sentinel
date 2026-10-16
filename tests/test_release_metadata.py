@@ -7,14 +7,15 @@ import unittest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-RELEASE_VERSION = "2.0.2"
-RELEASE_DATE = "2026-09-08"
+RELEASE_VERSION = "2.1.0"
+RELEASE_DATE = "2026-10-16"
 
 
 class ReleaseMetadataTests(unittest.TestCase):
     def test_product_versions_are_aligned(self) -> None:
         pyproject = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())
         package = json.loads((PROJECT_ROOT / "ui/package.json").read_text())
+        package_lock = json.loads((PROJECT_ROOT / "ui/package-lock.json").read_text())
         tauri = json.loads((PROJECT_ROOT / "ui/src-tauri/tauri.conf.json").read_text())
         cargo = tomllib.loads((PROJECT_ROOT / "ui/src-tauri/Cargo.toml").read_text())
         cargo_lock = tomllib.loads((PROJECT_ROOT / "ui/src-tauri/Cargo.lock").read_text())
@@ -25,6 +26,8 @@ class ReleaseMetadataTests(unittest.TestCase):
 
         self.assertEqual(pyproject["project"]["version"], RELEASE_VERSION)
         self.assertEqual(package["version"], RELEASE_VERSION)
+        self.assertEqual(package_lock["version"], RELEASE_VERSION)
+        self.assertEqual(package_lock["packages"][""]["version"], RELEASE_VERSION)
         self.assertEqual(tauri["version"], RELEASE_VERSION)
         self.assertEqual(cargo["package"]["version"], RELEASE_VERSION)
         self.assertEqual(desktop_lock["version"], RELEASE_VERSION)

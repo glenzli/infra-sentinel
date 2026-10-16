@@ -6,7 +6,7 @@ import { formatDuration } from "./format";
 import { tr } from "./i18n";
 import { renderNetworkResourcePage } from "./network_view";
 import { NetworkAnalysisController, NetworkHistoryVisual, NetworkTimeRange, NetworkViewMode } from "./network_analysis";
-import { renderAiUsageResourcePage } from "./ai_usage_view";
+import { bindAiActivityHints, renderAiUsageResourcePage } from "./ai_usage_view";
 import { renderAiUsageMethodologyPage } from "./ai_methodology_view";
 import { AiAnalysisController, AiHistoryVisual, AiModelMeasure, AiTimeRange, AiViewMode } from "./ai_analysis";
 import { renderOverview } from "./overview_view";
@@ -163,6 +163,7 @@ function renderProjection(projection: AgentProjection): void {
       if (latestProjection) renderProjection(latestProjection);
     }
   }));
+  bindAiActivityHints(root);
   root.querySelectorAll<HTMLDetailsElement>("[data-ai-provider-id]").forEach((panel) => panel.addEventListener("toggle", () => {
     const sourceId = panel.dataset.aiProviderId;
     if (sourceId) aiAnalysis.setProviderPanelOpen(sourceId, panel.open);

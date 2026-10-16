@@ -2,6 +2,8 @@
 
 **中文** · [English](#english)
 
+当前版本：[2.1.0](https://github.com/glenzli/infra-sentinel/releases/tag/v2.1.0) · [更新日志](CHANGELOG.md)
+
 Infra Sentinel 是一个 macOS 桌面监控工具，用于查看网络流量、AI 客户端用量、本机资源、远端主机和服务状态。各类数据按来源和单位分别展示。
 
 ![Infra Sentinel 中文概览](assets/overview-zh.png)
@@ -48,6 +50,8 @@ OpenCode 按已完成用户轮次汇总输出并显示轮次平均（含工具�
 
 图表显示本机记录到的原始 Token，不是 Codex 账户额度或账单。API 参考价值按模型的输入、缓存输入、缓存写入和输出价格换算。价格目录来自独立的 [api-price](https://github.com/glenzli/api-price) Release：Agent 每日检查一次，遇到没有精确价格的模型时至多每六小时补查一次，也可在设置中手动检查。下载内容会校验大小、结构和 SHA-256；失败时继续使用最后一个有效版本或 App 内置目录。检查请求不包含本机模型 ID 或用量。Antigravity 精确模型价优先；有限后缀可采用标明的本体参考估算，保留原始模型名。`-trial`/`-trail` 标为“试用”，`-free` 标为“免费版”，与 `-n` 等“疑似灰度”分开提示与计数；名称中的试用或免费不代表 API 参考价值为零，实际扣费以供应商为准。未知本体、未支持后缀以及不适用日期仍保持未计价。
 
+“Agent 活动”默认每个来源一行摘要，展开后以双列排列指标，并保留当前选择的展开状态。长说明通过 ⓘ 悬停或键盘聚焦查看；浮层支持方向键滚动和 Esc 关闭。
+
 当日用量按小时展示。有时间戳的来源按事件时间归桶；只提供累计值的来源按采样差分归桶。无法定位的起始余额归入统计开始所在小时，并标记为估算。跨日后按自然日汇总。
 
 ![Infra Sentinel AI 用量](assets/ai-usage-zh.png)
@@ -64,6 +68,8 @@ PYTHONPATH=src python3 -m infra_sentinel.cli.codex_usage_audit \
 ```
 
 ## 安装与构建
+
+从 [2.1.0 Release](https://github.com/glenzli/infra-sentinel/releases/tag/v2.1.0) 下载 Apple Silicon App ZIP 和对应 SHA-256 校验文件。
 
 当前桌面包支持 macOS 13+。预编译 App 使用 ad-hoc 签名，未经 Apple 公证；首次启动如被 macOS 拦截，可右键选择“打开”，或在“系统设置 → 隐私与安全性”中确认。
 
@@ -107,6 +113,8 @@ cd src-tauri && cargo test --offline
 
 [中文](#infra-sentinel)
 
+Current release: [2.1.0](https://github.com/glenzli/infra-sentinel/releases/tag/v2.1.0) · [Changelog](CHANGELOG.md)
+
 Infra Sentinel is a macOS desktop monitor for network traffic, local AI-client usage, host resources, remote hosts, and service status. Each source keeps its own units and accounting method.
 
 ![Infra Sentinel overview](assets/overview-en.png)
@@ -142,6 +150,8 @@ OpenCode shows a completed user-turn average including tools. DSH reads request 
 
 Charts show raw Tokens recorded on this machine, not Codex account quota or billing. API reference value is calculated from model-specific input, cached-input, cache-write, and output prices. The price catalog comes from independent [api-price](https://github.com/glenzli/api-price) Releases. The Agent checks daily, checks at most every six hours when an exact model price is missing, and also offers a manual check in Settings. Downloads are validated for size, structure, and SHA-256; failures retain the last valid or bundled catalog. Update requests contain no local model IDs or usage. Antigravity exact prices take priority; bounded suffixes may use labeled base-model estimates while preserving raw IDs. `-trial`/`-trail` are labeled Trial and `-free` Free tier, separately from suspected rollouts such as `-n`. These name markers do not imply zero API reference value or establish actual charges. Unknown bases, unsupported suffixes and unavailable usage dates remain unpriced.
 
+Agent activity starts with one summary row per provider. Expanded metrics use two compact columns and retain the current expansion choices. Hover or focus ⓘ to read explanations; arrow keys scroll long hints and Esc closes them.
+
 The current day is displayed in hourly buckets. Timestamped sources use event time; cumulative-only sources use sampled deltas. An opening balance that cannot be located is assigned to the statistics-start hour and marked as estimated. Older data is summarized by calendar day.
 
 ![Infra Sentinel AI usage](assets/ai-usage-en.png)
@@ -158,6 +168,8 @@ PYTHONPATH=src python3 -m infra_sentinel.cli.codex_usage_audit \
 ```
 
 ### Build
+
+Download the Apple Silicon App ZIP and its SHA-256 checksum from the [2.1.0 Release](https://github.com/glenzli/infra-sentinel/releases/tag/v2.1.0).
 
 The desktop package supports macOS 13+. Prebuilt apps use ad-hoc signing and are not notarized by Apple. Building from source requires Xcode Command Line Tools, Rust, Node.js LTS, Python 3.11+, and PyInstaller:
 

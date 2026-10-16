@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+## 2.1.0 — 2026-10-16
+
+### Added
+
+- Read-only DSH v4 session usage, including Zstd sessions, final-versus-streamed
+  usage replacement, retry boundaries, and dated model history.
+- Separately labeled turn-average, request-average, and client-stream speeds
+  for Codex, OpenCode, DSH, and Antigravity when reliable timing is available.
+- Bounded model suffix interpretation with dated base-model reference estimates:
+  trial/trail and free labels are separate from suspected rollout markers.
+
+### Changed
+
+- Place speed and model-reference annotations next to model usage.
+- Default Agent activity to compact summary rows; expanded diagnostics use
+  two-column metric groups and accessible, scrollable explanation hints.
+- Bundle api-price catalog 2026.10.16.1 and total Antigravity historical reference
+  value using each usage day's effective price. Catalog updates remain independent
+  of application releases; reference values are not provider bills.
+
+### Fixed
+
+- Keep facility projections current while Mihomo is unavailable.
+- Retain packaged CA roots for pricing downloads and allow normal release-download
+  latency without discarding the last valid catalog.
+
 ## 2.0.2 — 2026-09-08
 
 ### Fixed
