@@ -13,6 +13,9 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from infra_sentinel.core.collectors import CollectorContext  # noqa: E402
 from infra_sentinel.resources.ai.codex import CodexUsageCollector  # noqa: E402
+from infra_sentinel.resources.ai.codex_sampling import (  # noqa: E402
+    load_codex_rollout_ledger, save_codex_rollout_ledger, update_codex_rollout_ledger,
+)
 
 
 EPOCH = datetime(2026, 8, 22, 12, tzinfo=timezone.utc).timestamp()
@@ -53,11 +56,12 @@ def usage(last_total: int, cumulative_total: int, timestamp: str, *, cached: int
 def timed_turn(
     turn_id: str = "private-turn-id", *, output: object = 500,
     duration: object = 10_000, ttft: object = 2_000,
+    model: str = "gpt-5.6-sol",
     timestamp: str = "2026-08-22T12:00:00Z",
 ) -> str:
     return (
         record("event_msg", {"type": "task_started", "turn_id": turn_id}, timestamp)
-        + record("turn_context", {"model": "gpt-5.6-sol", "turn_id": turn_id}, timestamp)
+        + record("turn_context", {"model": model, "turn_id": turn_id}, timestamp)
         + record("token_usage_record", {
             "turn_id": turn_id, "response_id": "private-response-id",
             "usage": {"output_tokens": 100},
@@ -75,7 +79,114 @@ def timing_metrics(snapshot: dict[str, object]) -> dict[str, dict[str, object]]:
     return {metric["id"]: metric for metric in group["metrics"]} if group else {}
 
 
+def model_timing_metrics(snapshot):
+    return {group["sample"]["model"]: {m["id"]: m["value"] for m in group["metrics"]}
+            for group in snapshot["details"] if group["id"] == "turn-performance"}
+
+
 class CodexUsageTests(unittest.TestCase):
+    def test_model_switch_in_one_session_keeps_each_latest_rate_across_restart(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "sessions"
+            root.mkdir()
+            path = root / "root.jsonl"
+            path.write_text(session("user") + usage(100, 100, "2026-08-22T12:00:00Z")
+                            + timed_turn("private-astra-1", model="gpt-6-astra", output=300)
+                            + timed_turn("private-sol-1", model="gpt-6.1-sol", output=600, timestamp="2026-08-22T12:01:00Z")
+                            + timed_turn("private-astra-2", model="gpt-6-astra", output=400, timestamp="2026-08-22T12:02:00Z"))
+            checkpoint = Path(temporary) / "ledger.json"
+            collector = CodexUsageCollector(rollout_roots_finder=lambda: (root,), ledger_path=checkpoint)
+            initial = collector.collect(CollectorContext({"epoch": EPOCH + 150}, {}))
+            with path.open("a") as stream:
+                stream.write("".join(timed_turn("private-sol-open", model="gpt-6.1-sol", output=999).splitlines(keepends=True)[:-1]))
+            restarted = CodexUsageCollector(rollout_roots_finder=lambda: (root,), ledger_path=checkpoint)
+            after = restarted.collect(CollectorContext({"epoch": EPOCH + 180}, {}))
+            saved = checkpoint.read_text()
+        self.assertEqual({m: v["turn-output-rate"] for m, v in model_timing_metrics(initial.snapshot).items()},
+                         {"gpt-6-astra": 40, "gpt-6.1-sol": 60})
+        self.assertEqual(model_timing_metrics(initial.snapshot), model_timing_metrics(after.snapshot))
+        self.assertEqual(after.snapshot["usage"]["cumulative"]["tokens"], 100)
+        self.assertEqual(after.points, ())
+        self.assertNotIn("private-astra", saved)
+        self.assertNotIn("private-sol", saved)
+
+    def test_old_checkpoint_backfills_models_without_replaying_usage(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "sessions"
+            root.mkdir()
+            path = root / "root.jsonl"
+            path.write_text(session("user") + usage(100, 100, "2026-08-22T12:00:00Z")
+                            + timed_turn("a", model="astra", output=300)
+                            + timed_turn("s", model="sol", output=600, timestamp="2026-08-22T12:01:00Z"))
+            checkpoint = Path(temporary) / "ledger.json"
+            initial = CodexUsageCollector(rollout_roots_finder=lambda: (root,), ledger_path=checkpoint)
+            initial.collect(CollectorContext({"epoch": EPOCH + 150}, {}))
+            old = json.loads(checkpoint.read_text())
+            for entry in old["files"].values():
+                entry.pop("latest_turn_timings", None)
+            checkpoint.write_text(json.dumps(old))
+            after = CodexUsageCollector(rollout_roots_finder=lambda: (root,), ledger_path=checkpoint).collect(
+                CollectorContext({"epoch": EPOCH + 180}, {}))
+            saved = json.loads(checkpoint.read_text())
+            path.unlink()
+            deleted = CodexUsageCollector(rollout_roots_finder=lambda: (root,), ledger_path=checkpoint).collect(
+                CollectorContext({"epoch": EPOCH + 210}, {}))
+        self.assertEqual(set(model_timing_metrics(after.snapshot)), {"astra", "sol"})
+        self.assertEqual(model_timing_metrics(deleted.snapshot), model_timing_metrics(after.snapshot))
+        for field in ("days", "hours", "dedup_keys"):
+            self.assertEqual(saved[field], old[field])
+        self.assertEqual([e["offset"] for e in saved["files"].values()], [e["offset"] for e in old["files"].values()])
+        self.assertEqual(after.points, ())
+        self.assertFalse(any("timing_backfill" in e for e in saved["files"].values()))
+
+    def test_bounded_timing_backfill_resumes_and_preserves_new_live_sample(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "sessions"
+            root.mkdir()
+            path = root / "root.jsonl"
+            path.write_text(session("user") + usage(100, 100, "2026-08-22T12:00:00Z")
+                            + timed_turn("a", model="astra", output=300)
+                            + timed_turn("s", model="sol", output=600, timestamp="2026-08-22T12:01:00Z"))
+            checkpoint = Path(temporary) / "ledger.json"
+            CodexUsageCollector(rollout_roots_finder=lambda: (root,), ledger_path=checkpoint).collect(
+                CollectorContext({"epoch": EPOCH + 150}, {}))
+            old = json.loads(checkpoint.read_text())
+            for entry in old["files"].values():
+                entry.pop("latest_turn_timings", None)
+            checkpoint.write_text(json.dumps(old))
+            for index in range(30):
+                ledger = load_codex_rollout_ledger(checkpoint)
+                update = update_codex_rollout_ledger((root,), ledger, timezone=timezone.utc,
+                    now=datetime.fromtimestamp(EPOCH + 300, timezone.utc), max_scan_bytes=600)
+                self.assertEqual(update.increments, ())
+                save_codex_rollout_ledger(checkpoint, ledger)
+                if index == 0:
+                    self.assertTrue(any("timing_backfill" in e for e in ledger.files.values()))
+                    with path.open("a") as stream:
+                        stream.write(timed_turn("s-new", model="sol", output=900, timestamp="2026-08-22T12:03:00Z"))
+                elif not any("timing_backfill" in e for e in ledger.files.values()) and all(e["offset"] == path.stat().st_size for e in ledger.files.values()):
+                    break
+            else:
+                self.fail("timing scan did not finish within bounded passes")
+            rates = model_timing_metrics({"details": CodexUsageCollector._timing_details(ledger)})
+        self.assertEqual(rates["astra"]["turn-output-rate"], 30)
+        self.assertEqual(rates["sol"]["turn-output-rate"], 90)
+        for field in ("days", "hours", "dedup_keys"):
+            self.assertEqual(ledger.as_payload()[field], old[field])
+
+    def test_latest_sample_is_selected_per_model_across_files_and_ignores_children(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name, model, output, timestamp, source in (
+                ("new-astra", "astra", 300, "2026-08-22T12:01:00Z", "user"),
+                ("old-astra", "astra", 200, "2026-08-22T12:00:00Z", "user"),
+                ("sol", "sol", 600, "2026-08-22T12:02:00Z", "user"),
+                ("child", "astra", 9999, "2026-08-22T12:03:00Z", "subagent"),
+            ):
+                (root / (name + ".jsonl")).write_text(session(source) + timed_turn(model=model, output=output, timestamp=timestamp))
+            result = CodexUsageCollector(rollout_roots_finder=lambda: (root,)).collect(CollectorContext({"epoch": EPOCH + 300}, {}))
+        self.assertEqual({m: v["turn-output-rate"] for m, v in model_timing_metrics(result.snapshot).items()}, {"astra": 30, "sol": 60})
+
     def test_reported_turn_timing_uses_turn_total_without_changing_accounting(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)

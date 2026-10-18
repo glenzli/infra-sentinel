@@ -1,5 +1,6 @@
 from contextlib import closing
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 import json
 import sqlite3
@@ -10,7 +11,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from infra_sentinel.core.collectors import CollectorContext
-from infra_sentinel.resources.ai.performance import PerformanceSample, performance_details
+from infra_sentinel.resources.ai.performance import PerformanceSample, performance_details, model_performance_details
 from infra_sentinel.resources.ai.opencode import OpenCodeUsageCollector, read_opencode_turn_performance
 from infra_sentinel.resources.ai.dsh import DshUsageCollector
 from infra_sentinel.resources.ai.antigravity import AntigravityUsageCollector
@@ -38,11 +39,11 @@ def message(field, value):
     return varint((field << 3) | 2) + varint(len(value)) + value
 
 
-def generation(*, ttft=True, streaming_nanos=0):
+def generation(*, ttft=True, streaming_nanos=0, model="test-model", epoch=EPOCH, response_id="private-response-id"):
     usage = number(1, 20) + number(2, 30) + number(5, 40) + number(9, 100) + number(10, 20)
-    usage += message(11, b"private-response-id")
-    chat = message(4, usage) + message(19, b"test-model")
-    chat += message(9, message(4, number(1, EPOCH)))
+    usage += message(11, response_id.encode())
+    chat = message(4, usage) + message(19, model.encode())
+    chat += message(9, message(4, number(1, epoch)))
     if ttft:
         chat += message(11, number(1, 2))
     chat += message(12, number(1, 3) + number(2, streaming_nanos))
@@ -50,6 +51,85 @@ def generation(*, ttft=True, streaming_nanos=0):
 
 
 class PerformanceTests(unittest.TestCase):
+    def test_each_exact_model_keeps_its_latest_usable_sample_and_scopes(self):
+        samples = [
+            PerformanceSample(EPOCH, "astra", 120, 5000, 2000, 3000),
+            PerformanceSample(EPOCH + 2, "sol", 60, 2000),
+            PerformanceSample(EPOCH + 1, "astra", 240, 5000, 2000, 3000),
+            PerformanceSample(EPOCH + 3, "astra", 999, float("nan")),
+            PerformanceSample(EPOCH + 4, "sol-trial", 80, 2000),
+        ]
+        groups = model_performance_details(samples)
+        self.assertEqual([g["sample"]["model"] for g in groups], ["sol-trial", "sol", "astra", "astra"])
+        astra = [g for g in groups if g["sample"]["model"] == "astra"]
+        self.assertEqual([g["id"] for g in astra], ["request-performance", "client-stream-performance"])
+        self.assertEqual(astra[0]["sample"], astra[1]["sample"])
+        self.assertEqual(metrics({"details": astra})["request-output-rate"], 48)
+
+    def test_opencode_preserves_completed_turns_for_multiple_models(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            db = Path(temporary) / "opencode.db"
+            with closing(sqlite3.connect(db)) as connection:
+                connection.execute("CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)")
+                for index, model, output in ((0, "astra", 100), (1, "sol", 200), (2, "astra", 300)):
+                    start = (EPOCH + index * 10) * 1000
+                    for identifier, payload in (
+                        (f"private-user-{index}", {"role": "user", "time": {"created": start}}),
+                        (f"private-assistant-{index}", {"role": "assistant", "parentID": f"private-user-{index}",
+                         "modelID": model, "finish": "stop", "time": {"created": start + 1000, "completed": start + 5000},
+                         "tokens": {"input": 10, "output": output, "reasoning": 0, "cache": {"read": 0, "write": 0}}}),
+                    ):
+                        connection.execute("INSERT INTO message VALUES (?, 'session', ?, ?, ?)",
+                                           (identifier, payload["time"]["created"], start + 5000, json.dumps(payload)))
+                connection.commit()
+            result = OpenCodeUsageCollector(desktop_database_finder=lambda: db).collect(CollectorContext({"epoch": EPOCH + 40}, {}))
+        groups = [g for g in result.snapshot["details"] if g["id"] == "turn-performance"]
+        rates = {g["sample"]["model"]: metrics({"details": [g]})["turn-output-rate"] for g in groups}
+        self.assertEqual(rates, {"astra": 60, "sol": 40})
+        self.assertEqual(result.snapshot["usage"]["cumulative"]["tokens"], 630)
+        self.assertNotIn("private-user", json.dumps(result.snapshot))
+
+    def test_dsh_preserves_latest_timing_for_each_model(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rows = [{"type": "session", "version": 4, "id": "private-session", "isSeeded": False}]
+            for index, model in enumerate(("astra", "sol", "astra")):
+                start = EPOCH * 1000 + index * 10000
+                rows.extend([
+                    {"type": "step/start", "seq": index * 2, "time": start, "data": {"turn": 1, "step": index}},
+                    {"type": "assistant/message", "seq": index * 2 + 1, "time": start + 3000,
+                     "data": {"turn": 1, "step": index,
+                              "usage": {"inputTokens": 10, "outputTokens": 120, "totalTokens": 130},
+                              "message": {"source": {"provider": "p", "model": model}},
+                              "stream": [{"type": "text-chunks", "time0": start + 1000, "index": 0,
+                                          "dt": [], "texts": ["private-answer"]},
+                                         {"type": "chunk", "time": start + 3000, "chunk": {"type": "finish", "reason": "stop"}}]}},
+                ])
+            (root / "one.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+            result = DshUsageCollector(sessions_finder=lambda: root).collect(CollectorContext({"epoch": EPOCH + 40}, {}))
+        groups = [g for g in result.snapshot["details"] if g["id"] == "request-performance"]
+        self.assertEqual({g["sample"]["model"] for g in groups}, {"p/astra", "p/sol"})
+        self.assertEqual(result.snapshot["usage"]["cumulative"]["tokens"], 390)
+        self.assertEqual(result.points, ())
+
+    def test_antigravity_preserves_latest_timing_for_each_model(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with closing(sqlite3.connect(root / "one.db")) as connection:
+                connection.execute("CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB)")
+                connection.execute("CREATE TABLE steps (idx INTEGER PRIMARY KEY)")
+                connection.executemany("INSERT INTO gen_metadata VALUES (?, ?)", [
+                    (index, generation(model=model, epoch=EPOCH + index * 10, response_id=f"private-{index}"))
+                    for index, model in ((0, "astra"), (1, "sol"), (2, "astra"))
+                ])
+                connection.commit()
+            result = AntigravityUsageCollector(conversations_finder=lambda: root).collect(CollectorContext({"epoch": EPOCH + 40}, {}))
+        groups = [g for g in result.snapshot["details"] if g["id"] == "request-performance"]
+        self.assertEqual({g["sample"]["model"] for g in groups}, {"astra", "sol"})
+        stamp = next(g for g in groups if g["sample"]["model"] == "astra")["sample"]["recorded_at"]
+        self.assertEqual(datetime.fromisoformat(stamp).timestamp(), EPOCH + 20)
+        self.assertEqual(result.snapshot["usage"]["cumulative"]["tokens"], 630)
+
     def test_scopes_units_and_invalid_timing_stay_separate(self):
         sample = PerformanceSample(EPOCH, "model", 120, 5000, 2000, 3000)
         groups = performance_details(sample)

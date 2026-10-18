@@ -5,7 +5,7 @@ import { currentLocale, tr } from "./i18n";
 import { TimeBucketBarBucket, TimeBucketBarSeries, renderTimeBucketBarChart } from "./time_bucket_bar_chart";
 import { renderDailyActivityCalendar } from "./daily_activity_calendar";
 import { AiAnalysisSnapshot, AiHistoryVisual, AiModelMeasure, AiTimeRange, AiViewMode } from "./ai_analysis";
-import { AnalysisTimeWindow } from "./analysis_time";
+import { AnalysisTimeWindow, analysisTimeWindow } from "./analysis_time";
 import { AttentionDiagnostic, renderAttentionDiagnostics } from "./attention_diagnostics";
 import {
   ProjectedUsage, UsageInterval, aggregateByModel, aggregateBySource, canonicalModelId, completeDailyBuckets,
@@ -191,7 +191,7 @@ function renderOverview(usage: ProjectedUsage, providerSources: Record<string, u
   const sources = usage.sourceTotals;
   const selectedTotal = [...sources.values()].reduce((sum, value) => sum + value, 0);
   const reference = projectPriceReference(providerSources, usage, range, window);
-  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Selected range total", "所选时段总量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)} · ${sources.size} ${tr("Agents", "个 Agent")}</span>${referencePriceTag(reference)}</aside></div>${horizontalBars(tr("Usage by Agent", "按 Agent 的用量"), rangeLabel(range), sources, SOURCE_COLORS, undefined, undefined, undefined, (id) => modelReferenceAnnotations(providerSources, "source", id) + performanceAnnotations(providerSources, "source", id))}${historyVisualControl(range, visual)}${usageHistory(usage.intervals, "source", range, window, visual, usage.undatedTotal, reference)}</section>`;
+  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Selected range total", "所选时段总量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)} · ${sources.size} ${tr("Agents", "个 Agent")}</span>${referencePriceTag(reference)}</aside></div>${horizontalBars(tr("Usage by Agent", "按 Agent 的用量"), rangeLabel(range), sources, SOURCE_COLORS, undefined, undefined, undefined, (id) => modelReferenceAnnotations(providerSources, "source", id) + performanceAnnotations(providerSources, "source", id, range))}${historyVisualControl(range, visual)}${usageHistory(usage.intervals, "source", range, window, visual, usage.undatedTotal, reference)}</section>`;
 }
 
 function valueHistory(reference: PriceReference, range: AiTimeRange, window: AnalysisTimeWindow, visual: AiHistoryVisual): string {
@@ -244,10 +244,10 @@ function renderModels(usage: ProjectedUsage, providerSources: Record<string, unk
     const values = reference?.byModel ?? new Map<string, number>();
     const total = reference?.costUsd ?? 0;
     return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Equivalent value in range", "所选时段等价价值")}</p><strong>${total > 0 ? `≈ ${formatReferenceUsd(total)}` : "—"}</strong></div><aside><span>${rangeLabel(range)}</span></aside></div>${total > 0
-      ? `${horizontalBars(tr("Equivalent value by model", "按模型的等价价值"), rangeLabel(range), values, MODEL_COLORS, modelLabel, undefined, formatReferenceUsd, (id) => modelReferenceAnnotations(providerSources, "model", id) + performanceAnnotations(providerSources, "model", id))}${historyVisualControl(range, visual)}${valueHistory(reference!, range, window, visual)}`
+      ? `${horizontalBars(tr("Equivalent value by model", "按模型的等价价值"), rangeLabel(range), values, MODEL_COLORS, modelLabel, undefined, formatReferenceUsd, (id) => modelReferenceAnnotations(providerSources, "model", id) + performanceAnnotations(providerSources, "model", id, range))}${historyVisualControl(range, visual)}${valueHistory(reference!, range, window, visual)}`
       : `<article class="detail-panel ai-analysis-state"><p>${tr("No model rows in this range have an available price reference.", "所选时段没有可用参考价的模型行。")}</p></article>`}</section>`;
   }
-  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Model total in range", "所选时段模型量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)}</span></aside></div>${horizontalBars(tr("Model composition", "模型构成"), rangeLabel(range), models, MODEL_COLORS, modelLabel, undefined, undefined, (id) => modelReferenceAnnotations(providerSources, "model", id) + performanceAnnotations(providerSources, "model", id))}${historyVisualControl(range, visual)}${usageHistory(usage.intervals, "model", range, window, visual, usage.undatedTotal)}</section>`;
+  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Model total in range", "所选时段模型量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)}</span></aside></div>${horizontalBars(tr("Model composition", "模型构成"), rangeLabel(range), models, MODEL_COLORS, modelLabel, undefined, undefined, (id) => modelReferenceAnnotations(providerSources, "model", id) + performanceAnnotations(providerSources, "model", id, range))}${historyVisualControl(range, visual)}${usageHistory(usage.intervals, "model", range, window, visual, usage.undatedTotal)}</section>`;
 }
 
 /** Keep diagnostic hints visible at window edges without changing metric state. */
@@ -406,7 +406,9 @@ function modelReferenceAnnotations(providerSources: Record<string, unknown>[], d
   }).join("");
 }
 
-function performanceAnnotations(providerSources: Record<string, unknown>[], dimension: "source" | "model", identifier: string): string {
+function performanceAnnotations(providerSources: Record<string, unknown>[], dimension: "source" | "model", identifier: string, range: AiTimeRange): string {
+  // Samples are live metadata; do not freeze their cutoff at a cached history query.
+  const window = analysisTimeWindow(range);
   const labels: Record<string, string> = {
     "turn-performance": tr("Turn average", "轮次平均"),
     "request-performance": tr("Request average", "请求平均"),
@@ -424,17 +426,21 @@ function performanceAnnotations(providerSources: Record<string, unknown>[], dime
       const rate = asArray(group.metrics).find((metric) => metric.unit === "tokens/s");
       if (!rate || typeof rate.value !== "number" || !Number.isFinite(rate.value) || rate.value < 0) return [];
       const recorded = new Date(String(sample.recorded_at ?? ""));
-      const recordedLabel = Number.isNaN(recorded.getTime()) ? localized(group.badge) : recorded.toLocaleString();
+      const recordedEpoch = recorded.getTime() / 1_000;
+      if (!Number.isFinite(recordedEpoch) || recordedEpoch < window.sinceEpoch || recordedEpoch > window.untilEpoch) return [];
+      const recordedLabel = recorded.toLocaleString();
       const context = `${sourceLabel} · ${String(sample.model ?? "")}`;
       const timing = asArray(group.metrics).filter((metric) => metric.unit === "seconds")
         .map((metric) => `${localized(metric.label)} ${formatMetric(metric.value, metric.unit)}`).join(" · ");
       const note = localized(group.note);
       const value = formatMetric(rate.value, rate.unit);
       const hint = [context, `${tr("Latest recorded sample", "最近样本")} · ${recordedLabel}`, `${label} ${value}`, timing, note].filter(Boolean).join("\n");
-      return [`<button type="button" class="ai-performance-tag" aria-label="${escapeHtml(hint)}"><span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b><span class="ai-performance-tooltip" aria-hidden="true"><b>${escapeHtml(context)}</b><time>${escapeHtml(recordedLabel)}</time>${timing ? `<span>${escapeHtml(timing)}</span>` : ""}<span>${escapeHtml(note)}</span></span></button>`];
+      return [{ model: String(sample.model ?? "unknown"), html: `<button type="button" class="ai-performance-tag" aria-label="${escapeHtml(hint)}"><span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b><span class="ai-performance-tooltip" aria-hidden="true"><b>${escapeHtml(context)}</b><time>${escapeHtml(recordedLabel)}</time>${timing ? `<span>${escapeHtml(timing)}</span>` : ""}<span>${escapeHtml(note)}</span></span></button>` }];
     });
     if (!tags.length) return [];
-    return [`<span class="ai-performance-source">${dimension === "model" ? `<small>${escapeHtml(sourceLabel)}</small>` : ""}${tags.join("")}</span>`];
+    const byModel = new Map<string, string[]>();
+    for (const tag of tags) byModel.set(tag.model, [...(byModel.get(tag.model) ?? []), tag.html]);
+    return [...byModel.entries()].map(([model, values]) => `<span class="ai-performance-source"><small>${escapeHtml(dimension === "source" ? modelLabel(model) : sourceLabel)}</small>${values.join("")}</span>`);
   });
   return annotations.length ? `<span class="ai-performance-samples"><small>${tr("Latest sample", "最近样本")}</small>${annotations.join("")}</span>` : "";
 }

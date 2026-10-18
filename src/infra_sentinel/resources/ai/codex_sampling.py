@@ -241,6 +241,7 @@ class LedgerUpdate:
     increments: tuple[LedgerIncrement, ...]
     scanned_bytes: int
     partial: bool
+    metadata_changed: bool = False
 
 
 @dataclass(frozen=True)
@@ -273,6 +274,7 @@ class RolloutParseState:
     timing_model: str = "unknown"
     timing_output_tokens: int | None = None
     latest_turn_timing: dict[str, Any] | None = None
+    latest_turn_timings: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -505,6 +507,7 @@ def update_codex_rollout_ledger(
     increments: list[LedgerIncrement] = []
     scanned_bytes = 0
     partial = False
+    metadata_changed = False
     for marker, (size, modified, path, identity) in sorted(
         candidates.items(), key=lambda item: (item[1][1], item[0]),
     ):
@@ -514,6 +517,12 @@ def update_codex_rollout_ledger(
             # A moved archived copy can be shorter than the already observed
             # live file. Never replay it or roll the durable offset backwards.
             continue
+        if offset and "latest_turn_timings" not in entry:
+            entry = {**entry, "latest_turn_timings": _turn_timings_from_payload(None, entry.get("latest_turn_timing"))}
+            if entry.get("source") == "user" and not entry.get("parent"):
+                entry["timing_backfill"] = {"offset": 0, "state": {}}
+            ledger.files[marker] = entry
+            metadata_changed = True
         if size == offset:
             continue
         if remaining is not None and remaining <= 0:
@@ -535,10 +544,61 @@ def update_codex_rollout_ledger(
             if increment.usage["total_tokens"] > 0:
                 increments.append(increment)
         partial = partial or exhausted
-    if scanned_bytes:
+    metadata_changed = _backfill_model_timings(
+        candidates, ledger, timezone=timezone, max_scan_bytes=max_scan_bytes,
+    ) or metadata_changed
+    if scanned_bytes or metadata_changed:
         ledger.updated_at = now.astimezone().isoformat(timespec="seconds")
     ledger.partial = partial or any(bool(entry.get("incomplete")) for entry in ledger.files.values())
-    return LedgerUpdate(tuple(increments), scanned_bytes, ledger.partial)
+    return LedgerUpdate(tuple(increments), scanned_bytes, ledger.partial, metadata_changed)
+
+
+def _backfill_model_timings(
+    candidates: dict[str, tuple[int, int, Path, RolloutIdentity]], ledger: CodexRolloutLedger,
+    *, timezone: tzinfo, max_scan_bytes: int | None,
+) -> bool:
+    """Resume a bounded metadata-only pass over old checkpoints, newest files first.
+
+    The accounting offset, token aggregates and dedup keys are never replayed or
+    changed. Separate scan state lets large logs continue across Agent restarts.
+    """
+    remaining = max_scan_bytes
+    changed = False
+    for marker, (size, _, path, identity) in sorted(candidates.items(), key=lambda item: item[1][1], reverse=True):
+        entry = ledger.files.get(marker, {})
+        backfill = entry.get("timing_backfill")
+        if not isinstance(backfill, dict):
+            continue
+        if remaining is not None and remaining <= 0:
+            break
+        offset = _integer(backfill.get("offset"))
+        target = min(size, _integer(entry.get("offset")))
+        budget = target - offset if remaining is None else min(target - offset, remaining)
+        if budget <= 0:
+            entry.pop("timing_backfill", None)
+            changed = True
+            continue
+        consumed, state, _, _ = _ingest_ledger_file_tail(
+            path, offset, budget, backfill.get("state", {}), timezone=timezone,
+            identity=identity, seen_dedup_keys=set(), timing_only=True,
+        )
+        used = max(0, consumed - offset)
+        if remaining is not None:
+            remaining -= used
+        if not used:
+            continue
+        # Merge by event time; a live append can be newer than the scan prefix.
+        for model, timing in state["latest_turn_timings"].items():
+            previous = entry["latest_turn_timings"].get(model)
+            if previous is None or timing["completed_epoch"] > previous["completed_epoch"]:
+                entry["latest_turn_timings"][model] = timing
+        entry["latest_turn_timings"] = _turn_timings_from_payload(entry["latest_turn_timings"])
+        if consumed >= target:
+            entry.pop("timing_backfill", None)
+        else:
+            entry["timing_backfill"] = {"offset": consumed, "state": state}
+        changed = changed or used > 0 or consumed >= target
+    return changed
 
 
 def _ingest_ledger_file_tail(
@@ -550,6 +610,7 @@ def _ingest_ledger_file_tail(
     timezone: tzinfo,
     identity: RolloutIdentity,
     seen_dedup_keys: set[str],
+    timing_only: bool = False,
 ) -> tuple[int, dict[str, Any], list[LedgerIncrement], bool]:
     state = _parse_state_from_payload(stored, identity)
     observations: list[LedgerIncrement] = []
@@ -588,6 +649,9 @@ def _ingest_ledger_file_tail(
                 record = _record(line)
                 if record is None:
                     continue
+                payload = record.get("payload")
+                if timing_only and record.get("type") == "event_msg" and isinstance(payload, dict) and payload.get("type") == "token_count":
+                    continue
                 event = _consume_rollout_record(
                     record, state, seen_dedup_keys=seen_dedup_keys,
                     file_scope=identity.session, timezone=timezone,
@@ -609,6 +673,8 @@ def _ingest_ledger_file_tail(
     except OSError:
         return offset, _ledger_file_from_payload(stored), [], True
     entry = _parse_state_as_payload(state)
+    if "timing_backfill" in stored:
+        entry["timing_backfill"] = stored["timing_backfill"]
     try:
         more_bytes = path.stat().st_size > position
     except OSError:
@@ -876,6 +942,19 @@ def _turn_timing_from_payload(raw: object) -> dict[str, Any] | None:
     }
 
 
+def _turn_timings_from_payload(raw: object, legacy: object = None) -> dict[str, dict[str, Any]]:
+    values = [*raw.values()] if isinstance(raw, dict) else []
+    latest: dict[str, dict[str, Any]] = {}
+    for value in [*values, legacy]:
+        timing = _turn_timing_from_payload(value)
+        if timing is None:
+            continue
+        previous = latest.get(timing["model"])
+        if previous is None or timing["completed_epoch"] > previous["completed_epoch"]:
+            latest[timing["model"]] = timing
+    return dict(sorted(latest.items(), key=lambda item: (-item[1]["completed_epoch"], item[0]))[:MAX_SAMPLED_MODELS])
+
+
 def _consume_turn_timing(
     record_type: object, payload: dict[str, Any], epoch: float | None, state: RolloutParseState,
 ) -> None:
@@ -912,11 +991,13 @@ def _consume_turn_timing(
             "duration_ms": payload.get("duration_ms"),
             "time_to_first_token_ms": payload.get("time_to_first_token_ms"),
         })
-        if timing is not None and (
-            state.latest_turn_timing is None
-            or timing["completed_epoch"] >= state.latest_turn_timing["completed_epoch"]
-        ):
-            state.latest_turn_timing = timing
+        if timing is not None:
+            previous = state.latest_turn_timings.get(timing["model"])
+            if previous is None or timing["completed_epoch"] >= previous["completed_epoch"]:
+                state.latest_turn_timings[timing["model"]] = timing
+                state.latest_turn_timings = _turn_timings_from_payload(state.latest_turn_timings)
+            if state.latest_turn_timing is None or timing["completed_epoch"] >= state.latest_turn_timing["completed_epoch"]:
+                state.latest_turn_timing = timing
         state.timing_turn = None
         state.timing_output_tokens = None
 
@@ -1166,6 +1247,7 @@ def _parse_state_from_payload(raw: object, identity: RolloutIdentity) -> Rollout
         timing_model=_model_or_unknown(payload.get("timing_model")),
         timing_output_tokens=_json_counter(payload.get("timing_output_tokens")),
         latest_turn_timing=_turn_timing_from_payload(payload.get("latest_turn_timing")),
+        latest_turn_timings=_turn_timings_from_payload(payload.get("latest_turn_timings"), payload.get("latest_turn_timing")),
     )
 
 
@@ -1185,6 +1267,7 @@ def _parse_state_as_payload(state: RolloutParseState) -> dict[str, Any]:
         "task_started_turns": sorted(state.task_started_turns),
         "child_is_user_fork": state.child_is_user_fork,
         "last_accepted_epoch": state.last_accepted_epoch,
+        "latest_turn_timings": state.latest_turn_timings,
         **({
             "timing_turn": state.timing_turn,
             "timing_model": state.timing_model,
@@ -1200,6 +1283,16 @@ def _ledger_file_from_payload(raw: object) -> dict[str, Any]:
         str(payload.get("session")) if _valid_marker(payload.get("session")) else _opaque_marker("missing", "session"),
         str(payload.get("parent")) if _valid_marker(payload.get("parent")) else None,
     )))
+    if "latest_turn_timings" not in payload:
+        state.pop("latest_turn_timings", None)
+    backfill = payload.get("timing_backfill")
+    if isinstance(backfill, dict):
+        state["timing_backfill"] = {
+            "offset": _integer(backfill.get("offset")),
+            "state": _parse_state_as_payload(_parse_state_from_payload(backfill.get("state"), RolloutIdentity(
+                state["session"], state["parent"],
+            ))),
+        }
     return {
         "offset": _integer(payload.get("offset")),
         **state,

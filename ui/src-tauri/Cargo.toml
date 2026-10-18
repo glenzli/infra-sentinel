@@ -1,6 +1,6 @@
 [package]
 name = "infra-sentinel-desktop"
-version = "2.1.0"
+version = "2.1.1"
 description = "Cross-platform desktop shell for Infra Sentinel"
 authors = ["Infra Sentinel contributors"]
 edition = "2021"

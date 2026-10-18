@@ -28,7 +28,7 @@ from typing import Any
 
 from infra_sentinel.core.collectors import Collection, CollectorCapability, CollectorContext
 from infra_sentinel.core.model import MetricPoint
-from infra_sentinel.resources.ai.performance import PerformanceSample, performance_details
+from infra_sentinel.resources.ai.performance import PerformanceSample, model_performance_details
 from infra_sentinel.resources.ai.contract import (
     ai_usage_snapshot,
     daily_usage,
@@ -85,7 +85,7 @@ class AntigravityHistory:
     stores: int = 0
     skipped_metadata_rows: int = 0
     undated_generations: int = 0
-    latest_performance: PerformanceSample | None = None
+    model_performance: tuple[PerformanceSample, ...] = ()
 
     @property
     def cumulative(self) -> _TokenTotals:
@@ -362,7 +362,7 @@ def read_antigravity_history(directories: tuple[Path, ...]) -> AntigravityHistor
     skipped_metadata_rows = 0
     seen_response_ids: set[str] = set()
     undated_generations = 0
-    latest_performance = None
+    model_performance: dict[str, PerformanceSample] = {}
     for directory in directories:
         for database in _conversation_databases(directory):
             rows, skipped = _session_rows(database)
@@ -398,8 +398,9 @@ def read_antigravity_history(directories: tuple[Path, ...]) -> AntigravityHistor
                         row.first_token_ms + row.streaming_ms if row.first_token_ms is not None else None,
                         row.first_token_ms, row.streaming_ms,
                     )
-                    if latest_performance is None or sample.recorded_epoch >= latest_performance.recorded_epoch:
-                        latest_performance = sample
+                    previous = model_performance.get(model)
+                    if previous is None or sample.recorded_epoch >= previous.recorded_epoch:
+                        model_performance[model] = sample
                 day = _local_day(row.timestamp_millis)
                 days[day].setdefault(model, _TokenTotals()).add(row.totals)
                 if row.timestamp_millis is not None:
@@ -412,7 +413,7 @@ def read_antigravity_history(directories: tuple[Path, ...]) -> AntigravityHistor
         stores=len(directories),
         skipped_metadata_rows=skipped_metadata_rows,
         undated_generations=undated_generations,
-        latest_performance=latest_performance,
+        model_performance=tuple(model_performance.values()),
     )
 
 
@@ -590,7 +591,7 @@ class AntigravityUsageCollector:
                 detail=localized("all readable local generation metadata", "全部可读取的本地生成元数据"),
             ),
             models=models,
-            details=performance_details(history.latest_performance) + [
+            details=model_performance_details(history.model_performance) + [
                 detail_group("token-breakdown", localized("Token breakdown", "Token 分类明细"), [
                     token_metric("input", localized("Input", "输入"), today.input_tokens, localized("locally recorded", "本地记录")),
                     token_metric("output", localized("Output", "输出"), today.output_tokens, localized("locally recorded", "本地记录")),

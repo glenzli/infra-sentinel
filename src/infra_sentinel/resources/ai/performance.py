@@ -1,6 +1,7 @@
 """Privacy-bounded performance diagnostics, separate from usage accounting."""
 
 from dataclasses import dataclass
+from collections.abc import Iterable
 from datetime import datetime
 import math
 from typing import Any
@@ -16,6 +17,24 @@ class PerformanceSample:
     duration_ms: float | None = None
     first_token_ms: float | None = None
     streaming_ms: float | None = None
+
+
+def latest_model_performance(samples: Iterable[PerformanceSample | None]) -> list[PerformanceSample]:
+    """Keep each exact model's latest usable completed sample, newest first."""
+    latest: dict[str, PerformanceSample] = {}
+    for sample in samples:
+        if sample is None or not performance_details(sample):
+            continue
+        previous = latest.get(sample.model)
+        if previous is None or sample.recorded_epoch > previous.recorded_epoch:
+            latest[sample.model] = sample
+    return sorted(latest.values(), key=lambda sample: (-sample.recorded_epoch, sample.model))
+
+
+def model_performance_details(
+    samples: Iterable[PerformanceSample | None], *, scope: str = "request",
+) -> list[dict[str, Any]]:
+    return [group for sample in latest_model_performance(samples) for group in performance_details(sample, scope=scope)]
 
 
 def _milliseconds(value: object, *, zero: bool = False) -> float | None:

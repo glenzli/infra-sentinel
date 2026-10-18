@@ -28,9 +28,12 @@ Within the AI boundary, `resources/ai/codex_sampling.py` owns privacy-bounded
 Codex rollout token parsing, lineage-aware inherited-prefix suppression,
 scoped cross-file deduplication, durable request-increment ledger updates, and
 read-only reconstruction. The ledger retains daily totals, current-day hour
-buckets, and optional reported timing for the latest completed main-chat turn.
+buckets, and optional reported timing for each model's latest completed main-chat turn.
+Old checkpoints backfill timing in bounded, resumable metadata-only scans without
+replaying accounting offsets, aggregates or deduplication keys.
 The AI performance owner in `resources/ai/performance.py` validates optional scalar
-timing and labels turn averages, request averages, and client stream rates. Provider
+timing, selects the latest usable sample per exact model, and labels turn averages,
+request averages, and client stream rates. Provider
 adapters own timestamp and usage correlation; missing timing stays absent.
 Timing is diagnostic metadata and never enters token accounting; turn markers
 are irreversible hashes. Other AI adapters expose exact event hours when their source has

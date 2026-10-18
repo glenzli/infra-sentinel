@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 2.1.1 — 2026-10-18
+
+### Fixed
+
+- Keep each model's latest usable speed independently within Codex, OpenCode,
+  DSH, and Antigravity, instead of letting one model replace another's sample.
+- Filter inline speed samples by the selected calendar range in usage overview
+  and model analysis, keeping older model samples out of the current-day view.
+- Recover per-model Codex timing from readable older logs with bounded,
+  resumable metadata scans, without replaying Token accounting.
+
+### Changed
+
+- Show the model beside each inline speed sample; hover or focus still reveals
+  recording time, latency, duration, and the applicable timing scope.
+
 ## 2.1.0 — 2026-10-16
 
 ### Added

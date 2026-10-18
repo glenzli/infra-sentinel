@@ -13,6 +13,7 @@ from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
+from itertools import groupby
 import json
 import os
 from pathlib import Path
@@ -26,7 +27,7 @@ from typing import Any
 from infra_sentinel.resources.ai.contract import ai_usage_snapshot, daily_usage, detail_group, hourly_usage, localized, model_usage, pricing_day, token_metric, usage_window
 from infra_sentinel.core.collectors import Collection, CollectorCapability, CollectorContext
 from infra_sentinel.core.model import MetricPoint
-from infra_sentinel.resources.ai.performance import PerformanceSample, performance_details
+from infra_sentinel.resources.ai.performance import PerformanceSample, latest_model_performance, model_performance_details
 
 
 
@@ -419,12 +420,12 @@ def _metric_point(
     )
 
 
-def read_opencode_turn_performance(path: Path) -> PerformanceSample | None:
+def read_opencode_model_turn_performance(path: Path) -> list[PerformanceSample]:
     """Select usage and timing scalars only; no message/part content is read."""
     try:
         with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
             connection.execute("PRAGMA query_only = ON")
-            row = connection.execute("""
+            rows = connection.execute("""
                 WITH assistants AS (
                     SELECT m.id, m.session_id, m.time_created,
                         json_extract(m.data, '$.parentID') AS parent,
@@ -442,39 +443,39 @@ def read_opencode_turn_performance(path: Path) -> PerformanceSample | None:
                       AND COALESCE(json_extract(m.data, '$.summary'), 0) = 0
                 )
                 SELECT a.session_id, a.parent, a.completed,
-                    json_extract(u.data, '$.time.created')
+                    json_extract(u.data, '$.time.created'),
+                    child.output, child.reasoning, child.model, child.completed
                 FROM assistants a JOIN message u ON u.id = a.parent AND u.session_id = a.session_id
+                JOIN assistants child ON child.session_id = a.session_id AND child.parent = a.parent
                 WHERE a.position = 1 AND a.finish = 'stop' AND a.error IS NULL
                   AND json_extract(u.data, '$.role') = 'user'
-                ORDER BY a.completed DESC LIMIT 1
-            """).fetchone()
-            if row is None:
-                return None
-            session, parent, end, start = row
-            if type(start) is not int or type(end) is not int or end <= start:
-                return None
-            rows = connection.execute("""
-                SELECT json_extract(data, '$.tokens.output'), json_extract(data, '$.tokens.reasoning'),
-                    json_extract(data, '$.modelID'), json_extract(data, '$.time.completed')
-                FROM message WHERE session_id = ? AND json_extract(data, '$.parentID') = ?
-                  AND json_extract(data, '$.role') = 'assistant'
-                  AND COALESCE(json_extract(data, '$.summary'), 0) = 0
-                LIMIT 10001
-            """, (session, parent)).fetchall()
+                ORDER BY a.completed DESC, a.session_id, a.parent
+            """)
+            samples = []
+            for _, records in groupby(rows, key=lambda row: (row[0], row[1])):
+                total, models, valid = 0, set(), True
+                for count, (_, _, end, start, output, reasoning, model, completed) in enumerate(records, 1):
+                    if (
+                        count > 10000 or type(start) is not int or type(end) is not int or end <= start
+                        or any(type(v) is not int or not 0 <= v <= 2**53 - 1 for v in (output, reasoning))
+                        or type(completed) is not int or not start <= completed <= end
+                    ):
+                        valid = False
+                        continue
+                    total += output + reasoning
+                    models.add(model if isinstance(model, str) and model else "unknown")
+                if valid and models:
+                    samples.append(PerformanceSample(
+                        end / 1000, next(iter(models)) if len(models) == 1 else "mixed", total, end - start,
+                    ))
     except sqlite3.DatabaseError:
-        return None
-    if not rows or len(rows) > 10000:
-        return None
-    total = 0
-    models = set()
-    for output, reasoning, model, completed in rows:
-        if any(type(v) is not int or not 0 <= v <= 2**53 - 1 for v in (output, reasoning)):
-            return None
-        if type(completed) is not int or not start <= completed <= end:
-            return None
-        total += output + reasoning
-        models.add(model if isinstance(model, str) and model else "unknown")
-    return PerformanceSample(end / 1000, next(iter(models)) if len(models) == 1 else "mixed", total, end - start)
+        return []
+    return latest_model_performance(samples)
+
+
+def read_opencode_turn_performance(path: Path) -> PerformanceSample | None:
+    samples = read_opencode_model_turn_performance(path)
+    return samples[0] if samples else None
 
 
 class OpenCodeUsageCollector:
@@ -746,7 +747,7 @@ class OpenCodeUsageCollector:
                 stats, timestamp, collection_method, lifetime_tokens, lifetime_models, daily_history, hourly_history,
             )
             if desktop_database:
-                snapshot["details"].extend(performance_details(read_opencode_turn_performance(desktop_database), scope="turn"))
+                snapshot["details"].extend(model_performance_details(read_opencode_model_turn_performance(desktop_database), scope="turn"))
             points = self._interval_points(stats, timestamp, epoch)
             self._write_checkpoint()
         except (OSError, sqlite3.DatabaseError, subprocess.TimeoutExpired, ValueError, RuntimeError):

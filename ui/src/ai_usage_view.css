@@ -8,7 +8,8 @@
 .ai-ranked-bar__identity { flex-wrap: wrap; min-width: 0; }
 .ai-ranked-bar .ai-performance-samples { flex-wrap: wrap; gap: 5px 8px; }
 .ai-performance-samples > small, .ai-performance-source > small { color: #858b93; font-size: 9px; white-space: nowrap; }
-.ai-ranked-bar .ai-performance-source { flex-wrap: wrap; gap: 5px; }
+.ai-ranked-bar .ai-performance-source { align-items: baseline; display: inline-flex; flex-wrap: wrap; gap: 5px; max-width: 100%; }
+.ai-performance-source > small { overflow-wrap: anywhere; white-space: normal; }
 .ai-performance-tag { align-items: baseline; background: #f3f6f9; border: 1px solid #e2e8ef; border-radius: 5px; color: #5d6978; cursor: help; display: inline-flex; flex-shrink: 0; font: inherit; font-size: 10px; gap: 5px; padding: 3px 6px; position: relative; white-space: nowrap; }
 .ai-performance-tag b { color: #3e5876; font-weight: 650; }
 .ai-performance-tag:focus-visible { outline: 2px solid #4d80cf; outline-offset: 2px; }

@@ -19,7 +19,7 @@ from typing import Any
 
 from infra_sentinel.core.collectors import Collection, CollectorCapability, CollectorContext
 from infra_sentinel.core.model import MetricPoint
-from infra_sentinel.resources.ai.performance import PerformanceSample, performance_details
+from infra_sentinel.resources.ai.performance import PerformanceSample, model_performance_details
 from infra_sentinel.resources.ai.contract import (
     ai_usage_snapshot, daily_usage, detail_group, hourly_usage, localized, model_usage,
     token_metric, usage_window,
@@ -323,8 +323,7 @@ class DshUsageCollector:
         self._seen = seen
         self._snapshot = self._make_snapshot(requests, epoch, len(sessions), errors)
         timed = [r.performance for r in requests if r.settled and r.performance is not None]
-        if timed:
-            self._snapshot["details"].extend(performance_details(max(timed, key=lambda s: s.recorded_epoch)))
+        self._snapshot["details"].extend(model_performance_details(timed))
         return Collection(points=tuple(points), status=self._snapshot["status"], snapshot=self._snapshot)
 
     @staticmethod

@@ -278,7 +278,12 @@ class InfraProjectionTests(unittest.TestCase):
         snapshot = self.ai_snapshot("codex", "Codex", today=100, cumulative=200)
         snapshot["details"] = [{
             "id": "turn-performance",
+            "sample": {"model": "astra", "recorded_at": "2026-10-18T21:00:00+08:00"},
             "metrics": [{"id": "turn-output-rate", "unit": "tokens/s", "value": 37.73}],
+        }, {
+            "id": "turn-performance",
+            "sample": {"model": "sol", "recorded_at": "2026-10-18T21:01:00+08:00"},
+            "metrics": [{"id": "turn-output-rate", "unit": "tokens/s", "value": 42}],
         }, {
             "id": "request-performance",
             "metrics": [{"id": "request-output-rate", "unit": "tokens/s", "value": 24}],
