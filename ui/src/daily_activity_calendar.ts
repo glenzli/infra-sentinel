@@ -70,7 +70,8 @@ function tooltip(
   series: DailyActivitySeries[],
   formatValue: (value: number) => string,
 ): { label: string; markup: string } {
-  const visible = series.filter((item) => (values.get(item.id) ?? 0) > 0);
+  const visible = series.filter((item) => (values.get(item.id) ?? 0) > 0)
+    .sort((left, right) => (values.get(right.id) ?? 0) - (values.get(left.id) ?? 0));
   const total = visible.reduce((sum, item) => sum + (values.get(item.id) ?? 0), 0);
   const heading = `${dayLabel(epoch)} · ${tr("shown total", "图示合计")} ${formatValue(total)}`;
   return {

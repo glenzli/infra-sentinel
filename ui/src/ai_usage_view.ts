@@ -117,8 +117,11 @@ function usageHistory(
   window: AnalysisTimeWindow, visual: AiHistoryVisual, undatedTotal = 0, reference?: PriceReference,
 ): string {
   const hourly = range === "today";
+  const calendar = range === "recorded" && visual === "calendar";
   const totals = dimension === "source" ? aggregateBySource(intervals) : aggregateByModel(intervals);
-  const visible = [...totals.entries()].sort((left, right) => right[1] - left[1]).slice(0, 5).map(([id]) => id);
+  const ranked = [...totals.entries()].sort((left, right) => right[1] - left[1]).map(([id]) => id);
+  // A calendar day's breakdown must retain models outside the all-history top five.
+  const visible = calendar ? ranked : ranked.slice(0, 5);
   const colors = dimension === "source" ? SOURCE_COLORS : MODEL_COLORS;
   const series: TimeBucketBarSeries[] = visible.map((id, index) => ({
     id, label: dimension === "model" ? modelLabel(id) : id, color: colors[index % colors.length],
@@ -143,7 +146,7 @@ function usageHistory(
     ? completeIntervalEpochs(window).map((epoch) => [epoch, valuesByBucket.get(epoch) ?? new Map<string, number>()] as const)
     : completeDailyBuckets(valuesByBucket, range, window);
   const buckets: TimeBucketBarBucket[] = completed.map(([epoch, values]) => ({ epoch, values }));
-  if (range === "recorded" && visual === "calendar") {
+  if (calendar) {
     return renderDailyActivityCalendar(series, [...valuesByBucket.entries()].map(([epoch, values]) => ({ epoch, values })), {
       title: dimension === "source" ? tr("Daily Agent activity", "按 Agent 的每日活动") : tr("Daily model activity", "按模型的每日活动"),
       detail: tr("Latest year of recorded history", "最近一年的已记录历史"),
@@ -196,7 +199,9 @@ function renderOverview(usage: ProjectedUsage, providerSources: Record<string, u
 
 function valueHistory(reference: PriceReference, range: AiTimeRange, window: AnalysisTimeWindow, visual: AiHistoryVisual): string {
   const hourly = range === "today";
-  const visible = [...reference.byModel.entries()].sort((left, right) => right[1] - left[1]).slice(0, 5).map(([id]) => id);
+  const calendar = range === "recorded" && visual === "calendar";
+  const ranked = [...reference.byModel.entries()].sort((left, right) => right[1] - left[1]).map(([id]) => id);
+  const visible = calendar ? ranked : ranked.slice(0, 5);
   const hasOther = reference.byModel.size > visible.length;
   const series: TimeBucketBarSeries[] = visible.map((id, index) => ({ id, label: modelLabel(id), color: MODEL_COLORS[index % MODEL_COLORS.length] }));
   if (hasOther) series.push({ id: "__other__", label: tr("Other", "其他"), color: "#7b8794" });
@@ -213,7 +218,7 @@ function valueHistory(reference: PriceReference, range: AiTimeRange, window: Ana
     ? completeIntervalEpochs(window).map((epoch) => [epoch, valuesByBucket.get(epoch) ?? new Map<string, number>()] as const)
     : completeDailyBuckets(valuesByBucket, range, window);
   const buckets = completed.map(([epoch, values]) => ({ epoch, values }));
-  if (range === "recorded" && visual === "calendar") {
+  if (calendar) {
     return renderDailyActivityCalendar(series, [...valuesByBucket.entries()].map(([epoch, values]) => ({ epoch, values })), {
       title: tr("Daily equivalent value by model", "按模型的每日等价价值"),
       detail: tr("Latest year of recorded history", "最近一年的已记录历史"),
