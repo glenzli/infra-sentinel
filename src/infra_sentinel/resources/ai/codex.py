@@ -97,6 +97,7 @@ class CodexUsageCollector:
         self._clock = clock
         self._poll_seconds = max(1, int(poll_seconds))
         self._next_poll_epoch = 0.0
+        self._checked_at: str | None = None
         self._snapshot: dict[str, Any] = {"available": False, "status": "unavailable"}
 
     @staticmethod
@@ -321,12 +322,13 @@ class CodexUsageCollector:
     def collect(self, context: CollectorContext) -> Collection:
         epoch = float(context.local_sample.get("epoch") or self._clock())
         if epoch < self._next_poll_epoch:
-            return Collection(status=str(self._snapshot.get("status", "ok")), snapshot=self._snapshot)
+            return Collection(status=str(self._snapshot.get("status", "ok")), snapshot=self._snapshot, checked_at=self._checked_at)
         self._next_poll_epoch = epoch + self._poll_seconds
+        self._checked_at = _iso_now(epoch)
         roots = self._rollout_roots_finder()
         if not roots:
             self._snapshot = {"available": False, "status": "unavailable"}
-            return Collection(status="unavailable", snapshot=self._snapshot)
+            return Collection(status="unavailable", snapshot=self._snapshot, checked_at=self._checked_at)
         now = datetime.fromtimestamp(epoch).astimezone()
         try:
             if not self._ledger.rebuilt_at:
@@ -343,6 +345,6 @@ class CodexUsageCollector:
             points = self._points(increments)
         except (OSError, ValueError, json.JSONDecodeError):
             self._snapshot = {**self._snapshot, "available": True, "status": "error", "label": "Codex"}
-            return Collection(status="error", snapshot=self._snapshot)
+            return Collection(status="error", snapshot=self._snapshot, checked_at=self._checked_at)
         self._snapshot = snapshot
-        return Collection(points=points, status="ok", snapshot=snapshot)
+        return Collection(points=points, status="ok", snapshot=snapshot, checked_at=self._checked_at)

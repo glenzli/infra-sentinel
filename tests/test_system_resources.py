@@ -18,9 +18,10 @@ from infra_sentinel.resources.system.disk_health import (  # noqa: E402
     DiskHealthMonitor,
     classify_disk_health,
 )
+from infra_sentinel.resources.system.smartctl import DiskSmartSnapshot, SmartDeviceSnapshot  # noqa: E402
 from infra_sentinel.resources.system.collector import SystemResourceCollector  # noqa: E402
 from infra_sentinel.resources.system.contract import (  # noqa: E402
-    CPU_UTILIZATION, DISK_CAPACITY, DISK_HEALTH, DISK_PROCESS_ATTRIBUTION,
+    CPU_UTILIZATION, DISK_CAPACITY, DISK_HEALTH, DISK_PROCESS_ATTRIBUTION, DISK_SMART,
     DISK_THROUGHPUT,
     MEMORY_CAPACITY, MEMORY_COMPRESSION, MEMORY_PRESSURE, MEMORY_SWAP,
     THERMAL_PRESSURE, HostReading,
@@ -111,6 +112,7 @@ def reading(
     thermal: str | None = "nominal",
     io_available: bool = True,
     disk_health=None,
+    disk_smart=None,
 ) -> HostReading:
     return HostReading(
         observed_at=f"2026-08-11T{12 + int(epoch) // 3_600:02d}:{(int(epoch) // 60) % 60:02d}:00+08:00",
@@ -133,6 +135,7 @@ def reading(
         physical_io_available=io_available,
         thermal_state=thermal,
         disk_health=disk_health,
+        disk_smart=disk_smart,
     )
 
 
@@ -144,6 +147,55 @@ def context(epoch: float) -> CollectorContext:
 
 
 class SystemResourceCollectorTests(unittest.TestCase):
+    def test_optional_smart_is_projected_only_when_readable_and_leaves_native_health_intact(self) -> None:
+        native = classify_disk_health(DiskHealthEvidence(nand_status="Ready"), "native-time")
+        smart = DiskSmartSnapshot("smart-time", (SmartDeviceSnapshot(
+            index=1, state="healthy", temperature_celsius=35, percentage_used=3,
+            lifetime_write_bytes=10_240_000, media_errors=0,
+        ),))
+        collector = SystemResourceCollector(FakeBackend([
+            reading(0, disk_health=native, disk_smart=smart), reading(600, disk_health=native),
+        ]))
+        first = collector.collect(context(0))
+        self.assertIn(DISK_SMART, first.snapshot["capabilities"])
+        self.assertEqual(first.snapshot["disk"]["smart"], smart.as_dict())
+        self.assertEqual(first.snapshot["disk"]["health"], native.as_dict())
+        second = collector.collect(context(600))
+        self.assertNotIn(DISK_SMART, second.snapshot["capabilities"])
+        self.assertNotIn("smart", second.snapshot["disk"])
+        self.assertEqual(second.snapshot["disk"]["health"], native.as_dict())
+        self.assertEqual(second.snapshot["status"], "healthy")
+        self.assertFalse(any("smart" in point.metric for point in second.points))
+
+    def test_explicit_critical_smart_health_immediately_reaches_host_attention(self) -> None:
+        native = classify_disk_health(DiskHealthEvidence(nand_status="Ready"), "native-time")
+        smart = DiskSmartSnapshot("smart-time", (SmartDeviceSnapshot(index=1, state="critical"),))
+        collector = SystemResourceCollector(FakeBackend([reading(0, disk_health=native, disk_smart=smart)]))
+        result = collector.collect(context(0))
+        self.assertEqual(result.snapshot["status"], "critical")
+        self.assertIn("disk_smart_critical", result.snapshot["reasons"])
+        self.assertEqual(result.snapshot["disk"]["health"]["state"], "healthy")
+
+    def test_smart_warning_uses_existing_confirmation_and_recovery_policy(self) -> None:
+        smart = DiskSmartSnapshot("smart-time", (SmartDeviceSnapshot(index=1, state="warning", media_errors=1),))
+        healthy = DiskSmartSnapshot("smart-time", (SmartDeviceSnapshot(index=1, state="healthy", media_errors=0),))
+        collector = SystemResourceCollector(FakeBackend([
+            reading(0, disk_smart=smart), reading(5, disk_smart=smart), reading(10, disk_smart=smart),
+            reading(15, disk_smart=healthy), reading(20, disk_smart=healthy),
+        ]))
+        states = [collector.collect(context(epoch)).snapshot for epoch in [0, 5, 10, 15, 20]]
+        self.assertEqual([state["status"] for state in states], ["healthy", "healthy", "warning", "warning", "healthy"])
+        self.assertIn("disk_smart_warning", states[2]["reasons"])
+        self.assertEqual(states[-1]["reasons"], [])
+
+    def test_healthy_smart_cannot_override_native_disk_failure(self) -> None:
+        native = classify_disk_health(DiskHealthEvidence(nand_status="Failed"), "native-time")
+        smart = DiskSmartSnapshot("smart-time", (SmartDeviceSnapshot(index=1, state="healthy"),))
+        collector = SystemResourceCollector(FakeBackend([reading(0, disk_health=native, disk_smart=smart)]))
+        result = collector.collect(context(0))
+        self.assertEqual(result.snapshot["status"], "critical")
+        self.assertIn("disk_health_critical", result.snapshot["reasons"])
+
     def test_macos_helpers_are_grouped_under_the_parent_app(self) -> None:
         app = app_identity(
             "/Applications/Codex.app/Contents/Frameworks/Codex Helper.app/Contents/MacOS/Codex Helper",

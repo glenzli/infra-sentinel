@@ -8,7 +8,7 @@ contact the Agent, Mihomo, a VPS, a facility, or an upstream provider.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 from pathlib import Path
 from typing import Any
@@ -25,6 +25,45 @@ from infra_sentinel.resources.ai.contract import (
 
 
 SCHEMA = "20260812.1"
+
+
+def diagnostic_history(observed: datetime) -> dict[str, Any]:
+    """Anonymous completed episodes; no runtime files or collectors are used."""
+    observed_at = observed.isoformat(timespec="seconds")
+    memory_start = (observed - timedelta(hours=2)).isoformat(timespec="seconds")
+    source_start = (observed - timedelta(hours=1)).isoformat(timespec="seconds")
+    memory = {
+        "diagnostic_id": "diagnostic:demo-memory", "category": "system",
+        "source_id": "local-system", "source_label": "Local system",
+        "code": "system.memory_pressure", "title": "Memory pressure", "title_zh": "内存压力",
+        "detail": "The system collector confirmed elevated memory pressure.",
+        "detail_zh": "系统采集器已确认内存压力升高。", "started_at": memory_start,
+        "observation_status": "observed",
+    }
+    source_issue = {
+        "diagnostic_id": "diagnostic:demo-source", "category": "source",
+        "source_id": "codex", "source_label": "Codex", "code": "source.collection_failed",
+        "title": "Source collection failed", "title_zh": "来源采集失败",
+        "detail": "An existing source could not be collected.", "detail_zh": "现有来源无法完成采集。",
+        "started_at": source_start, "observation_status": "observed",
+    }
+    events = [
+        {**source_issue, "id": "event:5", "severity": "warning", "transition": "recovered", "observed_at": (observed - timedelta(minutes=50)).isoformat(timespec="seconds")},
+        {**source_issue, "id": "event:4", "severity": "warning", "transition": "raised", "observed_at": source_start},
+        {**memory, "id": "event:3", "severity": "critical", "transition": "recovered", "observed_at": (observed - timedelta(minutes=75)).isoformat(timespec="seconds")},
+        {**memory, "id": "event:2", "severity": "critical", "transition": "changed", "observed_at": (observed - timedelta(minutes=100)).isoformat(timespec="seconds")},
+        {**memory, "id": "event:1", "severity": "warning", "transition": "raised", "observed_at": memory_start},
+    ]
+    return {
+        "schema": "20261022.1", "available": True, "observed_at": observed_at,
+        "generated_at": observed_at, "history_started_at": memory_start,
+        "retention_days": 30, "active_count": 0, "active": [], "events": events,
+        "truncated": False, "freshness": "current",
+        "coverage": [
+            {"id": "diagnostic:demo-source", "category": "source", "source_id": "codex", "source_label": "Codex", "code": "source.collection_failed", "observed_at": observed_at, "observation_status": "observed", "freshness": "current"},
+            {"id": "diagnostic:demo-memory", "category": "system", "source_id": "local-system", "source_label": "Local system", "code": "system.memory_pressure", "observed_at": observed_at, "observation_status": "observed", "freshness": "current"},
+        ],
+    }
 
 
 def source(
@@ -333,6 +372,7 @@ def projection(observed: datetime | None = None) -> dict[str, object]:
         "updated_at": observed_at,
         "protocol": {"schema": SCHEMA, "transport": "local-files"},
         "infra": {
+            "diagnostics": diagnostic_history(observed),
             "overall": {"status": "healthy", "active_alerts": 0},
             "resources": resources,
             "sources": all_sources,

@@ -17,7 +17,7 @@ from infra_sentinel.core.model import MetricPoint
 from infra_sentinel.core.status_stability import StatusDecision, StatusStabilizer
 from infra_sentinel.resources.system.disk_health import DiskHealthSnapshot
 from infra_sentinel.resources.system.contract import (
-    CPU_UTILIZATION, DISK_CAPACITY, DISK_PROCESS_ATTRIBUTION, DISK_THROUGHPUT,
+    CPU_UTILIZATION, DISK_CAPACITY, DISK_PROCESS_ATTRIBUTION, DISK_SMART, DISK_THROUGHPUT,
     MEMORY_CAPACITY, MEMORY_COMPRESSION, MEMORY_PRESSURE, MEMORY_SWAP, THERMAL_PRESSURE,
     HostReading, SystemResourceBackend,
 )
@@ -98,6 +98,13 @@ def _health(reading: HostReading) -> tuple[str, list[str]]:
         level = "critical"
     elif disk_health is not None and disk_health.state == "warning":
         reasons.append("disk_health_warning")
+        if level == "healthy":
+            level = "warning"
+    if reading.disk_smart is not None and reading.disk_smart.state == "critical":
+        reasons.append("disk_smart_critical")
+        level = "critical"
+    elif reading.disk_smart is not None and reading.disk_smart.state == "warning":
+        reasons.append("disk_smart_warning")
         if level == "healthy":
             level = "warning"
     return level, reasons
@@ -298,6 +305,7 @@ class SystemResourceCollector:
         direct_reason = (
             "disk_space_critical" in candidate_reasons
             or "disk_health_critical" in candidate_reasons
+            or "disk_smart_critical" in candidate_reasons
             or (candidate_status == "warning" and "disk_space_low" in candidate_reasons)
         )
         immediate = worsening and direct_reason
@@ -409,6 +417,10 @@ class SystemResourceCollector:
         }
         if self._latest_process_io is not None:
             disk_snapshot["attribution"] = self._latest_process_io.as_dict()
+        if reading.disk_smart is not None:
+            disk_snapshot["smart"] = reading.disk_smart.as_dict()
+            if DISK_SMART not in capabilities:
+                capabilities += (DISK_SMART,)
         snapshot = {
             "schema": SYSTEM_RESOURCE_SCHEMA,
             "available": True,

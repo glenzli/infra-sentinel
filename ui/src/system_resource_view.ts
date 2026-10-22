@@ -46,6 +46,12 @@ function supports(snapshot: SystemResourceProjection | undefined, capability: st
   return snapshot?.capabilities?.includes(capability) ?? false;
 }
 
+function observedDiskHealth(snapshot?: SystemResourceProjection): string {
+  const states = [snapshot?.disk?.health?.state, snapshot?.disk?.smart?.state];
+  return states.includes("critical") ? "critical" : states.includes("warning") ? "warning"
+    : states.includes("healthy") ? "healthy" : "unknown";
+}
+
 function platformLabel(platform: string | undefined): string {
   if (platform === "macos") return tr("This Mac", "本机 Mac");
   if (platform === "windows") return tr("This Windows PC", "本机 Windows PC");
@@ -129,6 +135,20 @@ function systemDiagnostics(snapshot?: SystemResourceProjection): SystemDiagnosti
       basis: tr("The native disk check reported a critical device state.", "原生磁盘检查报告设备处于严重状态。"),
       action: tr("Back up important data immediately and arrange device-level diagnosis or replacement.", "立即备份重要数据，并安排设备级诊断或更换。"),
     },
+    disk_smart_warning: {
+      level: "warning",
+      title: tr("SSD SMART needs attention", "SSD SMART 需关注"),
+      current: diskHealth(disk.smart?.state ?? "unknown"),
+      basis: tr("SMART reported media errors, depleted spare capacity, or rated endurance usage of at least 100%.", "SMART 记录了介质错误、备用空间不足，或额定耐久度已用比例达到 100%。"),
+      action: tr("Review the SSD facts below and keep an up-to-date backup.", "查看下方 SSD 数据，并保持备份更新。"),
+    },
+    disk_smart_critical: {
+      level: "critical",
+      title: tr("SSD SMART reports a critical warning", "SSD SMART 报告关键警告"),
+      current: diskHealth(disk.smart?.state ?? "unknown"),
+      basis: tr("The device reported a failed SMART health check or a nonzero NVMe critical warning.", "设备报告 SMART 健康检查未通过，或 NVMe 关键警告不为零。"),
+      action: tr("Back up important data and arrange device-level diagnosis.", "备份重要数据，并安排设备级诊断。"),
+    },
   };
   return (snapshot.reasons ?? []).map((code) => {
     const diagnostic = known[code];
@@ -206,7 +226,7 @@ export function renderSystemResourceCard(
   const healthFacts = [
     diagnostic ? `${diagnostic.title} · ${diagnostic.current}` : "",
     supports(snapshot, "thermal.pressure") ? `${tr("Thermal", "温度压力")} ${escapeHtml(thermal(snapshot?.thermal?.state ?? "unavailable"))}` : "",
-    supports(snapshot, "disk.health") ? `${tr("Disk", "磁盘")} ${escapeHtml(diskHealth(disk?.health?.state ?? "unknown"))}` : "",
+    supports(snapshot, "disk.health") || supports(snapshot, "disk.smart") ? `${tr("Disk", "磁盘")} ${escapeHtml(diskHealth(observedDiskHealth(snapshot)))}` : "",
     dominantApp ? `${tr("Top I/O", "主要 I/O")} ${escapeHtml(appLabel(dominantApp.id, dominantApp.label))}` : "",
   ].filter(Boolean).join(" · ") || tr("Platform capabilities detected", "已按平台能力检测");
   const todayState = today?.error
@@ -284,6 +304,28 @@ function controls(snapshot: SystemAnalysisSnapshot): string {
   return `<section class="system-analysis-toolbar"><span>${tr("Time range", "时间范围")}</span><div>${ranges.map(([range, label]) => `<button type="button" class="system-range${snapshot.range === range ? " is-active" : ""}" data-system-range="${range}">${label}</button>`).join("")}</div></section>`;
 }
 
+function renderDiskSmart(snapshot?: SystemResourceProjection): string {
+  const smart = snapshot?.disk?.smart;
+  if (!supports(snapshot, "disk.smart") || !smart?.devices.length) return "";
+  const recorded = new Date(smart.observed_at);
+  const when = Number.isNaN(recorded.getTime()) ? "" : recorded.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const devices = smart.devices.map((device) => {
+    const fields: Array<[string, number | null, (value: number) => string]> = [
+      [tr("Temperature", "温度"), device.temperature_celsius, (value) => `${count(value)} °C`],
+      [tr("Endurance used", "寿命已用"), device.percentage_used, percent],
+      [tr("Available spare", "备用空间"), device.available_spare_percent, percent],
+      [tr("Lifetime reads", "累计读取"), device.lifetime_read_bytes, formatBytes],
+      [tr("Lifetime writes", "累计写入"), device.lifetime_write_bytes, formatBytes],
+      [tr("Power-on hours", "通电时长"), device.power_on_hours, (value) => `${count(value)} ${tr("h", "小时")}`],
+      [tr("Media errors", "介质错误"), device.media_errors, count],
+    ];
+    const label = smart.devices.length === 1 ? "NVMe SSD" : `NVMe SSD ${device.index}`;
+    return `<section><header><h4>${escapeHtml(label)}</h4><span class="pill pill--${escapeHtml(device.state)}">${escapeHtml(diskHealth(device.state))}</span></header><dl>${fields.filter(([, value]) => value != null && Number.isFinite(value)).map(([label, value, format]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(format(value!))}</dd></div>`).join("")}</dl></section>`;
+  }).join("");
+  const minutes = count(smart.interval_seconds / 60);
+  return `<article class="detail-panel system-smart" data-system-smart><div class="detail-panel__heading"><h3>${tr("SSD health", "SSD 健康")}</h3><span>SMART${when ? ` · ${escapeHtml(when)}` : ""}</span></div><div class="system-smart__devices">${devices}</div><p class="panel-footnote">${escapeHtml(tr(`Read every ${minutes} minutes when available. Endurance used is the device's estimate of rated endurance consumed, not a remaining-time prediction.`, `有可读数据时每 ${minutes} 分钟读取；寿命已用是设备对额定耐久度消耗的估计，不是剩余时间预测。`))}</p></article>`;
+}
+
 export function renderSystemResourcePage(
   resource: ResourceProjection,
   snapshot: SystemResourceProjection | undefined,
@@ -323,7 +365,7 @@ export function renderSystemResourcePage(
     hasCpu ? `<article class="network-card network-card--blue"><p>CPU</p><strong>${percent(snapshot?.cpu?.percent)}</strong><small>${tr("current host utilization", "当前整机使用率")}</small></article>` : "",
     hasMemoryPressure ? `<article class="network-card network-card--purple"><p>${tr("Memory pressure", "内存压力")}</p><strong>${escapeHtml(pressure(memory?.pressure ?? "unavailable"))}</strong><small>${formatBytes(memory?.available_bytes)} ${tr("available", "可用")} · ${formatBytes(memory?.compressed_bytes)} ${tr("compressed", "压缩")}</small></article>`
       : hasMemoryCapacity ? `<article class="network-card network-card--purple"><p>${tr("Memory available", "可用内存")}</p><strong>${formatBytes(memory?.available_bytes)}</strong><small>${formatBytes(memory?.total_bytes)} ${tr("physical memory", "物理内存")}</small></article>` : "",
-    hasDiskHealth ? `<article class="network-card network-card--orange"><p>${tr("Disk health", "磁盘健康")}</p><strong>${escapeHtml(diskHealth(disk?.health?.state ?? "unknown"))}</strong><small>${tr("native check every 6 hours", "原生状态每 6 小时读取")}</small></article>`
+    hasDiskHealth ? `<article class="network-card network-card--orange"><p>${tr("Disk health", "磁盘健康")}</p><strong>${escapeHtml(diskHealth(observedDiskHealth(snapshot)))}</strong><small>${supports(snapshot, "disk.smart") ? tr("Native status + SMART", "原生状态 + SMART") : tr("native check every 6 hours", "原生状态每 6 小时读取")}</small></article>`
       : hasDiskCapacity ? `<article class="network-card network-card--orange"><p>${tr("Disk available", "磁盘可用")}</p><strong>${formatBytes(disk?.free_bytes)}</strong><small>${percent(disk?.used_percent)} ${tr("used", "已使用")}</small></article>` : "",
     hasSwap ? `<article class="network-card"><p>Swap</p><strong>${formatBytes(memory?.swap_used_bytes)}</strong><small>↑ ${formatBytes(memory?.swapout_bytes_per_second)}/s · ↓ ${formatBytes(memory?.swapin_bytes_per_second)}/s</small></article>` : "",
   ].filter(Boolean).join("");
@@ -349,7 +391,7 @@ export function renderSystemResourcePage(
   const pressureItems = [
     hasMemoryPressure ? `<li><span>${tr("Memory pressure", "内存压力")}</span><strong>${escapeHtml(pressure(memory?.pressure ?? "unavailable"))}</strong></li>` : "",
     hasThermal ? `<li><span>${tr("Thermal state", "温度压力")}</span><strong>${escapeHtml(thermal(snapshot?.thermal?.state ?? "unavailable"))}</strong></li>` : "",
-    hasDiskHealth ? `<li><span>${tr("Disk health", "磁盘健康")}</span><strong>${escapeHtml(diskHealth(disk?.health?.state ?? "unknown"))}</strong></li>` : "",
+    hasDiskHealth ? `<li><span>${tr("Disk health", "磁盘健康")}</span><strong>${escapeHtml(diskHealth(observedDiskHealth(snapshot)))}</strong></li>` : "",
   ].filter(Boolean).join("");
   const pressurePanel = pressureItems ? `<article class="detail-panel"><div class="detail-panel__heading"><h3>${tr("System pressure", "系统压力")}</h3><span>${escapeHtml(platformLabel(snapshot?.platform))}</span></div><ul class="traffic-list">${pressureItems}</ul></article>` : "";
   const secondary = currentIoPanel || pressurePanel ? `<section class="system-secondary-grid">${currentIoPanel}${pressurePanel}</section>` : "";
@@ -357,5 +399,5 @@ export function renderSystemResourcePage(
   const currentAppRows = currentApps.map((app) => `<li><span>${escapeHtml(appLabel(app.id, app.label))}<small>${new Intl.NumberFormat().format(app.process_count)} ${tr("processes", "个进程")}</small></span><strong>${tr("Read", "读")} ${formatBytes(app.read_bytes_per_second)}/s · ${tr("Write", "写")} ${formatBytes(app.write_bytes_per_second)}/s</strong></li>`).join("");
   const rangeAppRows = appTotals.map((app) => `<li><span>${escapeHtml(appLabel(app.id, app.label))}</span><strong>${tr("Read", "读")} ${formatBytes(app.readBytes)} · ${tr("Write", "写")} ${formatBytes(app.writeBytes)}</strong></li>`).join("");
   const attributionPanel = hasProcessAttribution ? `<article class="detail-panel system-attribution"><div class="detail-panel__heading"><h3>${tr("Disk I/O by App", "按 App 的磁盘 I/O")}</h3><span>${tr("best-effort attribution", "尽力归因")}</span></div><div class="system-attribution__meta"><span>${tr("Current coverage", "当前覆盖率")} <strong>${ratio(disk?.attribution?.coverage_ratio)}</strong></span><span>${rangeLabel(analysis.range)} ${tr("coverage", "覆盖率")} <strong>${ratio(rangeCoverage)}</strong></span><span>${tr("Observed", "已观察")} <strong>${new Intl.NumberFormat().format(disk?.attribution?.observed_processes ?? 0)}</strong> ${tr("processes", "个进程")}</span></div><div class="system-attribution__columns"><section><h4>${tr("Current rate", "当前速率")}</h4><ul class="traffic-list system-app-list">${currentAppRows || `<li class="system-app-list__empty">${tr("Establishing the first process-counter interval.", "正在建立首个进程计数区间。")}</li>`}</ul></section><section><h4>${rangeLabel(analysis.range)}</h4><ul class="traffic-list system-app-list">${rangeAppRows || `<li class="system-app-list__empty">${tr("History appears after the next low-frequency rollup.", "下一个低频汇总完成后显示历史。")}</li>`}</ul></section></div><p class="system-attribution__note">${tr("Process counters can miss short-lived processes or inaccessible system services, and they are not expected to equal physical-device counters exactly.", "进程计数可能遗漏短命进程或无权读取的系统服务，不应预期与物理设备计数完全相等。")}</p></article>` : "";
-  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("LOCAL SYSTEM", "本机系统")}</p><h2>${escapeHtml(platformLabel(snapshot?.platform))}</h2></div><span class="pill pill--${escapeHtml(resource.status)}">${escapeHtml(overallStatus(resource.status))}</span></div>${diagnosticPanel}<div class="system-current-grid">${currentCards}</div>${controls(analysis)}<section class="system-range-summary">${rangeSummary}</section>${historyState}${secondary}${attributionPanel}<p class="system-privacy">${tr("Host counters and bounded App I/O labels are sampled in memory. Completed 15-minute buckets are persisted; older history is compacted to hourly and daily resolution. No file names, paths, process arguments, window titles, or user content are recorded. Supported disk health checks run every six hours.", "整机计数与有界 App I/O 标签先在内存采样，仅将完成的 15 分钟桶落盘；较旧历史会压缩为小时和每日粒度。不记录文件名、路径、进程参数、窗口标题或用户内容；平台支持时，磁盘健康每 6 小时读取一次。")}</p></section>`;
+  return `<section class="resource-section resource-section--detail"><div class="section-heading"><div><p class="eyebrow">${tr("LOCAL SYSTEM", "本机系统")}</p><h2>${escapeHtml(platformLabel(snapshot?.platform))}</h2></div><span class="pill pill--${escapeHtml(resource.status)}">${escapeHtml(overallStatus(resource.status))}</span></div>${diagnosticPanel}<div class="system-current-grid">${currentCards}</div>${renderDiskSmart(snapshot)}${controls(analysis)}<section class="system-range-summary">${rangeSummary}</section>${historyState}${secondary}${attributionPanel}<p class="system-privacy">${tr("Host counters and bounded App I/O labels are sampled in memory. Completed 15-minute buckets are persisted; older history is compacted to hourly and daily resolution. No file names, paths, process arguments, window titles, or user content are recorded. Supported native disk health checks run every six hours.", "整机计数与有界 App I/O 标签先在内存采样，仅将完成的 15 分钟桶落盘；较旧历史会压缩为小时和每日粒度。不记录文件名、路径、进程参数、窗口标题或用户内容；平台支持时，原生磁盘健康每 6 小时读取一次。")}</p></section>`;
 }

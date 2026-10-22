@@ -178,6 +178,9 @@ class _LatestRemoteSampleCollector:
         state = server.get(self.state_key) if isinstance(server, dict) else None
         if not isinstance(state, dict):
             return Collection(status="waiting")
+        checked_at = state.get("checked_at")
+        if not isinstance(checked_at, str):
+            checked_at = None
         sample = state.get("last_sample") if isinstance(state.get("last_sample"), dict) else None
         identity = _sample_identity(sample) if isinstance(sample, dict) else None
         status = str(state.get("status") or ("ok" if sample is not None else "waiting"))
@@ -186,9 +189,9 @@ class _LatestRemoteSampleCollector:
             # replay evidence from before the failure as a fresh interval.
             if identity is not None:
                 self._last_sample_identity = identity
-            return Collection(status=status)
+            return Collection(status=status, checked_at=checked_at)
         if sample is None or identity == self._last_sample_identity:
-            return Collection(status=status)
+            return Collection(status=status, checked_at=checked_at)
         self._last_sample_identity = identity
         try:
             sample_epoch = float(sample.get("epoch") or 0)
@@ -198,8 +201,8 @@ class _LatestRemoteSampleCollector:
             # A sample retained from before this Agent started is already in
             # the raw log/history. Establish a restart baseline without
             # replaying it; later identities are emitted normally.
-            return Collection(status=status)
-        return Collection(points=tuple(self.adapter(sample)), status=status)
+            return Collection(status=status, checked_at=checked_at)
+        return Collection(points=tuple(self.adapter(sample)), status=status, checked_at=checked_at)
 
 
 def _vps_collector(server_id: str, billing_mode: str) -> _LatestRemoteSampleCollector:

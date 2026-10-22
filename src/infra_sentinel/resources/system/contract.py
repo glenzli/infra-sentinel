@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from infra_sentinel.resources.system.disk_health import DiskHealthSnapshot
+from infra_sentinel.resources.system.smartctl import DiskSmartSnapshot
 
 
 CPU_UTILIZATION = "cpu.utilization"
@@ -17,6 +18,7 @@ DISK_CAPACITY = "disk.capacity"
 DISK_THROUGHPUT = "disk.throughput"
 DISK_PROCESS_ATTRIBUTION = "disk.process-attribution"
 DISK_HEALTH = "disk.health"
+DISK_SMART = "disk.smart"
 THERMAL_PRESSURE = "thermal.pressure"
 
 
@@ -42,6 +44,7 @@ class HostReading:
     physical_io_available: bool
     thermal_state: str | None
     disk_health: DiskHealthSnapshot | None = None
+    disk_smart: DiskSmartSnapshot | None = None
 
 
 class SystemResourceBackend(Protocol):

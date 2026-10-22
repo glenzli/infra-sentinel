@@ -8,6 +8,7 @@ projection emitted here is private to Infra Sentinel.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import logging
 from pathlib import Path
 import threading
@@ -56,6 +57,7 @@ class _ObservedFacility:
     observation: FacilityObservation | None
     last_success_epoch: float | None
     next_poll_epoch: float
+    last_attempt_epoch: float
     error_kind: str | None = None
     stability: StatusStabilizer | None = None
     confirmation: StatusDecision | None = None
@@ -74,6 +76,7 @@ class _ObservedFacility:
             "label": observation.label if observation else self.selection.adapter.label,
             "status": self.status,
             "observed_at": observation.observed_at if observation else None,
+            "checked_at": datetime.fromtimestamp(self.last_attempt_epoch, timezone.utc).isoformat(),
             "protocol": self.selection.adapter.protocol,
             "protocol_version": self.selection.protocol_version,
             "binding": self.selection.offer.binding,
@@ -110,6 +113,7 @@ class FacilityMonitor:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._discovery_error: str | None = None
+        self._discovery_checked_epoch: float | None = None
         self._discovery_stability = StatusStabilizer(
             "healthy",
             DISCOVERY_STATUS_RANKS,
@@ -241,6 +245,7 @@ class FacilityMonitor:
             ),
             last_success_epoch=current_epoch,
             next_poll_epoch=current_epoch + POLL_SECONDS,
+            last_attempt_epoch=current_epoch,
             error_kind=None if accepted else (prior.error_kind if prior else None),
             stability=stability,
             confirmation=decision,
@@ -267,6 +272,7 @@ class FacilityMonitor:
             observation=stable_prior.observation if stable_prior else None,
             last_success_epoch=stable_prior.last_success_epoch if stable_prior else None,
             next_poll_epoch=current_epoch + POLL_SECONDS,
+            last_attempt_epoch=current_epoch,
             error_kind=type(error).__name__ if accepted else None,
             stability=stability,
             confirmation=decision,
@@ -347,6 +353,7 @@ class FacilityMonitor:
         with self._lock:
             self._records = updated
             self._discovery_error = discovery_error
+            self._discovery_checked_epoch = current_epoch
             self._discovery_confirmation = discovery_decision
 
     def snapshot(self) -> dict[str, Any]:
@@ -354,6 +361,7 @@ class FacilityMonitor:
             items = [record.projection() for record in self._records.values()]
             discovery_error = self._discovery_error
             discovery_confirmation = self._discovery_confirmation
+            discovery_checked_epoch = self._discovery_checked_epoch
         items.sort(key=lambda item: (str(item.get("label") or "").lower(), str(item.get("id") or "")))
         healthy = sum(1 for item in items if item["status"] == "healthy")
         attention = sum(1 for item in items if item["status"] not in {"healthy", "starting"})
@@ -376,6 +384,10 @@ class FacilityMonitor:
             "healthy": healthy,
             "attention": attention,
             "items": items,
+            "checked_at": (
+                datetime.fromtimestamp(discovery_checked_epoch, timezone.utc).isoformat()
+                if discovery_checked_epoch is not None else None
+            ),
         }
         if discovery_error:
             projection["error_kind"] = discovery_error

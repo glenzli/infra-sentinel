@@ -317,6 +317,7 @@ class VpsMonitor:
             return self.public_state
         if force or current >= self.next_poll_at:
             self.next_poll_at = current + self.config.poll_seconds
+            checked_at = iso_now(current)
             try:
                 raw = self.reader(self.config)
                 was_uninitialized = self.tracker.previous is None
@@ -336,6 +337,7 @@ class VpsMonitor:
                     "ssh_host": self.config.ssh_host,
                     "billing_mode": self.config.billing_mode,
                     "updated_at": sample["timestamp"],
+                    "checked_at": checked_at,
                     "interface": sample["interface"],
                     "last_sample": sample,
                     "cycle": self._cycle(float(sample["epoch"])),
@@ -349,6 +351,7 @@ class VpsMonitor:
                 previous.update({
                     "enabled": True,
                     "status": decision.status,
+                    "checked_at": checked_at,
                     "cycle": self._cycle(current),
                 })
                 previous.pop("confirmation", None)

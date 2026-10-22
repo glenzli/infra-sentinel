@@ -505,6 +505,7 @@ class OpenCodeUsageCollector:
         self._clock = clock
         self._poll_seconds = poll_seconds
         self._next_poll_epoch = 0.0
+        self._checked_at: str | None = None
         self._snapshot: dict[str, Any] = {"available": False, "status": "unavailable"}
         self._previous: dict[str, int | float] = {}
         self._checkpoint_path = checkpoint_path
@@ -709,13 +710,14 @@ class OpenCodeUsageCollector:
     def collect(self, context: CollectorContext) -> Collection:
         epoch = float(context.local_sample.get("epoch") or self._clock())
         if epoch < self._next_poll_epoch:
-            return Collection(status=str(self._snapshot.get("status", "ok")), snapshot=self._snapshot)
+            return Collection(status=str(self._snapshot.get("status", "ok")), snapshot=self._snapshot, checked_at=self._checked_at)
         self._next_poll_epoch = epoch + self._poll_seconds
+        self._checked_at = _iso_now(epoch)
         desktop_database = self._desktop_database_finder()
         executable = None if desktop_database else self._executable_finder()
         if not executable and not desktop_database:
             self._snapshot = {"available": False, "status": "unavailable"}
-            return Collection(status="unavailable", snapshot=self._snapshot)
+            return Collection(status="unavailable", snapshot=self._snapshot, checked_at=self._checked_at)
         try:
             timestamp = _iso_now(epoch)
             self._load_checkpoint(epoch)
@@ -755,6 +757,6 @@ class OpenCodeUsageCollector:
             # state unmistakable.  A parser or CLI failure must never turn a
             # known total into a misleading zero.
             self._snapshot = {**self._snapshot, "available": True, "status": "error", "label": "OpenCode"}
-            return Collection(status="error", snapshot=self._snapshot)
+            return Collection(status="error", snapshot=self._snapshot, checked_at=self._checked_at)
         self._snapshot = snapshot
-        return Collection(points=points, status="ok", snapshot=snapshot)
+        return Collection(points=points, status="ok", snapshot=snapshot, checked_at=self._checked_at)

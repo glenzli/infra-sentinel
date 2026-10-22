@@ -59,6 +59,8 @@ class Collection:
     points: tuple[MetricPoint, ...] = ()
     status: str = "ok"
     snapshot: dict[str, Any] | None = None
+    # The source's real collection attempt, preserved when returning a cache.
+    checked_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,7 @@ class CollectorRun:
     points: tuple[MetricPoint, ...] = ()
     snapshot: dict[str, Any] | None = None
     error_kind: str | None = None
+    checked_at: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         payload = {
@@ -81,6 +84,8 @@ class CollectorRun:
             payload["error_kind"] = self.error_kind
         if self.snapshot is not None:
             payload["snapshot"] = self.snapshot
+        if self.checked_at is not None:
+            payload["checked_at"] = self.checked_at
         return payload
 
 
@@ -141,12 +146,15 @@ class CollectorRegistry:
             try:
                 result = collector.collect(context)
             except Exception as exc:
+                timestamp = context.local_sample.get("timestamp")
+                checked_at = timestamp if isinstance(timestamp, str) else None
                 decision = availability.observe("error")
                 if decision.status == "error":
                     runs.append(CollectorRun(
                         capability=capability,
                         status="error",
                         error_kind=type(exc).__name__,
+                        checked_at=checked_at,
                     ))
                 else:
                     previous = self._last_available.get(capability.id)
@@ -154,42 +162,48 @@ class CollectorRegistry:
                         capability=capability,
                         status=previous.status if previous is not None else "waiting",
                         snapshot=previous.snapshot if previous is not None else None,
+                        checked_at=previous.checked_at if previous is not None else checked_at,
                     ))
                 continue
             if isinstance(result, Collection):
                 points = result.points
                 status = result.status
                 snapshot = result.snapshot
+                checked_at = result.checked_at
             else:
                 points = tuple(result)
                 status = "ok"
                 snapshot = None
+                checked_at = None
             if status == "error":
                 decision = availability.observe("error")
                 if decision.status == "error":
-                    run = CollectorRun(capability=capability, status="error")
+                    run = CollectorRun(capability=capability, status="error", checked_at=checked_at)
                 else:
                     previous = self._last_available.get(capability.id)
                     run = CollectorRun(
                         capability=capability,
                         status=previous.status if previous is not None else "waiting",
                         snapshot=previous.snapshot if previous is not None else None,
+                        checked_at=previous.checked_at if previous is not None else checked_at,
                     )
             else:
                 decision = availability.observe("available")
                 if decision.status == "error":
-                    run = CollectorRun(capability=capability, status="error")
+                    run = CollectorRun(capability=capability, status="error", checked_at=checked_at)
                 else:
                     run = CollectorRun(
                         capability=capability,
                         status=status,
                         points=points,
                         snapshot=snapshot,
+                        checked_at=checked_at,
                     )
                     self._last_available[capability.id] = CollectorRun(
                         capability=capability,
                         status=status,
                         snapshot=snapshot,
+                        checked_at=checked_at,
                     )
             runs.append(run)
         return tuple(runs)

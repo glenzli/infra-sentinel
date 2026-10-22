@@ -14,7 +14,7 @@ Infra Sentinel 是一个 macOS 桌面监控工具，用于查看网络流量、A
 
 - **本机网络**：Mihomo / Clash Meta 兼容内核的连接、域名和代理路径归因。
 - **AI 用量**：Codex 桌面端与 CLI、OpenCode Desktop、DSH（DeepSeek Harness）、Antigravity、Antigravity IDE / CLI，以及已接入的 Infer Runtime。
-- **本机资源**：CPU、内存压力、Swap、磁盘吞吐、IOPS、容量、温度压力，以及尽力而为的 App 磁盘 I/O 归因。
+- **本机资源**：CPU、内存压力、Swap、磁盘吞吐、IOPS、容量、温度压力，以及尽力而为的 App 磁盘 I/O 归因。macOS 自动探测已安装的 `smartctl`，有可读 NVMe SMART 数据时补充 SSD 温度、寿命已用比例和累计读写量；每 10 分钟读取，不自动安装或提权。
 - **远端主机**：通过本机 `~/.ssh/config` Host 别名读取 Linux 网卡统计；可选接入 Xray 用户逻辑流量。
 - **上游状态**：OpenAI、Claude、DeepSeek、Kimi / Moonshot 和 Cursor 的公开官方状态页。
 - **本地设施**：通过 [Infra Protocol](https://github.com/glenzli/infra-protocol) 发现 PCP、Infer Runtime、Dev Mesh Observer 等兼容服务。
@@ -68,6 +68,20 @@ OpenCode 按已完成用户轮次汇总输出并显示轮次平均（含工具�
 PYTHONPATH=src python3 -m infra_sentinel.cli.codex_usage_audit \
   --from 2026-08-22 --to 2026-08-23 --timezone Asia/Shanghai
 ```
+
+## 诊断历史
+
+概览中的诊断入口汇总采集来源、网络、本机资源、本地设施和上游状态的异常。历史页按时间和类别查看首次发现、级别变化与确认恢复；重复采样和 App 重启不会重复创建同一异常。来源消失、停用或数据过期时，未解决的异常保留为待确认，不会显示成恢复。
+
+诊断历史从启用后开始记录，最多保留 30 天并受条数上限约束。记录仅包含固定原因、级别、来源标识和观测时间，不保存原始错误、任务内容或请求参数，也不自动判定跨资源因果关系。
+
+其他 Agent 可通过只读 JSON 查询获得同一份记录：
+
+```sh
+PYTHONPATH=src python3 -m infra_sentinel.cli.diagnostics --hours 24 --limit 50
+```
+
+打包后的 `infra-agent --diagnostics` 也可查询已有状态；查询不启动采集、不创建缺失的历史库。过滤参数、覆盖范围和时间语义见 [诊断接口](docs/diagnostics.md)。
 
 ## 安装与构建
 
@@ -170,6 +184,20 @@ To audit the Codex JSONL still visible on this machine:
 PYTHONPATH=src python3 -m infra_sentinel.cli.codex_usage_audit \
   --from 2026-08-22 --to 2026-08-23 --timezone Asia/Shanghai
 ```
+
+### Diagnostic history
+
+The overview links to a unified history of collection, network, host, facility, and upstream conditions. Filter first observations, severity changes, and confirmed recoveries by time and category. Repeated samples and restarts do not replay an unchanged condition. Missing, disabled, or stale observation leaves unresolved conditions unconfirmed rather than recovered.
+
+History starts when collection is enabled and is bounded by a 30-day retention period and a row cap. Records contain fixed reasons, severity, source identity, and observation time; they exclude raw errors, task content, and request parameters. Concurrent events do not establish causality.
+
+Local agents can query the same records as read-only JSON:
+
+```sh
+PYTHONPATH=src python3 -m infra_sentinel.cli.diagnostics --hours 24 --limit 50
+```
+
+The packaged `infra-agent --diagnostics` also reads existing state without starting collection or creating a missing journal. See [the diagnostic interface](docs/diagnostics.md) for filters, coverage, and time semantics.
 
 ### Build
 

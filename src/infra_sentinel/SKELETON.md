@@ -45,6 +45,14 @@ aggregate audit; it does not own parsing or persist user rollout data.
 backup, and scoped metric-store replacement without moving those policies into
 the Collector or SQLite owner.
 
+`core/diagnostics.py` normalizes already-collected Projection facts into bounded
+conditions and explicit observation coverage. `metrics/diagnostics.py` owns the
+durable diagnostic journal, atomic occurrence/change/recovery transitions,
+retention, and bounded read-only queries. The sampling loop is its only writer;
+the desktop and `cli/diagnostics.py` consume the same query contract. Missing or
+disabled observation never confirms recovery, and reading a snapshot never
+refreshes its observation time.
+
 `resources/ai/dsh.py` owns read-only DeepSeek Harness v4 session usage,
 stream/final replacement, retry boundaries, inherited-prefix exclusion, and
 event-time history. Its checkpoint retains only hashed request markers.
@@ -59,6 +67,13 @@ exposes access-marker semantics, rollout suspicion and estimate provenance as
 optional model metadata. Trial/free labels are not evidence of zero charges.
 
 ## State and privacy boundaries
+
+Within the system boundary, `resources/system/smartctl.py` owns optional
+discovery of an already installed smartctl, bounded read-only NVMe SMART
+queries, scalar normalization and the ten-minute cache. The macOS backend
+uses it without installing software or elevating privileges. Missing tools or
+unreadable devices leave the native host probes intact; raw device identities
+and command output never enter Projection or metrics.
 
 - `metrics/` is the durable metric boundary. A resource adapter returns points
   and a bounded current snapshot; it must not open or mutate the metric store.

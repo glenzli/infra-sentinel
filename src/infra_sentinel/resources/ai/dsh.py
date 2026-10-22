@@ -255,6 +255,7 @@ class DshUsageCollector:
         self._checkpoint = checkpoint_path
         self._poll_seconds = max(1, poll_seconds)
         self._next_poll = 0.0
+        self._checked_at: str | None = None
         self._cache: dict[Path, tuple[tuple[int, int], DshSession]] = {}
         self._snapshot: dict[str, Any] = {"available": False, "status": "unavailable"}
         self._seen: set[str] | None = None
@@ -273,12 +274,13 @@ class DshUsageCollector:
     def collect(self, context: CollectorContext) -> Collection:
         epoch = float(context.local_sample["epoch"])
         if epoch < self._next_poll:
-            return Collection(status=self._snapshot["status"], snapshot=self._snapshot)
+            return Collection(status=self._snapshot["status"], snapshot=self._snapshot, checked_at=self._checked_at)
         self._next_poll = epoch + self._poll_seconds
+        self._checked_at = datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
         root = self._finder()
         if root is None:
             self._snapshot = {"available": False, "status": "unavailable", "label": "DSH"}
-            return Collection(status="unavailable", snapshot=self._snapshot)
+            return Collection(status="unavailable", snapshot=self._snapshot, checked_at=self._checked_at)
         sessions: dict[str, DshSession] = {}
         errors = 0
         paths = sorted({*root.rglob("*.jsonl"), *root.rglob("*.jsonl.zstd")})
@@ -299,7 +301,7 @@ class DshUsageCollector:
         self._cache = {path: value for path, value in self._cache.items() if path in paths}
         if errors and not sessions:
             self._snapshot = {"available": False, "status": "error", "label": "DSH"}
-            return Collection(status="error", snapshot=self._snapshot)
+            return Collection(status="error", snapshot=self._snapshot, checked_at=self._checked_at)
         requests = [request for session in sessions.values() for request in session.requests]
         points = []
         bootstrap = self._seen is None
@@ -324,7 +326,7 @@ class DshUsageCollector:
         self._snapshot = self._make_snapshot(requests, epoch, len(sessions), errors)
         timed = [r.performance for r in requests if r.settled and r.performance is not None]
         self._snapshot["details"].extend(model_performance_details(timed))
-        return Collection(points=tuple(points), status=self._snapshot["status"], snapshot=self._snapshot)
+        return Collection(points=tuple(points), status=self._snapshot["status"], snapshot=self._snapshot, checked_at=self._checked_at)
 
     @staticmethod
     def _make_snapshot(requests: list[DshRequest], epoch: float, sessions: int, errors: int) -> dict[str, Any]:

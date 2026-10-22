@@ -467,6 +467,7 @@ class AntigravityUsageCollector:
         self._clock = clock
         self._poll_seconds = poll_seconds
         self._next_poll_epoch = 0.0
+        self._checked_at: str | None = None
         self._snapshot: dict[str, Any] = {"available": False, "status": "unavailable"}
         self._previous: dict[str, _TokenTotals] = {}
         self._started_day: str | None = None
@@ -654,16 +655,17 @@ class AntigravityUsageCollector:
             self._started_day = day
             self._started_at_epoch = epoch
         if epoch < self._next_poll_epoch:
-            return Collection(status=str(self._snapshot.get("status", "ok")), snapshot=self._snapshot)
+            return Collection(status=str(self._snapshot.get("status", "ok")), snapshot=self._snapshot, checked_at=self._checked_at)
         self._next_poll_epoch = epoch + self._poll_seconds
+        self._checked_at = _iso_now(epoch)
         discovered = self._conversations_finder()
         if discovered is None:
             self._snapshot = {"available": False, "status": "unavailable"}
-            return Collection(status="unavailable", snapshot=self._snapshot)
+            return Collection(status="unavailable", snapshot=self._snapshot, checked_at=self._checked_at)
         directories = (discovered,) if isinstance(discovered, Path) else tuple(discovered)
         if not directories:
             self._snapshot = {"available": False, "status": "unavailable"}
-            return Collection(status="unavailable", snapshot=self._snapshot)
+            return Collection(status="unavailable", snapshot=self._snapshot, checked_at=self._checked_at)
         try:
             timestamp = _iso_now(epoch)
             history = read_antigravity_history(directories)
@@ -671,6 +673,6 @@ class AntigravityUsageCollector:
             points = self._interval_points(history, timestamp, epoch)
         except (OSError, sqlite3.DatabaseError, ValueError):
             self._snapshot = {**self._snapshot, "available": True, "status": "error", "label": "Antigravity"}
-            return Collection(status="error", snapshot=self._snapshot)
+            return Collection(status="error", snapshot=self._snapshot, checked_at=self._checked_at)
         self._snapshot = snapshot
-        return Collection(points=points, status="ok", snapshot=snapshot)
+        return Collection(points=points, status="ok", snapshot=snapshot, checked_at=self._checked_at)

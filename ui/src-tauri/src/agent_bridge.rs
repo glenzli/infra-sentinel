@@ -30,6 +30,7 @@ fn command_allowed(command_type: &str) -> bool {
         command_type,
         "session.reset"
             | "metrics.query"
+            | "diagnostics.query"
             | "configuration.get"
             | "configuration.update"
             | "pricing.catalog.update"
@@ -206,11 +207,14 @@ mod tests {
     fn bridge_only_exposes_public_agent_commands() {
         assert!(command_allowed("session.reset"));
         assert!(command_allowed("metrics.query"));
+        assert!(command_allowed("diagnostics.query"));
         assert!(command_allowed("configuration.get"));
         assert!(command_allowed("configuration.update"));
         assert!(command_allowed("pricing.catalog.update"));
         assert!(!command_allowed("shell.execute"));
         assert!(!command_allowed("configuration.write"));
+        assert!(!command_allowed("diagnostics.clear"));
+        assert!(!command_allowed("diagnostics.repair"));
     }
 
     #[test]

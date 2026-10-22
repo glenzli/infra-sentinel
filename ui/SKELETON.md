@@ -13,7 +13,7 @@ or durable metrics.
 | `src-tauri/src/` | Sidecar supervision, Projection cache, native menu/notifications, external Console/status links, application paths, an opt-in static documentation-demo gate, and allowlisted Tauri commands | Resource-specific accounting, data normalization, renderer business rules, or a general-purpose test mode |
 
 `src/main.ts` is the renderer composition root: it routes between the overview,
-resource pages, the AI methodology page, facility detail, and settings. Keep page rendering in the
+resource pages, the AI methodology page, facility detail, diagnostic history, and settings. Keep page rendering in the
 corresponding `*_view.ts` module and stateful time-range/filter behavior in
 the matching `*_analysis.ts` module.
 
@@ -24,6 +24,7 @@ the matching `*_analysis.ts` module.
 | Projection/command types or one new allowlisted operation | `src/bridge.ts`, then the paired Rust bridge implementation |
 | Shared formatting, localization, visual primitives | `src/format.ts`, `src/i18n.ts`, `src/icons.ts`, or `src/styles.css` |
 | Network, AI, or system time-range state | The matching `*_analysis.ts` module |
+| Cross-resource diagnostic history, category/time filters, and disclosure state | `src/diagnostics_analysis.ts` for bounded read-only queries and query identity; `src/diagnostics_view.ts` for localized event rows and the overview summary |
 | Network, AI, AI methodology, system, facility, or upstream-status presentation | The matching `*_view.ts` and scoped CSS module |
 | Reusable time-bucket chart behavior | `src/time_bucket_bar_chart.ts` for hourly/daily quantitative bars and `src/daily_activity_calendar.ts` for recorded-history heatmaps, with their scoped CSS |
 | Overview-only composition | `src/overview_view.ts` |
@@ -43,6 +44,12 @@ Do not turn that path into arbitrary file access, command execution, database
 queries, SSH, or unchecked URL launching. The renderer always consumes the
 versioned Projection produced by the Agent; it does not reconstruct resource
 state from local files.
+
+Diagnostic history uses the allowlisted `diagnostics.query` Agent command.
+The renderer keeps unknown, disabled, or unobserved sources distinct from
+recorded recovery, and it does not infer a healthy state from missing history.
+Only the explicit static documentation-demo gate filters its supplied
+Projection events locally instead of submitting a command.
 
 ## Static documentation demos
 

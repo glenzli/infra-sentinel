@@ -63,6 +63,21 @@ class DemoProjectionTests(unittest.TestCase):
         self.assertNotIn("Library/Application Support", encoded)
         self.assertNotIn("g4i", encoded)
 
+    def test_diagnostic_fixture_shows_ordered_recovered_episodes(self) -> None:
+        diagnostics = self.projection["infra"]["diagnostics"]
+        self.assertEqual(diagnostics["schema"], "20261022.1")
+        self.assertEqual(diagnostics["active_count"], 0)
+        self.assertEqual(diagnostics["active"], [])
+        for check in diagnostics["coverage"]:
+            self.assertEqual(check["freshness"], "current")
+            self.assertEqual(check["observation_status"], "observed")
+            self.assertTrue(check["id"] and check["code"])
+        events = diagnostics["events"]
+        timestamps = [datetime.fromisoformat(event["observed_at"]) for event in events]
+        self.assertEqual(timestamps, sorted(timestamps, reverse=True))
+        self.assertEqual({event["transition"] for event in events}, {"raised", "changed", "recovered"})
+        self.assertTrue(all(timestamp <= self.observed for timestamp in timestamps))
+
 
 if __name__ == "__main__":
     unittest.main()

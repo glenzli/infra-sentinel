@@ -109,9 +109,11 @@ class FacilityMonitorTests(unittest.TestCase):
 
             self.assertEqual(state["status"], "healthy")
             self.assertEqual(state["healthy"], 1)
+            self.assertEqual(state["checked_at"], timestamp(0))
             facility = state["items"][0]
             self.assertEqual(facility["protocol"], "pcp.runtime.observer")
             self.assertEqual(facility["generation"], "gen-1")
+            self.assertEqual(facility["checked_at"], timestamp(0))
             self.assertEqual(facility["console_url"], "http://127.0.0.1:4318/")
             self.assertEqual(facility["snapshot"]["metrics"][0]["value"], 2)
 
@@ -346,10 +348,14 @@ class FacilityMonitorTests(unittest.TestCase):
             ) as observe:
                 monitor.refresh_once(NOW.timestamp())
                 self.assertEqual(monitor.snapshot()["items"][0]["status"], "starting")
+                self.assertEqual(monitor.snapshot()["items"][0]["checked_at"], timestamp(0))
                 monitor.refresh_once(NOW.timestamp() + 5)
                 self.assertEqual(observe.call_count, 1)
+                self.assertEqual(monitor.snapshot()["checked_at"], timestamp(5))
+                self.assertEqual(monitor.snapshot()["items"][0]["checked_at"], timestamp(0))
                 monitor.refresh_once(NOW.timestamp() + 16)
                 self.assertEqual(observe.call_count, 2)
+                self.assertEqual(monitor.snapshot()["items"][0]["checked_at"], timestamp(16))
 
             self.assertEqual(monitor.snapshot()["status"], "healthy")
 
@@ -358,6 +364,7 @@ class FacilityMonitorTests(unittest.TestCase):
             root = Path(temporary) / "not-created"
             monitor = FacilityMonitor(logging.getLogger("facility-test"), root, [PCP_ADAPTER])
 
+            self.assertIsNone(monitor.snapshot()["checked_at"])
             monitor.refresh_once(NOW.timestamp())
 
             state = monitor.snapshot()
@@ -383,6 +390,9 @@ class FacilityMonitorTests(unittest.TestCase):
             self.assertEqual(state["status"], "degraded")
             self.assertEqual(state["attention"], 1)
             self.assertEqual(state["error_kind"], "DiscoveryError")
+            self.assertEqual(state["checked_at"], timestamp(2))
+            with patch("time.time", return_value=NOW.timestamp() + 300):
+                self.assertEqual(monitor.snapshot()["checked_at"], timestamp(2))
 
             root.chmod(0o700)
             monitor.refresh_once(NOW.timestamp() + 3)

@@ -13,6 +13,7 @@ import shutil
 from typing import Any
 
 from infra_sentinel.resources.system.disk_health import DiskHealthEvidence, DiskHealthMonitor
+from infra_sentinel.resources.system.smartctl import SmartctlMonitor
 from infra_sentinel.resources.system.contract import (
     CPU_UTILIZATION, DISK_CAPACITY, DISK_HEALTH, DISK_THROUGHPUT,
     MEMORY_CAPACITY, MEMORY_COMPRESSION, MEMORY_PRESSURE, MEMORY_SWAP,
@@ -215,6 +216,7 @@ class MacOSSystemBackend:
         self._configure_libc()
         self._disk = _MacDiskCounters()
         self._disk_health = DiskHealthMonitor(self._disk.read_health)
+        self._smart = SmartctlMonitor()
         self._thermal_reader = self._configure_thermal_reader()
 
     def _configure_libc(self) -> None:
@@ -293,4 +295,5 @@ class MacOSSystemBackend:
             int(vm.swapins) * self._page_size, int(vm.swapouts) * self._page_size,
             int(usage.total), int(usage.free), disk_read, disk_write, read_ops, write_ops,
             physical_io_available, thermal_state, self._disk_health.read(observed_at, epoch),
+            disk_smart=self._smart.read(observed_at, epoch),
         )

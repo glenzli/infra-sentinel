@@ -40,6 +40,7 @@ from infra_sentinel.app.configuration import (
     read_config,
     read_user_settings,
     settings_payload,
+    state_directory_for_config,
     write_user_settings,
 )
 from infra_sentinel.core.collectors import CollectorContext, CollectorRegistry, CollectorRun, collected_points
@@ -57,6 +58,7 @@ from infra_sentinel.metrics.query import (
     execute_metric_query,
 )
 from infra_sentinel.metrics.store import MetricStore
+from infra_sentinel.metrics.diagnostics import DiagnosticStore
 from infra_sentinel.resources.network.mihomo import (
     MIHOMO_SAMPLE_SCHEMA,
     MihomoApiClient,
@@ -248,6 +250,7 @@ def totals_for_window(
 class AlertEngine:
     def __init__(self) -> None:
         self.level = "none"
+        self.confirmation: dict[str, Any] | None = None
         self._stability = StatusStabilizer(
             "none",
             {"none": 0, "warning": 1, "critical": 2},
@@ -268,6 +271,11 @@ class AlertEngine:
         else:
             next_level = "none"
         decision = self._stability.observe(next_level)
+        self.confirmation = {
+            "candidate_status": decision.pending_status,
+            "consecutive": decision.pending_count,
+            "required": decision.required_count,
+        } if decision.pending_status else None
         next_level = decision.status
         if not decision.changed:
             return None
@@ -511,6 +519,7 @@ def build_projection_state(
     facilities: dict[str, Any] | None = None,
     upstream_status: dict[str, Any] | None = None,
     traffic_alert_level: str | None = None,
+    traffic_alert_confirmation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     confirmed_traffic_level = traffic_alert_level if traffic_alert_level in {"none", "warning", "critical"} else "none"
     session = {
@@ -595,6 +604,8 @@ def build_projection_state(
         ),
         "last_event": latest_delta_event(config.state_dir / "events.jsonl"),
     }
+    if traffic_alert_confirmation:
+        state["infra"]["network_diagnostics"]["traffic_alert"]["confirmation"] = dict(traffic_alert_confirmation)
     return state
 
 
@@ -634,6 +645,7 @@ def process_read_only_commands(
     state_dir: Path,
     metric_source: MetricQuerySource,
     logger: logging.Logger,
+    diagnostic_store: DiagnosticStore | None = None,
 ) -> int:
     """Serve local reads independently from the five-second sampler.
 
@@ -642,7 +654,7 @@ def process_read_only_commands(
     or a remote poll, while mutations remain serialized by the sampling loop.
     """
     completed = 0
-    for command in consume_commands(state_dir, accepted_types={"configuration.get", "metrics.query"}):
+    for command in consume_commands(state_dir, accepted_types={"configuration.get", "metrics.query", "diagnostics.query"}):
         if command.type == "configuration.get":
             try:
                 complete_command(command, status="ok", payload={
@@ -651,6 +663,12 @@ def process_read_only_commands(
             except (OSError, ValueError) as exc:
                 complete_command(command, status="error", message=str(exc))
                 logger.warning("configuration read failed id=%s", command.id)
+        elif command.type == "diagnostics.query":
+            try:
+                store = diagnostic_store if diagnostic_store is not None else DiagnosticStore(state_dir / "diagnostics.sqlite3")
+                complete_command(command, status="ok", payload=store.query(command.payload))
+            except (ValueError, TypeError) as exc:
+                complete_command(command, status="rejected", message=str(exc))
         else:
             try:
                 query = MetricQuery.from_payload(command.payload)
@@ -667,10 +685,11 @@ def run_read_only_command_service(
     metric_source: MetricQuerySource,
     logger: logging.Logger,
     stop_event: threading.Event,
+    diagnostic_store: DiagnosticStore | None = None,
 ) -> None:
     """Serve read-only desktop commands while the sampler is busy."""
     while not stop_event.is_set():
-        process_read_only_commands(config_path, state_dir, metric_source, logger)
+        process_read_only_commands(config_path, state_dir, metric_source, logger, diagnostic_store)
         stop_event.wait(READ_ONLY_COMMAND_INTERVAL_SECONDS)
 
 
@@ -772,6 +791,7 @@ def handle_sample(
     upstream_monitor: UpstreamStatusMonitor,
     projection_publisher: ProjectionPublisher,
     logger: logging.Logger,
+    diagnostic_store: DiagnosticStore | None = None,
 ) -> tuple[dict[str, Any], bool]:
     sample, mihomo_available = collect_mihomo_or_unavailable(
         client,
@@ -878,7 +898,12 @@ def handle_sample(
         facility_snapshot,
         upstream_snapshot,
         alerts.level,
+        alerts.confirmation,
     )
+    if diagnostic_store is not None:
+        projection["infra"]["diagnostics"] = diagnostic_store.observe_projection(
+            projection, now_epoch=float(sample["epoch"]),
+        )
     projection_publisher.publish(projection, epoch=float(sample["epoch"]))
     write_health_state(config, "ok")
     return sample, command_effects.restart_requested
@@ -911,9 +936,18 @@ def main() -> int:
     mode.add_argument("--once", action="store_true", help="显示当前 Mihomo 累计与活跃域名")
     mode.add_argument("--watch", action="store_true", help="持续采样并发布本地 Projection")
     mode.add_argument("--maintain", action="store_true", help="离线整理历史指标与临时查询结果")
+    mode.add_argument("--diagnostics", action="store_true", help="只读查询诊断历史并输出 JSON")
+    parser.add_argument("--diagnostics-query", metavar="JSON", help="诊断查询条件，仅与 --diagnostics 一起使用")
     args = parser.parse_args()
+    if args.diagnostics_query is not None and not args.diagnostics:
+        parser.error("--diagnostics-query requires --diagnostics")
     try:
         config_path = args.config or default_config_path()
+        if args.diagnostics:
+            query = json.loads(args.diagnostics_query) if args.diagnostics_query is not None else {}
+            result = DiagnosticStore(state_directory_for_config(config_path) / "diagnostics.sqlite3").query(query)
+            print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+            return 0 if result.get("available") else 1
         config = read_config(config_path)
         ensure_state_dir(config)
         if args.maintain:
@@ -953,6 +987,7 @@ def main() -> int:
         if lock is None:
             raise RuntimeError("另一个监控实例已经在运行")
         metric_store = MetricStore(config.state_dir)
+        diagnostic_store = DiagnosticStore(config.state_dir / "diagnostics.sqlite3")
         codex_migration = prepare_codex_jsonl_migration(
             config.state_dir,
             metric_store,
@@ -1017,7 +1052,7 @@ def main() -> int:
         read_only_command_stop = threading.Event()
         read_only_command_thread = threading.Thread(
             target=run_read_only_command_service,
-            args=(config_path, config.state_dir, metric_pipeline, logger, read_only_command_stop),
+            args=(config_path, config.state_dir, metric_pipeline, logger, read_only_command_stop, diagnostic_store),
             name="infra-read-only-command-service",
             daemon=True,
         )
@@ -1044,6 +1079,7 @@ def main() -> int:
                         upstream_monitor,
                         projection_publisher,
                         logger,
+                        diagnostic_store,
                     )
                     if restart_requested:
                         logger.info("configuration updated; Agent restart requested")

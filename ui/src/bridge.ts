@@ -48,6 +48,61 @@ export interface NetworkDiagnosticsProjection {
   daily_usage_guards?: Array<Record<string, unknown>>;
 }
 
+export type DiagnosticCategory = "source" | "network" | "system" | "facility" | "upstream";
+export type DiagnosticSeverity = "info" | "warning" | "critical";
+export type DiagnosticTransition = "raised" | "changed" | "recovered";
+export type DiagnosticObservationStatus = "observed" | "unknown" | "disabled" | "unobserved";
+
+export interface ActiveDiagnostic {
+  id: string;
+  category: DiagnosticCategory;
+  source_id: string;
+  source_label: string;
+  code: string;
+  severity: DiagnosticSeverity;
+  observed_at: string;
+  started_at: string;
+  title: string;
+  title_zh: string;
+  detail: string;
+  detail_zh: string;
+  observation_status: DiagnosticObservationStatus;
+}
+
+export interface DiagnosticEvent extends ActiveDiagnostic {
+  diagnostic_id: string;
+  transition: DiagnosticTransition;
+}
+
+export interface DiagnosticCoverage {
+  id: string;
+  category: DiagnosticCategory;
+  source_id: string;
+  source_label: string;
+  code: string;
+  observation_status: DiagnosticObservationStatus;
+  observed_at: string | null;
+  freshness: "current" | "stale" | "unknown";
+}
+
+export interface DiagnosticsProjection {
+  schema: string;
+  available: boolean;
+  generated_at: string;
+  observed_at: string | null;
+  history_started_at: string | null;
+  retention_days: number;
+  active_count: number;
+  active: ActiveDiagnostic[];
+  events: DiagnosticEvent[];
+  truncated: boolean;
+  coverage: DiagnosticCoverage[];
+  freshness: "current" | "stale" | "unknown";
+  history_truncated?: boolean;
+  sample_truncated?: boolean;
+  error_code?: string;
+}
+
 export interface FacilityMetric {
   id: string;
   kind: "gauge" | "counter" | "state" | string;
@@ -144,6 +199,7 @@ export interface InfraProjection {
   sources: SourceProjection[];
   collectors?: CollectorProjection[];
   network_diagnostics?: NetworkDiagnosticsProjection;
+  diagnostics?: DiagnosticsProjection;
   ai_usage?: Record<string, unknown>;
   facilities?: FacilitiesProjection;
   upstream_status?: UpstreamStatusProjection;
@@ -207,6 +263,23 @@ export interface SystemResourceProjection {
       read_retries: number | null;
       write_retries: number | null;
       interval_seconds: number;
+    };
+    smart?: {
+      source: "smartctl";
+      observed_at: string;
+      interval_seconds: number;
+      state: string;
+      devices: Array<{
+        index: number;
+        state: string;
+        temperature_celsius: number | null;
+        percentage_used: number | null;
+        available_spare_percent: number | null;
+        lifetime_read_bytes: number | null;
+        lifetime_write_bytes: number | null;
+        power_on_hours: number | null;
+        media_errors: number | null;
+      }>;
     };
   };
   thermal: { state: string };

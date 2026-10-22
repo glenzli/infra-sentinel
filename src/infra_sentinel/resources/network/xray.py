@@ -287,7 +287,10 @@ class XrayStatsMonitor:
             self.session_totals = {}
             self.session_intervals = 0
             self._save_session()
-            self.public_state = self._build_public_state(self.public_state.get("status", "waiting"))
+            self.public_state = self._build_public_state(
+                self.public_state.get("status", "waiting"),
+                checked_at=self.public_state.get("checked_at"),
+            )
 
     def reset_session(self, started_epoch: float) -> dict[str, Any]:
         self.session_started_epoch = float(started_epoch)
@@ -329,6 +332,7 @@ class XrayStatsMonitor:
         status: str,
         *,
         updated_at: str | None = None,
+        checked_at: str | None = None,
         last_sample: dict[str, Any] | None = None,
         error: str | None = None,
     ) -> dict[str, Any]:
@@ -353,6 +357,7 @@ class XrayStatsMonitor:
             "api_server": self.config.api_server,
             "poll_seconds": self.config.poll_seconds,
             "updated_at": updated_at,
+            "checked_at": checked_at,
             "session_started_at": iso_now(self.session_started_epoch) if self.session_started_epoch is not None else None,
             "coverage_started_at": iso_now(self.coverage_started_epoch) if self.coverage_started_epoch is not None else None,
             "intervals": self.session_intervals,
@@ -374,6 +379,7 @@ class XrayStatsMonitor:
         if not force and current < self.next_poll_at:
             return self.public_state
         self.next_poll_at = current + self.config.poll_seconds
+        checked_at = iso_now(current)
         try:
             raw = self.reader(self.config)
             was_uninitialized = self.tracker.previous_epoch is None
@@ -389,6 +395,7 @@ class XrayStatsMonitor:
             self.public_state = self._build_public_state(
                 decision.status,
                 updated_at=sample["timestamp"],
+                checked_at=checked_at,
                 last_sample=sample,
             )
             confirmation = self._confirmation(decision)
@@ -400,6 +407,7 @@ class XrayStatsMonitor:
             self.public_state = self._build_public_state(
                 decision.status,
                 updated_at=previous.get("updated_at"),
+                checked_at=checked_at,
                 last_sample=previous.get("last_sample"),
                 error=str(exc) if decision.status == "error" else None,
             )

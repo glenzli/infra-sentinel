@@ -470,10 +470,15 @@ def default_config_path() -> Path:
     return BUNDLED_EXAMPLE_CONFIG
 
 
+def state_directory_for_config(path: Path | None = None) -> Path:
+    """Resolve state location without reading or migrating a configuration."""
+    selected = path or default_config_path()
+    return Path(os.environ[STATE_DIRECTORY_ENV]).expanduser() if os.environ.get(STATE_DIRECTORY_ENV) else selected.parent / "state"
+
+
 def read_config(path: Path | None) -> Config:
     selected = path or default_config_path()
-    state_dir = Path(os.environ[STATE_DIRECTORY_ENV]).expanduser() if os.environ.get(STATE_DIRECTORY_ENV) else selected.parent / "state"
-    return runtime_config(read_user_settings(selected), state_dir)
+    return runtime_config(read_user_settings(selected), state_directory_for_config(selected))
 
 
 def main() -> int:

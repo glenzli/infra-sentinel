@@ -440,6 +440,32 @@ class InfraProjectionTests(unittest.TestCase):
         self.assertEqual(projection["overall"]["active_alerts"], 1)
         self.assertIn("local-system", {item["id"] for item in projection["sources"]})
 
+    def test_optional_smart_metadata_survives_the_system_projection_boundary(self) -> None:
+        smart = {
+            "source": "smartctl", "observed_at": "2026-10-19T20:00:00+08:00",
+            "interval_seconds": 600, "state": "critical",
+            "devices": [{"index": 1, "state": "critical", "percentage_used": 3, "temperature_celsius": 35}],
+        }
+        for available in [True, False]:
+            with self.subTest(available=available):
+                run = CollectorRun(
+                    capability=CollectorCapability("system.host", "local-system", "system.host", "system", ("system.disk.free_bytes",)),
+                    status="ok", snapshot={
+                        "available": True, "platform": "macos", "status": "critical" if available else "healthy",
+                        "capabilities": ["disk.capacity"] + (["disk.smart"] if available else []),
+                        "disk": {"free_bytes": 1234, **({"smart": smart} if available else {})},
+                    },
+                )
+                projection = build_infra_projection(
+                    sample(), {"kernel": {}, "vps": {}},
+                    {"enabled": False, "status": "disabled", "servers": []}, "none", (run,),
+                )
+                system = projection["system"]
+                self.assertEqual(system["disk"].get("smart"), smart if available else None)
+                self.assertEqual("disk.smart" in system["capabilities"], available)
+                resource = next(item for item in projection["resources"] if item["id"] == "system")
+                self.assertEqual(resource["status"], "critical" if available else "healthy")
+
 
 if __name__ == "__main__":
     unittest.main()

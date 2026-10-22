@@ -15,8 +15,10 @@ import { renderFacilityDetailPage } from "./facility_view";
 import { renderUpstreamStatusResourcePage } from "./upstream_status_view";
 import { renderSystemResourcePage } from "./system_resource_view";
 import { SystemResourceAnalysisController, SystemTimeRange } from "./system_resource_analysis";
+import { DiagnosticsAnalysisController, DiagnosticsCategoryFilter, DiagnosticsTimeRange } from "./diagnostics_analysis";
+import { renderDiagnosticsPage } from "./diagnostics_view";
 
-type AppView = "overview" | "system" | "network" | "ai_usage" | "ai_methodology" | "upstream_status" | "facility" | "settings";
+type AppView = "overview" | "system" | "network" | "ai_usage" | "ai_methodology" | "upstream_status" | "facility" | "diagnostics" | "settings";
 
 function appRoot(): HTMLDivElement {
   const root = document.querySelector<HTMLDivElement>("#app");
@@ -33,6 +35,43 @@ const networkOverviewAnalysis = new NetworkAnalysisController("attribution", "to
 const aiAnalysis = new AiAnalysisController();
 const systemAnalysis = new SystemResourceAnalysisController();
 const systemOverviewAnalysis = new SystemResourceAnalysisController("today");
+const diagnosticsAnalysis = new DiagnosticsAnalysisController();
+const boundDiagnosticFilters = new WeakSet<HTMLSelectElement>();
+
+function replaceAroundRetainedChild(parent: HTMLElement, retained: HTMLElement, incoming: HTMLElement, incomingRetained: HTMLElement): void {
+  for (const child of Array.from(parent.childNodes)) {
+    if (child !== retained) parent.removeChild(child);
+  }
+  let beforeRetained = true;
+  for (const child of Array.from(incoming.childNodes)) {
+    if (child === incomingRetained) {
+      beforeRetained = false;
+      continue;
+    }
+    parent.insertBefore(child, beforeRetained ? retained : null);
+  }
+}
+
+/** Keep native select nodes and their ancestors connected while observations update. */
+function updateDiagnosticsShell(existing: HTMLElement, incoming: HTMLElement): boolean {
+  const page = existing.querySelector<HTMLElement>(".diagnostics-page");
+  const nextPage = incoming.querySelector<HTMLElement>(".diagnostics-page");
+  const history = page?.querySelector<HTMLElement>(".diagnostics-history");
+  const nextHistory = nextPage?.querySelector<HTMLElement>(".diagnostics-history");
+  const filters = history?.querySelector<HTMLElement>(".diagnostics-filters");
+  const nextFilters = nextHistory?.querySelector<HTMLElement>(".diagnostics-filters");
+  if (!page || !nextPage || !history || !nextHistory || !filters || !nextFilters
+    || page.parentElement !== existing || nextPage.parentElement !== incoming
+    || history.parentElement !== page || nextHistory.parentElement !== nextPage
+    || filters.parentElement !== history || nextFilters.parentElement !== nextHistory) return false;
+  const status = filters.querySelector<HTMLElement>(".diagnostics-filters__status");
+  const nextStatus = nextFilters.querySelector<HTMLElement>(".diagnostics-filters__status");
+  if (status && nextStatus) status.textContent = nextStatus.textContent;
+  replaceAroundRetainedChild(history, filters, nextHistory, nextFilters);
+  replaceAroundRetainedChild(page, history, nextPage, nextHistory);
+  replaceAroundRetainedChild(existing, page, incoming, nextPage);
+  return true;
+}
 
 function escapeHtml(value: unknown): string {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#039;", '"': "&quot;" })[char] ?? char);
@@ -76,6 +115,7 @@ function renderProjection(projection: AgentProjection): void {
   const aiSources = aiUsage ? projection.infra.sources.filter((source) => source.resource_id === aiUsage.id) : [];
   const controls = `<section class="dashboard-actions"><div><p class="eyebrow">${tr("CURRENT SESSION", "当前统计周期")}</p><strong>${formatDuration(projection.session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button></div></section>`;
   const facilityControls = `<section class="dashboard-actions"><div><p class="eyebrow">${tr("FACILITY", "运行设施")}</p><strong>${projection.infra.facilities?.total ?? 0} ${tr("discovered", "个已发现")}</strong></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button></div></section>`;
+  const diagnosticsControls = `<section class="dashboard-actions"><div><p class="eyebrow">${tr("LOCAL HISTORY", "本机历史")}</p></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button></div></section>`;
   const selectedFacility = projection.infra.facilities?.items.find((facility) => facility.id === selectedFacilityId);
   const content = activeView === "network" && network
     ? `<section class="dashboard-actions"><div><p class="eyebrow">${tr("CURRENT SESSION", "当前统计周期")}</p><strong>${formatDuration(projection.session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button><button class="button button--danger" id="reset"><span>${tr("Reset totals", "重置统计")}</span></button></div></section>${renderNetworkResourcePage(projection, network, sources, networkAnalysis.snapshot())}`
@@ -89,12 +129,55 @@ function renderProjection(projection: AgentProjection): void {
       ? `${controls}${renderUpstreamStatusResourcePage(upstreamStatus, projection.infra.upstream_status)}`
     : activeView === "facility"
       ? `${facilityControls}${renderFacilityDetailPage(selectedFacility)}`
+    : activeView === "diagnostics"
+      ? `${diagnosticsControls}${renderDiagnosticsPage(projection.infra.diagnostics, diagnosticsAnalysis.snapshot())}`
     : renderOverview(projection, networkOverviewAnalysis.snapshot(), systemOverviewAnalysis.snapshot());
-  root.innerHTML = `<main class="shell">${topbar(projection.infra.overall.status)}${content}${footer(projection)}</main>`;
+  const markup = `<main class="shell">${topbar(projection.infra.overall.status)}${content}${footer(projection)}</main>`;
+  let retainedDiagnosticFilters = false;
+  if (activeView === "diagnostics") {
+    const existing = root.querySelector<HTMLElement>(".shell");
+    if (existing?.querySelector(".diagnostics-page")) {
+      const template = document.createElement("template");
+      template.innerHTML = markup;
+      const incoming = template.content.querySelector<HTMLElement>(".shell");
+      if (incoming) retainedDiagnosticFilters = updateDiagnosticsShell(existing, incoming);
+    }
+  }
+  if (!retainedDiagnosticFilters) root.innerHTML = markup;
   root.querySelector<HTMLButtonElement>("#settings")?.addEventListener("click", () => void openSettings());
-  root.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", () => void refresh());
+  root.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", () => {
+    if (activeView === "diagnostics") diagnosticsAnalysis.invalidate();
+    void refresh();
+  });
   root.querySelector<HTMLButtonElement>("#reset")?.addEventListener("click", () => void requestReset());
   root.querySelector<HTMLButtonElement>("#back")?.addEventListener("click", () => { activeView = "overview"; selectedFacilityId = undefined; renderProjection(projection); });
+  root.querySelector<HTMLButtonElement>("[data-diagnostics-open]")?.addEventListener("click", () => {
+    activeView = "diagnostics";
+    renderProjection(projection);
+  });
+  root.querySelectorAll<HTMLSelectElement>("[data-diagnostics-range], [data-diagnostics-category]").forEach((select) => {
+    if (boundDiagnosticFilters.has(select)) return;
+    boundDiagnosticFilters.add(select);
+    select.addEventListener("change", () => {
+      if (select.hasAttribute("data-diagnostics-range")) {
+        const range = select.value as DiagnosticsTimeRange;
+        if (range !== "24h" && range !== "7d" && range !== "recorded") return;
+        diagnosticsAnalysis.selectRange(range);
+      } else {
+        const category = select.value as DiagnosticsCategoryFilter;
+        if (!["all", "source", "network", "system", "facility", "upstream"].includes(category)) return;
+        diagnosticsAnalysis.selectCategory(category);
+      }
+      if (latestProjection) renderProjection(latestProjection);
+    });
+  });
+  root.querySelectorAll<HTMLDetailsElement>("[data-diagnostics-event]").forEach((details) => details.addEventListener("toggle", () => {
+    const id = details.dataset.diagnosticsEvent;
+    if (id) diagnosticsAnalysis.setEventOpen(id, details.open);
+  }));
+  root.querySelector<HTMLDetailsElement>("[data-diagnostics-current]")?.addEventListener("toggle", (event) => {
+    diagnosticsAnalysis.setCurrentPanelOpen((event.currentTarget as HTMLDetailsElement).open);
+  });
   root.querySelectorAll<HTMLButtonElement>("[data-resource-id]").forEach((button) => button.addEventListener("click", () => {
     if (button.dataset.resourceId === "system" || button.dataset.resourceId === "network" || button.dataset.resourceId === "ai_usage" || button.dataset.resourceId === "upstream_status") { activeView = button.dataset.resourceId; renderProjection(projection); }
   }));
@@ -211,6 +294,9 @@ function renderProjection(projection: AgentProjection): void {
   });
   if (activeView === "system") void systemAnalysis.hydrate(() => {
     if (activeView === "system" && latestProjection) renderProjection(latestProjection);
+  });
+  if (activeView === "diagnostics") void diagnosticsAnalysis.hydrate(projection.infra.diagnostics, () => {
+    if (activeView === "diagnostics" && latestProjection) renderProjection(latestProjection);
   });
 }
 
