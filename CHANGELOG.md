@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 2.1.2 — 2026-10-22
+
+### Added
+
+- Local diagnostic history for observation changes, severity changes, and confirmed
+  recoveries, with category/time filters, bounded retention, and restart persistence.
+- Read-only desktop and CLI queries over the same diagnostic journal, with source
+  freshness and unknown coverage kept distinct from recovery.
+- Optional NVMe SSD health, wear, temperature, and lifetime counters from an
+  already installed, readable `smartctl`, without installing tools or elevating access.
+
+### Fixed
+
+- Limit suspected-rollout, trial, free-tier, and base-estimate model annotations
+  to each provider's usage in the selected range, including model and value views.
+  All history retains cumulative model coverage; counts describe models, not requests.
+- Preserve each day's model breakdown in activity calendars, including models
+  outside the leading models across all recorded history.
+
 ## 2.1.1 — 2026-10-18
 
 ### Fixed

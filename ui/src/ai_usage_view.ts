@@ -9,7 +9,7 @@ import { AnalysisTimeWindow, analysisTimeWindow } from "./analysis_time";
 import { AttentionDiagnostic, renderAttentionDiagnostics } from "./attention_diagnostics";
 import {
   ProjectedUsage, UsageInterval, aggregateByModel, aggregateBySource, canonicalModelId, completeDailyBuckets,
-  completeIntervalEpochs, projectUsage,
+  completeIntervalEpochs, modelTotalsForSource, projectUsage,
 } from "./ai_usage_series";
 import { PriceReference, projectPriceReference } from "./ai_price_reference";
 
@@ -194,7 +194,7 @@ function renderOverview(usage: ProjectedUsage, providerSources: Record<string, u
   const sources = usage.sourceTotals;
   const selectedTotal = [...sources.values()].reduce((sum, value) => sum + value, 0);
   const reference = projectPriceReference(providerSources, usage, range, window);
-  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Selected range total", "所选时段总量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)} · ${sources.size} ${tr("Agents", "个 Agent")}</span>${referencePriceTag(reference)}</aside></div>${horizontalBars(tr("Usage by Agent", "按 Agent 的用量"), rangeLabel(range), sources, SOURCE_COLORS, undefined, undefined, undefined, (id) => modelReferenceAnnotations(providerSources, "source", id) + performanceAnnotations(providerSources, "source", id, range))}${historyVisualControl(range, visual)}${usageHistory(usage.intervals, "source", range, window, visual, usage.undatedTotal, reference)}</section>`;
+  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Selected range total", "所选时段总量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)} · ${sources.size} ${tr("Agents", "个 Agent")}</span>${referencePriceTag(reference)}</aside></div>${horizontalBars(tr("Usage by Agent", "按 Agent 的用量"), rangeLabel(range), sources, SOURCE_COLORS, undefined, undefined, undefined, (id) => modelReferenceAnnotations(providerSources, usage, range, "source", id) + performanceAnnotations(providerSources, "source", id, range))}${historyVisualControl(range, visual)}${usageHistory(usage.intervals, "source", range, window, visual, usage.undatedTotal, reference)}</section>`;
 }
 
 function valueHistory(reference: PriceReference, range: AiTimeRange, window: AnalysisTimeWindow, visual: AiHistoryVisual): string {
@@ -249,10 +249,10 @@ function renderModels(usage: ProjectedUsage, providerSources: Record<string, unk
     const values = reference?.byModel ?? new Map<string, number>();
     const total = reference?.costUsd ?? 0;
     return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Equivalent value in range", "所选时段等价价值")}</p><strong>${total > 0 ? `≈ ${formatReferenceUsd(total)}` : "—"}</strong></div><aside><span>${rangeLabel(range)}</span></aside></div>${total > 0
-      ? `${horizontalBars(tr("Equivalent value by model", "按模型的等价价值"), rangeLabel(range), values, MODEL_COLORS, modelLabel, undefined, formatReferenceUsd, (id) => modelReferenceAnnotations(providerSources, "model", id) + performanceAnnotations(providerSources, "model", id, range))}${historyVisualControl(range, visual)}${valueHistory(reference!, range, window, visual)}`
+      ? `${horizontalBars(tr("Equivalent value by model", "按模型的等价价值"), rangeLabel(range), values, MODEL_COLORS, modelLabel, undefined, formatReferenceUsd, (id) => modelReferenceAnnotations(providerSources, usage, range, "model", id) + performanceAnnotations(providerSources, "model", id, range))}${historyVisualControl(range, visual)}${valueHistory(reference!, range, window, visual)}`
       : `<article class="detail-panel ai-analysis-state"><p>${tr("No model rows in this range have an available price reference.", "所选时段没有可用参考价的模型行。")}</p></article>`}</section>`;
   }
-  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Model total in range", "所选时段模型量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)}</span></aside></div>${horizontalBars(tr("Model composition", "模型构成"), rangeLabel(range), models, MODEL_COLORS, modelLabel, undefined, undefined, (id) => modelReferenceAnnotations(providerSources, "model", id) + performanceAnnotations(providerSources, "model", id, range))}${historyVisualControl(range, visual)}${usageHistory(usage.intervals, "model", range, window, visual, usage.undatedTotal)}</section>`;
+  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Model total in range", "所选时段模型量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)}</span></aside></div>${horizontalBars(tr("Model composition", "模型构成"), rangeLabel(range), models, MODEL_COLORS, modelLabel, undefined, undefined, (id) => modelReferenceAnnotations(providerSources, usage, range, "model", id) + performanceAnnotations(providerSources, "model", id, range))}${historyVisualControl(range, visual)}${usageHistory(usage.intervals, "model", range, window, visual, usage.undatedTotal)}</section>`;
 }
 
 /** Keep diagnostic hints visible at window edges without changing metric state. */
@@ -367,7 +367,10 @@ export function renderAiUsageResourcePage(projection: AgentProjection, resource:
   return `<section class="resource-section resource-section--detail${snapshot.mode === "activity" ? " ai-activity-page" : ""}"><div class="section-heading"><div><p class="eyebrow">${tr("RESOURCE DETAIL", "资源详情")}</p><h2>${tr("AI usage", "AI 用量")}</h2></div><div class="ai-resource-meta"><span class="section-heading__meta">${escapeHtml(sourceNames)}</span><button type="button" class="button button--subtle ai-methodology-link" data-ai-methodology>${tr("Methods & estimates", "口径与估算")}</button></div></div>${diagnostics}<section class="network-detail">${renderCurrentSummary(providerSources, sources)}${renderControls(snapshot)}${analysisBody(snapshot, providerSources)}<article class="sources-card sources-card--footer"><div class="sources-card__heading"><h3>${tr("Collector sources", "采集数据源")}</h3><span>${sources.length}</span></div><ul>${sources.map(sourceRow).join("")}</ul></article></section></section>`;
 }
 
-function modelReferenceAnnotations(providerSources: Record<string, unknown>[], dimension: "source" | "model", identifier: string): string {
+function modelReferenceAnnotations(
+  providerSources: Record<string, unknown>[], usage: ProjectedUsage, range: AiTimeRange,
+  dimension: "source" | "model", identifier: string,
+): string {
   const labels: Record<string, string> = {
     trial: tr("Trial", "试用"),
     free: tr("Free tier", "免费版"),
@@ -376,7 +379,11 @@ function modelReferenceAnnotations(providerSources: Record<string, unknown>[], d
   };
   return providerSources.flatMap((source) => {
     if (dimension === "source" && source.source_id !== identifier) return [];
-    const models = asArray(source.models).filter((model) => dimension === "source" || canonicalModelId(model.id) === identifier);
+    const totals = modelTotalsForSource(source, usage, range);
+    const models = asArray(source.models).filter((model) => {
+      const id = canonicalModelId(model.id);
+      return (totals.get(id) ?? 0) > 0 && (dimension === "source" || id === identifier);
+    });
     const groups = new Map<string, Record<string, unknown>[]>();
     for (const model of models) {
       const reference = asRecord(model.price_reference);
@@ -404,7 +411,7 @@ function modelReferenceAnnotations(providerSources: Record<string, unknown>[], d
         ? tr(`“${label}” is a model-name marker, not a zero API reference value. Actual charges depend on provider terms. Raw model IDs and Token totals are preserved.`, `“${label}”来自名称标记，不代表 API 参考价值为零；实际扣费以供应商为准。原始模型名与 Token 统计保持不变。`)
         : tr("A suffix suggests a variant; it does not confirm the backend model or actual billing. Raw model IDs and Token totals are preserved.", "后缀只提示可能存在变体，不能确认后端模型或实际同价；原始模型名与 Token 统计保持不变。");
       const scopeNote = dimension === "source"
-        ? tr(`Recorded ${label.toLowerCase()} model count across local history; not requests in the selected usage range.`, `本机历史已记录的${label}模型数，不代表当前所选时段的请求数。`) : "";
+        ? tr(`${label} models used in the selected range; not a request count.`, `当前所选时段使用过的${label}模型数，不是请求数。`) : "";
       const hint = [label + count, scopeNote, ...lines, caveat].filter(Boolean).join("\n");
       return `<button type="button" class="ai-performance-tag ai-model-reference-tag${kind === "rollout" ? " ai-model-reference-tag--rollout" : ""}" aria-label="${escapeHtml(hint)}">${escapeHtml(label + count)}<span class="ai-performance-tooltip" aria-hidden="true"><b>${escapeHtml(label)}</b>${scopeNote ? `<span>${escapeHtml(scopeNote)}</span>` : ""}${lines.map((line) => `<span>${escapeHtml(line).replace(/\n/g, "<br>")}</span>`).join("")}<span>${escapeHtml(caveat)}</span></span></button>`;
     });

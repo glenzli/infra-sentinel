@@ -1468,7 +1468,7 @@ dependencies = [
 
 [[package]]
 name = "infra-sentinel-desktop"
-version = "2.1.1"
+version = "2.1.2"
 dependencies = [
  "dirs",
  "objc2-foundation",

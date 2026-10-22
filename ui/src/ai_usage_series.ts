@@ -318,6 +318,18 @@ function totalsForProviderWindow(
   return { sources, models };
 }
 
+/** Use the same range and source attribution as the displayed usage totals. */
+export function modelTotalsForSource(
+  source: Record<string, unknown>,
+  usage: ProjectedUsage,
+  range: AnalysisTimeRange,
+): Map<string, number> {
+  const intervals = usage.intervals.filter((interval) => interval.source === source.source_id);
+  return range === "today" || range === "recorded"
+    ? totalsForProviderWindow([source], intervals, range === "today" ? "today" : "cumulative").models
+    : aggregateByModel(intervals);
+}
+
 /**
  * Normalize source-specific observability into one UI contract.
  *
