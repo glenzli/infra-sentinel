@@ -8,6 +8,8 @@ import shutil
 import subprocess
 from typing import Sequence
 
+from infra_sentinel.platform.host_process import background_subprocess_options
+
 
 HOST_ALIAS_RE = re.compile(r"(?!-)[A-Za-z0-9._-]+\Z")
 
@@ -62,9 +64,12 @@ def run_read_only_script(
             command,
             input=script,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
             timeout=timeout,
             check=False,
+            **background_subprocess_options(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError(f"SSH 无法完成：{exc}") from exc

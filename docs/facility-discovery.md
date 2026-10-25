@@ -16,16 +16,30 @@ Current adapters are deliberately independent:
 
 | Provider | Application protocol | Local binding |
 | --- | --- | --- |
-| PCP Runtime | `pcp.runtime.observer@20260810.1` | `infra.local.unix-socket` |
-| Infer Runtime | `infer-runtime.status@20260810.1` | `infra.local.unix-socket` |
-| Dev Mesh Observer | `dev-mesh.observer.status@20260812.1` | `infra.local.unix-socket` |
+| PCP Runtime | `pcp.runtime.observer@20260810.1` | Unix Socket / Windows Named Pipe |
+| Infer Runtime | `infer-runtime.status@20260810.1` | Unix Socket / Windows Named Pipe |
+| Dev Mesh Observer | `dev-mesh.observer.status@20260812.1` | Unix Socket / Windows Named Pipe |
+
+Unix hosts select `infra.local.unix-socket`; Windows selects
+`infra.local.windows-named-pipe`. Windows requires the exact local namespace
+`\\.\pipe\infra-protocol\<opaque>` and a byte-stream pipe. Filesystem Discovery
+roots, `registrations`, and manifests require the current user as owner and a
+private DACL, allowing SYSTEM and Administrators. The reader rejects remote
+filesystem paths, alternate streams and reparse points, and inspects and reads
+the same manifest handle while holding its ancestors against rename.
+
+The pipe client verifies the connected server process's user SID before sending
+application bytes and permits identification-only server impersonation. Providers
+still own the binding's required client-SID admission. Connection, writes, reads
+and required EOF share one deadline; cancelled I/O retains its buffers and native
+handles until completion. Application framing stays in the provider adapters.
 
 Each provider owns its request, response, framing, errors, limits, privacy contract, and optional
 Console link. Sentinel normalizes only bounded status, headline metrics, issues, observation time,
 and a loopback Console URL into its private UI projection. Provider extensions never cross that
 boundary.
 
-The Dev Mesh adapter accepts only its exact Unix-socket offer and retains only bounded aggregate
+The Dev Mesh adapter accepts only its exact version and native local binding and retains only bounded aggregate
 metrics and issues plus a literal-loopback Console URL. Its privacy declaration must exclude
 coordination owner IDs, workspace paths, Git revisions, branch names, event payloads, raw errors,
 database paths, and claim scopes. Sentinel never reads the Observer database, collaboration graph,
@@ -58,3 +72,11 @@ that the generation and selected offer are still identical.
 `INFRA_PROTOCOL_RUNTIME_DIR` may set the final shared runtime root in managed deployments. Without
 an override, Sentinel follows the platform paths in the canonical Infra Discovery specification.
 The old `INFRA_SENTINEL_REGISTRATION_DIR` and `infra-observer.*` wire are intentionally unsupported.
+
+Windows qualification uses real kernel byte pipes implementing the three provider
+contracts, including cross-process packaged-Agent checks. These fixtures prove the
+consumer path, not interoperability with an installed product. A provider must
+publish a compatible Windows offer; a Unix-only service or a service running solely
+inside WSL is not automatically reachable through this binding. On the qualification
+machine no real provider registrations were present, so real-product acceptance
+remains pending. See [Windows validation](windows.md).

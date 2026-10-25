@@ -72,3 +72,9 @@ sidecar lifecycle changes, also run the Rust checks and a target-platform
 desktop build. When a UI field changes its meaning, pair the UI change with a
 Python Projection test—the UI should adapt to a stable Projection contract,
 not encode provider transport quirks.
+
+`scripts/package-agent.mjs` owns native-host PyInstaller packaging and the
+Tauri target filename. The shell entry delegates to it; Windows builds use
+the same owner through npm without requiring a shell. Keep the Agent's console
+subsystem and redirected stdout; native launch flags suppress its console
+window without removing the Projection pipe.

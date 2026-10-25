@@ -18,13 +18,13 @@ class AgentParentLifecycleTests(TestCase):
 
     def test_existing_recorded_parent_keeps_agent_running(self) -> None:
         with patch.dict("os.environ", {PARENT_PROCESS_ENV: "4242"}, clear=True):
-            with patch("infra_sentinel.app.agent.os.kill") as probe:
+            with patch("infra_sentinel.app.agent.process_is_running", return_value=True) as probe:
                 self.assertFalse(parent_process_exited())
-        probe.assert_called_once_with(4242, 0)
+        probe.assert_called_once_with(4242)
 
     def test_missing_recorded_parent_stops_agent(self) -> None:
         with patch.dict("os.environ", {PARENT_PROCESS_ENV: "4242"}, clear=True):
-            with patch("infra_sentinel.app.agent.os.kill", side_effect=ProcessLookupError):
+            with patch("infra_sentinel.app.agent.process_is_running", return_value=False):
                 self.assertTrue(parent_process_exited())
 
     def test_invalid_parent_value_is_ignored(self) -> None:

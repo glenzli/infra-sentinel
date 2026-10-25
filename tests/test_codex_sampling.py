@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -13,7 +14,9 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from infra_sentinel.resources.ai.codex_sampling import (  # noqa: E402
     CodexRolloutLedger,
+    discover_codex_rollout_roots,
     audit_codex_rollouts,
+    audit_codex_rollout_ledger,
     load_codex_rollout_ledger,
     rebuild_codex_rollout_ledger,
     save_codex_rollout_ledger,
@@ -61,6 +64,65 @@ def cumulative_usage(last_total: int, cumulative_total: int, timestamp: str) -> 
 
 
 class CodexJsonlSamplingTests(unittest.TestCase):
+    def test_checkpoint_audit_replays_source_prefix_without_trusting_stored_totals(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rollout = root / "rollout-prefix.jsonl"
+            rollout.write_text(context("gpt-5.6-sol") + cumulative_usage(100, 100, "2026-08-22T01:00:00Z"), encoding="utf-8")
+            ledger = rebuild_codex_rollout_ledger([root], timezone=timezone.utc, now=NOW)
+            captured_size = rollout.stat().st_size
+            with rollout.open("a", encoding="utf-8") as stream:
+                stream.write(cumulative_usage(50, 150, "2026-08-22T02:00:00Z") + '{"incomplete":')
+            (root / "rollout-new.jsonl").write_text(cumulative_usage(25, 25, "2026-08-22T03:00:00Z"), encoding="utf-8")
+            ledger.days.clear()  # Reference replay must ignore stored accounting.
+            before = rollout.read_bytes()
+            audit = audit_codex_rollout_ledger([root], ledger, timezone=timezone.utc)
+            self.assertEqual(audit.read_errors, 0)
+            self.assertEqual(audit.scanned_files, 1)
+            self.assertEqual(audit.bytes_scanned, captured_size)
+            self.assertEqual(audit.days["2026-08-22"].composition.total_tokens, 100)
+            self.assertEqual(rollout.read_bytes(), before)
+
+    def test_checkpoint_audit_follows_archive_move_and_reports_missing_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            live, archived = Path(temporary) / "sessions", Path(temporary) / "archived_sessions"
+            live.mkdir()
+            archived.mkdir()
+            rollout = live / "rollout-move.jsonl"
+            rollout.write_text(cumulative_usage(100, 100, "2026-08-22T01:00:00Z"), encoding="utf-8")
+            ledger = rebuild_codex_rollout_ledger([live, archived], timezone=timezone.utc, now=NOW)
+            moved = archived / rollout.name
+            rollout.replace(moved)
+            audit = audit_codex_rollout_ledger([live, archived], ledger, timezone=timezone.utc)
+            self.assertEqual(audit.read_errors, 0)
+            self.assertEqual(audit.days["2026-08-22"].composition.total_tokens, 100)
+            moved.write_bytes(b"{}\n")
+            self.assertEqual(audit_codex_rollout_ledger([live, archived], ledger, timezone=timezone.utc).read_errors, 1)
+            moved.unlink()
+            self.assertEqual(audit_codex_rollout_ledger([live, archived], ledger, timezone=timezone.utc).read_errors, 1)
+
+    def test_checkpoint_audit_rejects_a_boundary_inside_a_record(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            rollout = root / "rollout-cut.jsonl"
+            rollout.write_text(cumulative_usage(100, 100, "2026-08-22T01:00:00Z"), encoding="utf-8")
+            ledger = rebuild_codex_rollout_ledger([root], timezone=timezone.utc, now=NOW)
+            next(iter(ledger.files.values()))["offset"] -= 1
+            audit = audit_codex_rollout_ledger([root], ledger, timezone=timezone.utc)
+            self.assertEqual(audit.read_errors, 1)
+            self.assertEqual(audit.scanned_files, 0)
+
+    def test_codex_home_selects_only_live_and_archived_rollouts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary) / "portable codex"
+            live = home / "sessions"
+            archived = home / "archived_sessions"
+            live.mkdir(parents=True)
+            archived.mkdir()
+            with patch.dict("os.environ", {"CODEX_HOME": str(home)}):
+                self.assertEqual(discover_codex_rollout_roots(), (live.resolve(), archived.resolve()))
+                self.assertEqual(discover_codex_rollout_roots([archived]), (archived.resolve(),))
+
     def test_durable_ledger_rebuilds_once_then_ingests_only_appended_usage(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "sessions"

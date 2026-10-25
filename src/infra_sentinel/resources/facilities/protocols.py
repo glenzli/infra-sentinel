@@ -12,10 +12,11 @@ from datetime import date, datetime
 import ipaddress
 import json
 import math
+import os
 from pathlib import Path
 import re
 import socket
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Protocol
 from urllib.parse import urlsplit
 
 from infra_sentinel.resources.facilities.discovery import (
@@ -24,7 +25,9 @@ from infra_sentinel.resources.facilities.discovery import (
     DiscoveryPaths,
     Registration,
     UNIX_SOCKET_BINDING,
+    WINDOWS_PIPE_BINDING,
     resolve_unix_socket,
+    resolve_windows_pipe,
     validate_private_socket,
 )
 
@@ -221,8 +224,35 @@ def _exchange_line(
     return _decode_json(line)
 
 
+def _exchange_pipe(
+    endpoint: str,
+    request: bytes,
+    *,
+    response_limit: int,
+    timeout: float,
+    require_eof: bool,
+) -> dict[str, Any]:
+    from infra_sentinel.resources.facilities.windows_pipe import WindowsPipeConnection
+
+    try:
+        with WindowsPipeConnection(endpoint, timeout) as connection:
+            connection.sendall(request)
+            line = _read_response_frame(connection, response_limit=response_limit, require_eof=require_eof)
+    except (OSError, TimeoutError) as error:
+        raise FacilityTransportError("provider named-pipe request failed") from error
+    return _decode_json(line)
+
+
+class _ByteStream(Protocol):
+    def recv(self, maximum: int) -> bytes: ...
+
+
+def _local_bindings() -> tuple[str, ...]:
+    return (WINDOWS_PIPE_BINDING,) if os.name == "nt" else (UNIX_SOCKET_BINDING,)
+
+
 def _read_response_frame(
-    connection: socket.socket,
+    connection: _ByteStream,
     *,
     response_limit: int,
     require_eof: bool,
@@ -296,7 +326,7 @@ class FacilityProtocolAdapter:
         matches = registration.compatible_offers(
             self.protocol,
             [self.protocol_version],
-            [UNIX_SOCKET_BINDING],
+            _local_bindings(),
         )
         if not matches:
             return None
@@ -309,8 +339,13 @@ class FacilityProtocolAdapter:
         registration: Registration,
         selection: AdapterSelection,
     ) -> FacilityObservation:
-        endpoint = resolve_unix_socket(paths, selection.offer)
-        raw = _exchange_line(
+        if selection.offer.binding == WINDOWS_PIPE_BINDING:
+            endpoint = resolve_windows_pipe(selection.offer)
+            exchange = _exchange_pipe
+        else:
+            endpoint = resolve_unix_socket(paths, selection.offer)
+            exchange = _exchange_line
+        raw = exchange(
             endpoint,
             _request(self.request_schema, selection.protocol_version),
             response_limit=self.response_limit,

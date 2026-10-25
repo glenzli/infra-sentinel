@@ -65,7 +65,7 @@ class SmartctlTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             file = Path(folder) / "smartctl"
             file.write_text("not executable")
-            with patch(f"{OWNER}._TOOL_PATHS", (file,)), patch(f"{OWNER}.subprocess.run") as run:
+            with patch(f"{OWNER}._TOOL_PATHS", (file,)), patch(f"{OWNER}.os.access", return_value=False), patch(f"{OWNER}.subprocess.run") as run:
                 self.assertIsNone(SmartctlMonitor().read(OBSERVED, 0))
                 run.assert_not_called()
 

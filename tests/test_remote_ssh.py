@@ -39,7 +39,7 @@ class RemoteSshTests(unittest.TestCase):
 
     def test_explicit_ssh_executable_is_used_for_portable_installations(self) -> None:
         completed = subprocess.CompletedProcess([], 0, "ok", "")
-        executable = str(Path("/portable/OpenSSH/ssh.exe"))
+        executable = str(Path("/portable/OpenSSH/ssh.exe").resolve())
         with patch("infra_sentinel.resources.network.remote_ssh.subprocess.run", return_value=completed) as runner:
             run_read_only_script("my-vps", "exit 0", ssh_executable=executable)
         self.assertEqual(runner.call_args.args[0][0], executable)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
@@ -68,7 +69,7 @@ class CodexMigrationTests(unittest.TestCase):
             report = prepare_codex_jsonl_migration(state_dir, store, roots=(root,), now=NOW)
             repeated = prepare_codex_jsonl_migration(state_dir, store, roots=(root,), now=NOW)
             backup = state_dir / "backups" / BACKUP_DIRECTORY
-            with sqlite3.connect(backup / "infra.sqlite3") as connection:
+            with closing(sqlite3.connect(backup / "infra.sqlite3")) as connection, connection:
                 backed_up_codex = int(connection.execute(
                     "SELECT COUNT(*) FROM metric_points WHERE source_id = 'codex'"
                 ).fetchone()[0])

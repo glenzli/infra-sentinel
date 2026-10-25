@@ -46,6 +46,7 @@ from infra_sentinel.app.configuration import (
 from infra_sentinel.core.collectors import CollectorContext, CollectorRegistry, CollectorRun, collected_points
 from infra_sentinel.core.status_stability import StatusStabilizer
 from infra_sentinel.platform.process_lock import acquire_process_lock
+from infra_sentinel.platform.host_process import process_is_running
 from infra_sentinel.resources.facilities.observer import FacilityMonitor
 from infra_sentinel.core.projection import build_infra_projection
 from infra_sentinel.metrics.pipeline import MetricPipeline
@@ -133,18 +134,7 @@ def parent_process_exited() -> bool:
         return False
     if parent_pid <= 1:
         return False
-    try:
-        # A PyInstaller one-file sidecar forks a bootstrap process before the
-        # Python runtime starts. `getppid()` then points at that bootstrap,
-        # not at the desktop process that originally launched the sidecar.
-        # Test the recorded desktop PID directly so both the source runtime
-        # and the frozen sidecar stop when their UI exits.
-        os.kill(parent_pid, 0)
-    except ProcessLookupError:
-        return True
-    except PermissionError:
-        return False
-    return False
+    return not process_is_running(parent_pid)
 
 
 def rotate_before_append(path: Path, state: StateConfig) -> None:
@@ -316,13 +306,15 @@ def collect_mihomo_or_unavailable(
     try:
         return collect_interval(client, tracker, duration_seconds), True
     except Exception as error:
-        logger.warning("Mihomo sample unavailable: %s", error)
+        unsupported = getattr(client, "local_controller_supported", True) is False
+        if not unsupported:
+            logger.warning("Mihomo sample unavailable: %s", error)
         return {
             "timestamp": iso_now(),
             "epoch": time.time(),
             "observed_seconds": 0.0,
             "interval_kind": "unavailable",
-            "mihomo_status": "error",
+            "mihomo_status": "unsupported" if unsupported else "error",
             "mihomo_last_success_at": last_success_at,
         }, False
 
@@ -553,7 +545,7 @@ def build_projection_state(
         "observed_seconds": sample["observed_seconds"],
         "interval_kind": sample.get("interval_kind", "realtime"),
         "level": level,
-        "busiest_service": busiest_service(sample) if sample.get("mihomo_status") != "error" else None,
+        "busiest_service": busiest_service(sample) if sample.get("mihomo_status") not in {"error", "unsupported"} else None,
         "alert_group": {"id": "mihomo", "label": "Mihomo"},
         "windows": {"warning": warning, "critical": critical},
         "mihomo": {

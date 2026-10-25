@@ -17,11 +17,11 @@ belongs in `resources/` and SQL mechanics belong in `metrics/`.
 | `core/` | Collector contracts and registration, canonical resource model, status stabilization, sample timing, and Projection construction |
 | `metrics/` | SQLite storage, pipeline checkpoints/compaction, aggregations, and bounded historical queries |
 | `resources/ai/` | Read-only local AI usage adapters and normalized AI-usage contract |
-| `resources/facilities/` | Infra Discovery candidate parsing, socket observation, and bounded facility protocol projections |
+| `resources/facilities/` | Infra Discovery candidate parsing, native local transports, and bounded facility protocol projections |
 | `resources/network/` | Local proxy traffic, VPS/Xray reads, billing policy, attribution, and logical-versus-billed traffic semantics |
 | `resources/system/` | Capability-driven CPU, memory, disk, and process-IO observation; `backends/` selects one OS-specific implementation |
 | `resources/upstream/` | Read-only official upstream-status observation |
-| `platform/` | Narrow process-level host primitives such as the single-Agent lock |
+| `platform/` | Narrow process-level host primitives: the single-Agent lock, non-destructive parent liveness probes, and console-free child-process options |
 | `cli/` | Report and snapshot entry points over the package's typed APIs |
 
 Within the AI boundary, `resources/ai/codex_sampling.py` owns privacy-bounded
@@ -41,6 +41,9 @@ timestamps and sampled deltas with explicit estimated provenance otherwise.
 `resources/ai/codex.py` consumes that ledger as its
 only Codex usage fact source. `cli/codex_usage_audit.py` only renders an
 aggregate audit; it does not own parsing or persist user rollout data.
+The sampling owner also provides an independent replay of checkpoint-bounded
+file prefixes for validation while live logs keep growing; captured counters
+and dedup keys are never reused as reference totals.
 `app/codex_migration.py` coordinates the one-time ledger rebuild, recoverable
 backup, and scoped metric-store replacement without moving those policies into
 the Collector or SQLite owner.
@@ -67,6 +70,12 @@ exposes access-marker semantics, rollout suspicion and estimate provenance as
 optional model metadata. Trial/free labels are not evidence of zero charges.
 
 ## State and privacy boundaries
+
+Within facilities, `discovery.py` owns declaration validation and native binding
+selection inputs; `protocols.py` owns provider messages, framing, limits and
+privacy normalization. `windows_pipe.py` owns bounded native pipe connection and
+I/O cancellation lifetimes. `windows_security.py` owns Windows file admission
+and connected-server SID checks. Windows transports never enter the metric or UI layers.
 
 Within the system boundary, `resources/system/smartctl.py` owns optional
 discovery of an already installed smartctl, bounded read-only NVMe SMART

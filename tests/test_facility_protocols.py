@@ -110,6 +110,14 @@ def snapshot(adapter, registration_value: Registration) -> dict[str, object]:
 
 
 class FacilityProtocolTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # The Unix transport contract is host independent; native Windows
+        # selection and I/O are exercised by test_windows_facilities.
+        binding = patch("infra_sentinel.resources.facilities.protocols._local_bindings",
+                        return_value=("infra.local.unix-socket",))
+        binding.start()
+        self.addCleanup(binding.stop)
+
     def test_endpoint_and_socket_failures_are_classified_as_transient_transport(self) -> None:
         root = Path("/tmp/infra-protocol")
         pcp = registration("pcp.runtime.observer", "pcp")

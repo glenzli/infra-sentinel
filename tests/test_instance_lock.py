@@ -20,7 +20,10 @@ class InstanceLockTests(unittest.TestCase):
             self.assertIsNotNone(first)
             try:
                 self.assertIsNone(acquire_process_lock(path))
-                self.assertEqual(path.read_bytes()[1:].decode("ascii").strip(), str(__import__("os").getpid()))
+                # Windows byte-range locks prohibit reading the locked byte.
+                with path.open("rb") as metadata:
+                    metadata.seek(1)
+                    self.assertEqual(metadata.read().decode("ascii").strip(), str(__import__("os").getpid()))
             finally:
                 assert first is not None
                 first.close()

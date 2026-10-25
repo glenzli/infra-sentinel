@@ -12,6 +12,10 @@ use projection_cache::ProjectionCache;
 fn main() {
     let projection_cache = ProjectionCache::default();
     let builder = tauri::Builder::default();
+    #[cfg(target_os = "windows")]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
+        menu_bar::show_dashboard(app);
+    }));
     let builder = match agent_supervisor::static_demo_locale() {
         Some(locale) => builder.append_invoke_initialization_script(format!(
             "window.__INFRA_SENTINEL_STATIC_DEMO_LOCALE = {locale:?};"

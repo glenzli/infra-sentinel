@@ -13,6 +13,7 @@ from infra_sentinel.resources.network.traffic_estimation import TrafficEstimatio
 from infra_sentinel.resources.network.vps import VpsConfig  # noqa: E402
 from infra_sentinel.resources.network.xray import XrayStatsConfig  # noqa: E402
 
+EPOCH = 1_780_000_000.0  # Keep local-day boundaries within Windows' timestamp range.
 
 class _State:
     max_log_bytes = 1024 * 1024
@@ -35,12 +36,12 @@ class RemoteFleetTests(unittest.TestCase):
         xray_values = {"one": 7, "two": 13}
 
         def vps_reader(config: VpsConfig) -> dict[str, object]:
-            return {"timestamp": config.server_id, "epoch": 100.0, "interface": "eth0",
+            return {"timestamp": config.server_id, "epoch": EPOCH + 100.0, "interface": "eth0",
                     "in_bytes": vps_values[config.server_id], "out_bytes": 0,
                     "in_packets": 1, "out_packets": 0}
 
         def xray_reader(config: XrayStatsConfig) -> dict[str, object]:
-            return {"timestamp": config.server_id, "epoch": 100.0,
+            return {"timestamp": config.server_id, "epoch": EPOCH + 100.0,
                     "users": {"client": {"up_bytes": xray_values[config.server_id], "down_bytes": 0}}}
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -48,7 +49,7 @@ class RemoteFleetTests(unittest.TestCase):
                 (server("one", "One", "host-one"), server("two", "Two", "host-two")),
                 Path(temporary), _State(), vps_reader=vps_reader, xray_reader=xray_reader,
             )
-            state = monitor.maybe_poll(100.0, force=True)
+            state = monitor.maybe_poll(EPOCH + 100.0, force=True)
             self.assertEqual([row["id"] for row in state["servers"]], ["one", "two"])
             self.assertEqual([row["label"] for row in state["servers"]], ["One", "Two"])
             self.assertEqual([row["vps"]["last_sample"]["in_bytes"] for row in state["servers"]], [0, 0])
@@ -63,7 +64,7 @@ class RemoteFleetTests(unittest.TestCase):
 
         def vps_reader(config: VpsConfig) -> dict[str, object]:
             incoming, outgoing = next(reads)
-            return {"timestamp": "now", "epoch": 100.0 if incoming == 100 else 200.0, "interface": "eth0",
+            return {"timestamp": "now", "epoch": EPOCH + (100.0 if incoming == 100 else 200.0), "interface": "eth0",
                     "in_bytes": incoming, "out_bytes": outgoing, "in_packets": 1, "out_packets": 1}
 
         config = RemoteServerConfig(
@@ -74,8 +75,8 @@ class RemoteFleetTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as temporary:
             monitor = RemoteFleetMonitor((config,), Path(temporary), _State(), vps_reader=vps_reader, xray_reader=lambda _config: {})
-            monitor.maybe_poll(100.0, force=True)
-            state = monitor.maybe_poll(200.0, force=True)
+            monitor.maybe_poll(EPOCH + 100.0, force=True)
+            state = monitor.maybe_poll(EPOCH + 200.0, force=True)
 
         self.assertEqual(state["cycle"]["in_bytes"], 60)
         self.assertEqual(state["cycle"]["out_bytes"], 70)

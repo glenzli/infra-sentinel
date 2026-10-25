@@ -6,6 +6,8 @@
 
 Infra Sentinel 是一个 macOS 桌面监控工具，用于查看网络流量、AI 客户端用量、本机资源、远端主机和服务状态。各类数据按来源和单位分别展示。
 
+Windows 原生日常预览版现可从源码构建：支持桌面与托盘、AI 用量、基础系统资源、上游状态、SSH 远端监控和 Infra Protocol Named Pipe 消费端。构建、验证与接入条件见 [Windows 日常版](docs/windows.md)。Linux 桌面发布排在 Windows 之后。
+
 ![Infra Sentinel 中文概览](assets/overview-zh.png)
 
 > 截图使用匿名演示数据，不含真实主机名、IP、账户、路径或项目内容。
@@ -132,6 +134,8 @@ cd src-tauri && cargo test --offline
 Current release: [2.1.2](https://github.com/glenzli/infra-sentinel/releases/tag/v2.1.2) · [Changelog](CHANGELOG.md)
 
 Infra Sentinel is a macOS desktop monitor for network traffic, local AI-client usage, host resources, remote hosts, and service status. Each source keeps its own units and accounting method.
+
+A native Windows daily-use preview can now be built from source, covering the desktop/tray, AI usage, basic host resources, provider status, SSH monitoring and an Infra Protocol Named Pipe consumer. See the [Windows build and capability notes](docs/windows.md). Windows takes priority over the Linux desktop release.
 
 ![Infra Sentinel overview](assets/overview-en.png)
 

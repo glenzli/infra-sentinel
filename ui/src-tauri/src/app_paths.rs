@@ -22,7 +22,7 @@ pub fn support_dir() -> Result<PathBuf, String> {
             .map(PathBuf::from)
             .ok_or_else(|| "state directory has no parent support directory".to_owned());
     }
-    dirs::data_dir()
+    dirs::data_local_dir()
         .map(|directory| directory.join(SUPPORT_DIRECTORY_NAME))
         .ok_or_else(|| "cannot determine an application data directory".to_owned())
 }
@@ -96,7 +96,7 @@ pub fn migrate_legacy_configuration() -> Result<bool, String> {
     if env::var_os(STATE_DIRECTORY_ENV).is_some() {
         return Ok(false);
     }
-    let data = dirs::data_dir()
+    let data = dirs::data_local_dir()
         .ok_or_else(|| "cannot determine an application data directory".to_owned())?;
     migrate_legacy_config_between(
         &data.join(LEGACY_SUPPORT_DIRECTORY_NAME),

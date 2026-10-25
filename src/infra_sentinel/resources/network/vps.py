@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
@@ -65,12 +65,12 @@ class VpsConfig:
 
 
 def iso_now(epoch: float | None = None) -> str:
-    return datetime.fromtimestamp(time.time() if epoch is None else epoch).astimezone().isoformat(timespec="seconds")
+    return datetime.fromtimestamp(time.time() if epoch is None else epoch, timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
 def daily_usage_start_epoch(now: float | None = None) -> float:
     """Return the current local-day boundary for user-facing usage guardrails."""
-    current = datetime.fromtimestamp(now or time.time()).astimezone()
+    current = datetime.fromtimestamp(now or time.time(), timezone.utc).astimezone()
     return current.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
 
 

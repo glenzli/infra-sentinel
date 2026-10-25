@@ -568,13 +568,13 @@ class MetricStore:
             with self._transaction() as connection:
                 row = connection.execute("SELECT value FROM store_metadata WHERE key = ?", (MAINTENANCE_EPOCH,)).fetchone()
             previous = float(row[0]) if row is not None else 0.0
-            current_day = datetime.fromtimestamp(now).astimezone().date()
-            previous_day = datetime.fromtimestamp(previous).astimezone().date() if previous > 0 else None
+            current_day = datetime.fromtimestamp(now, timezone.utc).astimezone().date()
+            previous_day = datetime.fromtimestamp(previous, timezone.utc).astimezone().date() if previous > 0 else None
             if not force and now - previous < MAINTENANCE_INTERVAL_SECONDS and previous_day == current_day:
                 return {"status": "current", "last_epoch": previous}
 
             hot_cutoff = bucket_start(now, HOT_RESOLUTION_SECONDS)
-            local_midnight = datetime.fromtimestamp(now).astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+            local_midnight = datetime.fromtimestamp(now, timezone.utc).astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
             local_midnight_epoch = local_midnight.timestamp()
             ai_hourly_cutoff = bucket_start(local_midnight_epoch, HOURLY_RESOLUTION_SECONDS)
             hourly_cutoff = bucket_start(now - HOT_RETENTION_SECONDS, HOURLY_RESOLUTION_SECONDS)

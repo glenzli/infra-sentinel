@@ -64,9 +64,10 @@ Versioned UI projections ── Notifications
 ## 跨平台迁移顺序
 
 1. **已完成基础边界**：生产实现迁入 `src/infra_sentinel` 语义包；`bin/` 只留入口；HostReading + capability 合同；按需加载的 macOS、Linux、Windows 系统 backend；Agent 单实例锁；SSH/OpenCode/Codex 路径覆盖；UI 按能力展示。
-2. **Linux 桌面闭环**：Mihomo TCP/Unix Controller 的本机安全合同、桌面通知、Infra Protocol Unix Socket 实机互通、AppImage/deb 打包与休眠验证。
-3. **Windows 桌面闭环**：回环 Mihomo Controller 与 Secret、Infra Protocol Named Pipe adapter、原生通知、OpenSSH/便携数据库路径验证、MSI/NSIS 打包。
-4. **发布矩阵**：三平台独立 CI 构建和测试；每个平台只声明经过实机验证的 capability，不追求虚假的功能对称。
+2. **Windows 日常版优先**：先打通原生桌面与托盘、单实例、AI 用量、本机 CPU/内存/磁盘容量、上游状态、OpenSSH 路径、设置重启和 NSIS 安装包；使用目标平台测试及打包产物的隔离验收验证。详见 [Windows 日常版](docs/windows.md)。
+3. **Windows 接入与稳定性补全**：Infra Protocol Named Pipe 消费端、ACL/SID 检查和三个协议的打包管道验收已完成；真实 Codex 账本、重启和 UI 汇总已核对。后续包括设施服务端的 Windows 实机联调、回环 Mihomo Controller 与 Secret、原生通知、其他真实客户端和远端环境验证、休眠恢复及长时间运行。
+4. **Linux 桌面闭环后置**：Mihomo TCP/Unix Controller 的本机安全合同、桌面通知、Infra Protocol Unix Socket 实机互通、AppImage/deb 打包与休眠验证。
+5. **发布矩阵**：三平台独立 CI 构建和测试；每个平台只声明经过实机验证的 capability，不追求虚假的功能对称。
 
 退出标准：
 

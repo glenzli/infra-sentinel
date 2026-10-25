@@ -251,7 +251,8 @@ def build_infra_projection(
     vps = session.get("vps") if isinstance(session.get("vps"), dict) else {}
     local_total = _number(kernel.get("total_bytes"))
     vps_total = _number(vps.get("total_bytes"))
-    mihomo_available = sample.get("mihomo_status") != "error"
+    mihomo_supported = sample.get("mihomo_status") != "unsupported"
+    mihomo_available = sample.get("mihomo_status") not in {"error", "unsupported"}
     daily_usage_guards = remote.get("daily_usage_guards") if isinstance(remote.get("daily_usage_guards"), list) else []
     active_daily_guards = sum(
         1 for guard in daily_usage_guards
@@ -280,8 +281,8 @@ def build_infra_projection(
         id="local-mihomo",
         kind="network.mihomo",
         resource_id="network",
-        enabled=True,
-        status=_collector_status("local-mihomo", "ok" if mihomo_available else "error", collector_runs),
+        enabled=mihomo_supported,
+        status=_collector_status("local-mihomo", "ok" if mihomo_available else "error", collector_runs) if mihomo_supported else "disabled",
         label="Mihomo",
         updated_at=(timestamp if mihomo_available else sample.get("mihomo_last_success_at")) or None,
     )]
@@ -322,8 +323,8 @@ def build_infra_projection(
     resources = [{
         "id": "network",
         "category": "usage",
-        "status": _network_status(alert_level, remote, network_sources),
-        "enabled": True,
+        "status": _network_status(alert_level, remote, network_sources) if network_sources or billing_available else "disabled",
+        "enabled": bool(network_sources) or billing_available,
         "primary_metric": "network.billable_bytes" if billing_available else "network.local_bytes",
         "primary_value": primary_total,
         "primary_unit": "bytes",

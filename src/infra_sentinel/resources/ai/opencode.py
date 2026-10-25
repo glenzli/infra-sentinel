@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from itertools import groupby
 import json
 import os
@@ -24,6 +24,7 @@ import subprocess
 import time
 from typing import Any
 
+from infra_sentinel.platform.host_process import background_subprocess_options
 from infra_sentinel.resources.ai.contract import ai_usage_snapshot, daily_usage, detail_group, hourly_usage, localized, model_usage, pricing_day, token_metric, usage_window
 from infra_sentinel.core.collectors import Collection, CollectorCapability, CollectorContext
 from infra_sentinel.core.model import MetricPoint
@@ -219,7 +220,7 @@ def parse_opencode_stats(output: str) -> OpenCodeStats:
 
 
 def _day_start_epoch(epoch: float) -> int:
-    local = datetime.fromtimestamp(epoch).astimezone()
+    local = datetime.fromtimestamp(epoch, timezone.utc).astimezone()
     return int(local.replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
 
 
@@ -398,7 +399,7 @@ def read_opencode_desktop_hourly_usage(path: Path, epoch: float) -> tuple[OpenCo
 
 
 def _iso_now(epoch: float) -> str:
-    return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
+    return datetime.fromtimestamp(epoch, timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
 def _metric_point(
@@ -513,7 +514,7 @@ class OpenCodeUsageCollector:
         self._checkpoint_started_at: str | None = None
 
     def _load_checkpoint(self, epoch: float) -> None:
-        day = datetime.fromtimestamp(epoch).astimezone().date().isoformat()
+        day = datetime.fromtimestamp(epoch, timezone.utc).astimezone().date().isoformat()
         if self._checkpoint_day == day:
             return
         payload: dict[str, Any] = {}
@@ -734,8 +735,11 @@ class OpenCodeUsageCollector:
                     [executable, "stats", "--days", "0", "--models"],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=OPENCODE_TIMEOUT_SECONDS,
                     check=False,
+                    **background_subprocess_options(),
                 )
                 if completed.returncode != 0:
                     raise RuntimeError("OpenCodeStatsCommandFailed")

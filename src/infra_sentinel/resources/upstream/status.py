@@ -24,6 +24,8 @@ import time
 from typing import Any
 from urllib.request import Request, urlopen
 
+from infra_sentinel.platform.host_process import background_subprocess_options
+
 
 UPSTREAM_STATUS_SCHEMA = "20260811.1"
 POLL_SECONDS = 300
@@ -149,6 +151,7 @@ def _fetch_bytes(url: str, *, accept: str, host: str | None = None) -> bytes:
             capture_output=True,
             timeout=(REQUEST_TIMEOUT_SECONDS * 2) + 4,
             check=False,
+            **background_subprocess_options(),
         )
         if result.returncode != 0:
             raise RuntimeError(f"status request failed with curl exit {result.returncode}")

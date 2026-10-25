@@ -33,3 +33,10 @@ supervisor can restart it with the new runtime configuration.
 The UI is capability-driven. A system backend may publish only the metrics its
 platform can verify; unsupported fields are omitted from the view instead of
 being rendered as zero, healthy, or inferred equivalents.
+
+On Windows the Agent is built by `scripts/package-agent.mjs`, which preserves
+the `.exe` suffix required by Tauri. The native supervisor hides its console
+without removing the stdout Projection pipe. The desktop uses one instance,
+a colored tray indicator, and Local App Data for configuration/state. See
+[the Windows build and validation notes](../docs/windows.md) for the daily-use
+preview's capability boundary and isolated packaged-runtime checks.

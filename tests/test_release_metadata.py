@@ -13,12 +13,12 @@ RELEASE_DATE = "2026-10-22"
 
 class ReleaseMetadataTests(unittest.TestCase):
     def test_product_versions_are_aligned(self) -> None:
-        pyproject = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text())
-        package = json.loads((PROJECT_ROOT / "ui/package.json").read_text())
-        package_lock = json.loads((PROJECT_ROOT / "ui/package-lock.json").read_text())
-        tauri = json.loads((PROJECT_ROOT / "ui/src-tauri/tauri.conf.json").read_text())
-        cargo = tomllib.loads((PROJECT_ROOT / "ui/src-tauri/Cargo.toml").read_text())
-        cargo_lock = tomllib.loads((PROJECT_ROOT / "ui/src-tauri/Cargo.lock").read_text())
+        pyproject = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        package = json.loads((PROJECT_ROOT / "ui/package.json").read_text(encoding="utf-8"))
+        package_lock = json.loads((PROJECT_ROOT / "ui/package-lock.json").read_text(encoding="utf-8"))
+        tauri = json.loads((PROJECT_ROOT / "ui/src-tauri/tauri.conf.json").read_text(encoding="utf-8"))
+        cargo = tomllib.loads((PROJECT_ROOT / "ui/src-tauri/Cargo.toml").read_text(encoding="utf-8"))
+        cargo_lock = tomllib.loads((PROJECT_ROOT / "ui/src-tauri/Cargo.lock").read_text(encoding="utf-8"))
         desktop_lock = next(
             item for item in cargo_lock["package"]
             if item["name"] == "infra-sentinel-desktop"
@@ -33,14 +33,14 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual(desktop_lock["version"], RELEASE_VERSION)
 
     def test_release_notes_and_changelog_name_the_release(self) -> None:
-        changelog = (PROJECT_ROOT / "CHANGELOG.md").read_text()
+        changelog = (PROJECT_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         release_notes = PROJECT_ROOT / f"docs/releases/v{RELEASE_VERSION}.md"
 
         self.assertIn(f"## {RELEASE_VERSION} — {RELEASE_DATE}", changelog)
         self.assertTrue(release_notes.is_file())
         self.assertIn(
             f"# Infra Sentinel {RELEASE_VERSION}",
-            release_notes.read_text(),
+            release_notes.read_text(encoding="utf-8"),
         )
 
 

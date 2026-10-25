@@ -222,7 +222,7 @@ class AntigravityUsageTests(unittest.TestCase):
                 output_tokens=4, reasoning=5,
             ) + _field_bytes(4, b"execution-a")
             _conversation(database, [generation])
-            with sqlite3.connect(database) as connection:
+            with closing(sqlite3.connect(database)) as connection, connection:
                 connection.execute("ALTER TABLE steps ADD COLUMN metadata BLOB")
                 for idx, seconds in [(1, epoch + 20), (2, epoch)]:
                     metadata = _field_bytes(12, b"execution-a") + _field_bytes(1, _field_varint(1, seconds))

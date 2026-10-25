@@ -65,6 +65,11 @@ fixture. They may launch an already-built desktop shell with an explicit static
 Projection, but must not start the Agent, inspect live state, or contact a
 local or remote service.
 
+`scripts/smoke_windows.py` separately owns isolated Windows packaged-runtime
+validation. Its synthetic AI histories and command/state directory exercise the
+real Agent or desktop lifecycle; they never use personal client histories or
+real local facilities. Public provider requests retain production behavior.
+
 ## Change routing
 
 | If the change is about... | Start here | Pair it with... |

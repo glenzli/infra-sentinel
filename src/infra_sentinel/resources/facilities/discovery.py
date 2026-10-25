@@ -174,6 +174,14 @@ def discovery_paths(root: Path | None = None) -> DiscoveryPaths:
 
 
 def validate_private_directory(path: Path) -> None:
+    if os.name == "nt":
+        from infra_sentinel.resources.facilities.windows_security import validate_private_directory as validate_windows_directory
+
+        try:
+            validate_windows_directory(path)
+        except OSError as error:
+            raise DiscoveryError("discovery directory is not private and local") from error
+        return
     try:
         info = path.lstat()
     except OSError as error:
@@ -194,6 +202,14 @@ def validate_runtime_paths(paths: DiscoveryPaths) -> None:
 
 
 def _load_manifest(path: Path) -> dict[str, Any]:
+    if os.name == "nt":
+        from infra_sentinel.resources.facilities.windows_security import read_private_file
+
+        try:
+            contents = read_private_file(path, MAX_MANIFEST_BYTES).decode("utf-8")
+        except (OSError, ValueError, UnicodeError) as error:
+            raise DiscoveryError("registration is not a private local UTF-8 file within 64 KiB") from error
+        return _parse_manifest(contents)
     try:
         info = path.lstat()
     except OSError as error:
@@ -207,8 +223,16 @@ def _load_manifest(path: Path) -> dict[str, Any]:
     if os.name != "nt" and stat.S_IMODE(info.st_mode) != 0o600:
         raise DiscoveryError("registration must use mode 0600")
     try:
+        contents = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        raise DiscoveryError("registration is not strict UTF-8 JSON") from error
+    return _parse_manifest(contents)
+
+
+def _parse_manifest(contents: str) -> dict[str, Any]:
+    try:
         value = json.loads(
-            path.read_text(encoding="utf-8"),
+            contents,
             object_pairs_hook=_strict_object,
             parse_constant=_reject_constant,
         )
@@ -337,6 +361,12 @@ def resolve_unix_socket(paths: DiscoveryPaths, offer: DiscoveryOffer) -> Path:
             f"Unix socket path requires {required} bytes; maximum is {capacity}"
         )
     return endpoint
+
+
+def resolve_windows_pipe(offer: DiscoveryOffer) -> str:
+    if offer.binding != WINDOWS_PIPE_BINDING or not _WINDOWS_ENDPOINT.fullmatch(offer.endpoint):
+        raise DiscoveryError("offer is not a canonical local Windows named-pipe binding")
+    return offer.endpoint
 
 
 def validate_private_socket(path: Path) -> None:

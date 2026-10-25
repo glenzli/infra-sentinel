@@ -9,7 +9,7 @@ same counter/gauge semantics.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 from typing import Iterable
 
@@ -27,7 +27,7 @@ def bucket_start(epoch: float, seconds: int, offset_seconds: int = 0) -> float:
 
 
 def bucket_timestamp(epoch: float) -> str:
-    return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
+    return datetime.fromtimestamp(epoch, timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
 @dataclass(frozen=True)

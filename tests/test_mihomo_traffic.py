@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import stat
 import sys
@@ -99,6 +100,7 @@ class FakeUnixSocket:
         self.closed = True
 
 
+@unittest.skipUnless(os.name == "posix", "Unix controller ownership and socket transport")
 class MihomoApiClientTests(unittest.TestCase):
     def test_rejects_socket_owned_by_another_user(self) -> None:
         socket_stat = SimpleNamespace(

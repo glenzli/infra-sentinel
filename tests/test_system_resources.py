@@ -434,6 +434,7 @@ class SystemResourceCollectorTests(unittest.TestCase):
         self.assertEqual(resumed.points, ())
         self.assertEqual(resumed.snapshot["disk"]["read_bytes_per_second"], 100)
 
+    @unittest.skipUnless(hasattr(os, "sysconf"), "POSIX page-size API")
     def test_linux_backend_reads_procfs_sysfs_and_declares_only_supported_capabilities(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

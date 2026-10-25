@@ -55,7 +55,7 @@ class DiagnosticIntegrationTests(unittest.TestCase):
             before = store.path.read_bytes()
             completed = process_read_only_commands(state / "config.toml", state, Mock(), logging.getLogger("test"), store)
             self.assertEqual(completed, 2)
-            result = json.loads((state / "commands" / f"{query_id}.result.json").read_text())
+            result = json.loads((state / "commands" / f"{query_id}.result.json").read_text(encoding="utf-8"))
             self.assertEqual(result["status"], "ok")
             self.assertEqual(len(result["payload"]["events"]), 1)
             rejected = json.loads((state / "commands" / f"{bad_id}.result.json").read_text())

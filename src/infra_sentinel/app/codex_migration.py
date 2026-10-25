@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from contextlib import closing
 import json
 from pathlib import Path
 import shutil
@@ -24,7 +25,7 @@ LEGACY_CODEX_FILES = ("codex-usage-day.json", "codex-session-events.json")
 
 
 def _backup_sqlite(source: Path, destination: Path) -> None:
-    with sqlite3.connect(source) as readable, sqlite3.connect(destination) as backup:
+    with closing(sqlite3.connect(source)) as readable, closing(sqlite3.connect(destination)) as backup:
         readable.backup(backup)
 
 

@@ -19,6 +19,7 @@ from datetime import date, datetime, tzinfo
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -357,9 +358,10 @@ class CodexRolloutLedger:
 
 def discover_codex_rollout_roots(preferred: Iterable[Path] | None = None) -> tuple[Path, ...]:
     """Return readable live and archived rollout roots without combining copies."""
+    codex_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser()
     candidates = tuple(preferred) if preferred is not None else (
-        Path.home() / ".codex" / "sessions",
-        Path.home() / ".codex" / "archived_sessions",
+        codex_home / "sessions",
+        codex_home / "archived_sessions",
     )
     roots: list[Path] = []
     seen: set[Path] = set()
@@ -437,6 +439,61 @@ def audit_codex_rollouts(
         result.bytes_scanned += scanned_bytes
         if has_usage:
             result.files_with_usage += 1
+    return result
+
+
+def audit_codex_rollout_ledger(
+    roots: Iterable[Path],
+    ledger: CodexRolloutLedger,
+    *,
+    timezone: tzinfo,
+) -> RolloutAudit:
+    """Independently replay only the source prefixes captured by a checkpoint.
+
+    The checkpoint supplies file markers and byte boundaries, never reference
+    counters or dedup keys. Live rollouts may keep appending during the audit.
+    Deleted or truncated captured prefixes are reported as read errors; this
+    cannot reconstruct history whose source files are no longer visible.
+    """
+    readable_roots = discover_codex_rollout_roots(roots)
+    result = RolloutAudit(date.min.isoformat(), date.max.isoformat(),
+                         roots=len(readable_roots), candidate_files=len(ledger.files))
+    candidates: dict[str, tuple[int, Path]] = {}
+    for root in readable_roots:
+        for path in root.rglob("*.jsonl"):
+            marker = _ledger_file_marker(path)
+            if marker not in ledger.files:
+                continue
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            prior = candidates.get(marker)
+            if prior is None or size > prior[0]:
+                candidates[marker] = (size, path)
+    seen_dedup_keys: set[str] = set()
+    for marker, entry in sorted(ledger.files.items(), key=lambda item: (
+        candidates[item[0]][1].name if item[0] in candidates else item[0]
+    )):
+        candidate = candidates.get(marker)
+        offset = _integer(entry.get("offset"))
+        if candidate is None or candidate[0] < offset:
+            result.read_errors += 1
+            continue
+        path = candidate[1]
+        try:
+            scanned, has_usage = _audit_rollout_file(
+                path, result.days, start_day=date.fromisoformat(result.start_day),
+                end_day=date.fromisoformat(result.end_day), timezone=timezone,
+                identity=_rollout_identity(path), seen_dedup_keys=seen_dedup_keys,
+                byte_limit=offset,
+            )
+        except OSError:
+            result.read_errors += 1
+            continue
+        result.scanned_files += 1
+        result.bytes_scanned += scanned
+        result.files_with_usage += int(has_usage)
     return result
 
 
@@ -715,13 +772,21 @@ def _audit_rollout_file(
     timezone: tzinfo,
     identity: RolloutIdentity,
     seen_dedup_keys: set[str],
+    byte_limit: int | None = None,
 ) -> tuple[int, bool]:
     state = RolloutParseState(session=identity.session, parent=identity.parent)
     scanned_bytes = 0
     has_usage = False
     with path.open("rb") as handle:
-        for line in handle:
+        while byte_limit is None or scanned_bytes < byte_limit:
+            line = handle.readline(-1 if byte_limit is None else byte_limit - scanned_bytes)
+            if not line:
+                if byte_limit is not None and scanned_bytes < byte_limit:
+                    raise OSError("captured rollout prefix is no longer readable")
+                break
             scanned_bytes += len(line)
+            if byte_limit is not None and not line.endswith(b"\n"):
+                raise OSError("captured rollout prefix does not end at a complete record")
             if len(line) > MAX_LINE_BYTES:
                 continue
             record = _record(line)

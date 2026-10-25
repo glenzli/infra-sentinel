@@ -1,4 +1,4 @@
-//! Persistent macOS menu-bar presence for Infra Sentinel.
+//! Persistent desktop tray / macOS menu-bar presence for Infra Sentinel.
 //!
 //! The Dock icon is intentionally colorful; the menu-bar icon is a separate
 //! monochrome template image designed for a 16–18 px status area. It reflects
@@ -24,12 +24,47 @@ enum Indicator {
 
 impl Indicator {
     fn icon(self) -> tauri::image::Image<'static> {
+        #[cfg(target_os = "windows")]
+        return self.windows_icon();
+        #[cfg(not(target_os = "windows"))]
         match self {
             Self::Starting => tauri::include_image!("./icons/menu-starting.png"),
             Self::Normal => tauri::include_image!("./icons/menu-normal.png"),
             Self::Warning => tauri::include_image!("./icons/menu-warning.png"),
             Self::Critical => tauri::include_image!("./icons/menu-critical.png"),
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_icon(self) -> tauri::image::Image<'static> {
+        // macOS tints template icons automatically. Windows needs its own
+        // contrasting outline and color on both light and dark taskbars.
+        let color = match self {
+            Self::Starting => [66, 124, 213, 255],
+            Self::Normal => [34, 156, 96, 255],
+            Self::Warning => [218, 137, 19, 255],
+            Self::Critical => [216, 54, 64, 255],
+        };
+        let mut pixels = vec![0_u8; 32 * 32 * 4];
+        for y in 0..32 {
+            for x in 0..32 {
+                let radius = (x as f32 - 15.5).powi(2) + (y as f32 - 15.5).powi(2);
+                let pixel = if radius > 14.5_f32.powi(2) {
+                    [0, 0, 0, 0]
+                } else if radius > 13.5_f32.powi(2) {
+                    [28, 35, 44, 255]
+                } else if radius > 12.5_f32.powi(2)
+                    || ((14..18).contains(&x) && ((8..12).contains(&y) || (15..24).contains(&y)))
+                {
+                    [245, 248, 252, 255]
+                } else {
+                    color
+                };
+                let offset = (y * 32 + x) * 4;
+                pixels[offset..offset + 4].copy_from_slice(&pixel);
+            }
+        }
+        tauri::image::Image::new_owned(pixels, 32, 32)
     }
 
     fn tooltip(self) -> &'static str {
@@ -63,9 +98,10 @@ fn current_indicator(cache: &ProjectionCache) -> Indicator {
         .unwrap_or(Indicator::Starting)
 }
 
-fn show_dashboard(app: &AppHandle) {
+pub fn show_dashboard(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
+        let _ = window.unminimize();
         let _ = window.set_focus();
     }
 }
@@ -78,7 +114,8 @@ fn watch_indicator(tray: tauri::tray::TrayIcon, cache: ProjectionCache) {
             loop {
                 let current = current_indicator(&cache);
                 if previous != Some(current) {
-                    let _ = tray.set_icon_with_as_template(Some(current.icon()), true);
+                    let _ = tray
+                        .set_icon_with_as_template(Some(current.icon()), cfg!(target_os = "macos"));
                     let _ = tray.set_tooltip(Some(current.tooltip()));
                     previous = Some(current);
                 }
@@ -104,7 +141,7 @@ pub fn install(app: &AppHandle, cache: ProjectionCache) -> Result<(), String> {
     let tray = TrayIconBuilder::with_id("infra-sentinel")
         .menu(&menu)
         .icon(initial.icon())
-        .icon_as_template(true)
+        .icon_as_template(cfg!(target_os = "macos"))
         .tooltip(initial.tooltip())
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {

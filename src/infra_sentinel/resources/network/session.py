@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import time
@@ -26,7 +26,7 @@ ROUTES = ("proxy", "direct", "blocked", "unknown", "unattributed")
 
 
 def iso_now(epoch: float | None = None) -> str:
-    return datetime.fromtimestamp(time.time() if epoch is None else epoch).astimezone().isoformat(timespec="seconds")
+    return datetime.fromtimestamp(time.time() if epoch is None else epoch, timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
 class SessionMeter:

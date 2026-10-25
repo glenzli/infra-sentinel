@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+
+from windows_facility_fixtures import make_private
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -39,10 +42,12 @@ def write_manifest(root: Path, value: dict[str, object]) -> Path:
     path = root / "registrations" / "pcp--local.json"
     path.write_text(json.dumps(value), encoding="utf-8")
     path.chmod(0o600)
+    make_private(path)
     return path
 
 
 class InfraDiscoveryTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "posix", "POSIX runtime path rules")
     def test_platform_roots_and_absolute_override(self) -> None:
         self.assertEqual(
             runtime_root(platform="darwin", environment={}, darwin_user_temp_dir=Path("/private/var/user")),
@@ -113,6 +118,7 @@ class InfraDiscoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(DiscoveryError, "unsupported fields"):
                 read_registration(path)
 
+    @unittest.skipUnless(os.name == "posix", "POSIX permission modes")
     def test_permissions_and_filename_are_part_of_discovery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -136,7 +142,7 @@ class InfraDiscoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(DiscoveryError, "Unix endpoint"):
                 read_registration(write_manifest(root, value))
 
-        long_root = Path("/" + "x" * 110)
+        long_root = Path("/" + "x" * 110).resolve()
         offer = DiscoveryOffer(
             "pcp.runtime.observer",
             ("20260810.1",),

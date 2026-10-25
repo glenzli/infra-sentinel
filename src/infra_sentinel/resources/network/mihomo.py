@@ -77,9 +77,9 @@ COMMON_TWO_LEVEL_SUFFIXES = {
 
 
 def iso_now(epoch: float) -> str:
-    from datetime import datetime
+    from datetime import datetime, timezone
 
-    return datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
+    return datetime.fromtimestamp(epoch, timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
 def _is_trusted_mihomo_socket(path: Path) -> bool:
@@ -156,6 +156,10 @@ def _decode_chunked(body: bytes) -> bytes:
 class MihomoApiClient:
     """Read-only client for Clash Verge's local Unix-domain controller."""
 
+    @property
+    def local_controller_supported(self) -> bool:
+        return hasattr(socket, "AF_UNIX") and hasattr(os, "geteuid")
+
     def __init__(
         self,
         socket_path: Path | None = None,
@@ -168,6 +172,8 @@ class MihomoApiClient:
         self.max_response_bytes = int(max_response_bytes)
 
     def _request(self, path: str) -> dict[str, Any]:
+        if not self.local_controller_supported:
+            raise RuntimeError("当前平台尚未接入 Mihomo 本机控制接口")
         socket_path = (
             self.socket_path
             if self.socket_path is not None

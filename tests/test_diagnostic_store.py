@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
@@ -310,7 +311,7 @@ class DiagnosticStoreTests(unittest.TestCase):
             changed = store.query({"transition": "changed", "since_epoch": 101, "until_epoch": 101}, now_epoch=102)
             self.assertEqual(len(changed["events"]), 1)
             self.assertEqual(changed["active_count"], 2)
-            with sqlite3.connect(path) as connection:
+            with closing(sqlite3.connect(path)) as connection, connection:
                 counts_before = connection.execute("SELECT COUNT(*) FROM diagnostic_events").fetchone()[0]
             invalid = [
                 {"sql": "DELETE FROM diagnostic_events"}, {"category": "arbitrary"},
@@ -322,7 +323,7 @@ class DiagnosticStoreTests(unittest.TestCase):
             for payload in invalid:
                 with self.subTest(payload=payload), self.assertRaises(ValueError):
                     store.query(payload, now_epoch=102)
-            with sqlite3.connect(path) as connection:
+            with closing(sqlite3.connect(path)) as connection, connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM diagnostic_events").fetchone()[0], counts_before)
 
     def test_retention_bounds_events_and_preserves_unresolved_old_conditions(self) -> None:
@@ -343,7 +344,7 @@ class DiagnosticStoreTests(unittest.TestCase):
                         "checked_at": iso_at(200 + RETENTION_SECONDS + index),
                     }]}}
                     store.observe_projection(value)
-            with sqlite3.connect(path) as connection:
+            with closing(sqlite3.connect(path)) as connection, connection:
                 self.assertLessEqual(connection.execute("SELECT COUNT(*) FROM diagnostic_events").fetchone()[0], 3)
                 self.assertLessEqual(connection.execute("SELECT COUNT(*) FROM diagnostic_active").fetchone()[0], 2)
                 self.assertLessEqual(connection.execute("SELECT COUNT(*) FROM diagnostic_checks").fetchone()[0], 10)
@@ -395,7 +396,7 @@ class DiagnosticStoreTests(unittest.TestCase):
             original = root / "original.sqlite3"
             DiagnosticStore(original).observe_projection(projection(100, "warning"))
             copied = root / "copied.sqlite3"
-            with sqlite3.connect(original) as connection:
+            with closing(sqlite3.connect(original)) as connection, connection:
                 self.assertEqual(connection.execute("PRAGMA journal_mode = WAL").fetchone()[0], "wal")
                 connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 copied.write_bytes(original.read_bytes())
@@ -427,7 +428,7 @@ class DiagnosticStoreTests(unittest.TestCase):
             self.assertGreaterEqual(result["active_count"], 4)
             self.assertNotIn(secret, json.dumps(result))
             self.assertNotIn(secret.encode(), path.read_bytes())
-            with sqlite3.connect(path) as connection:
+            with closing(sqlite3.connect(path)) as connection, connection:
                 for table in ("diagnostic_checks", "diagnostic_active", "diagnostic_events"):
                     self.assertNotIn(secret, repr(connection.execute(f"SELECT * FROM {table}").fetchall()))
 

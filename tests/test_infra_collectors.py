@@ -110,6 +110,15 @@ class CollectorRegistryTests(unittest.TestCase):
 
         self.assertEqual(adapted, legacy)
 
+    def test_unsupported_mihomo_never_publishes_zero_measurements_or_failures(self) -> None:
+        registry = network_collector_registry(())
+        context = CollectorContext({"mihomo_status": "unsupported", "epoch": 100,
+                                    "kernel": {"up_bytes": 50, "down_bytes": 60}}, {})
+        for _ in range(4):
+            runs = registry.collect(context)
+            self.assertEqual(runs[0].status, "disabled")
+            self.assertEqual(tuple(collected_points(runs)), ())
+
     def test_mihomo_outage_omits_local_points_but_keeps_remote_points(self) -> None:
         registry = network_collector_registry((("primary", "both"),))
         registry.collect(CollectorContext({

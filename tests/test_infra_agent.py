@@ -181,6 +181,14 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertNotIn("kernel", result)
         self.assertNotIn("services", result)
 
+    def test_unsupported_mihomo_is_distinct_from_a_collection_failure(self) -> None:
+        client = SimpleNamespace(local_controller_supported=False)
+        with patch("infra_sentinel.app.agent.collect_interval", side_effect=RuntimeError("unsupported")):
+            result, available = collect_mihomo_or_unavailable(client, None, 5, None, logging.getLogger("test"))
+        self.assertFalse(available)
+        self.assertEqual(result["mihomo_status"], "unsupported")
+        self.assertNotIn("kernel", result)
+
     def test_missing_local_sample_preserves_local_totals_and_records_remote_vps(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             meter = SessionMeter(Path(temporary))
@@ -945,7 +953,7 @@ class SessionMeterTests(unittest.TestCase):
 
 class SnapshotAndEventTests(unittest.TestCase):
     def test_native_notifications_pass_chinese_as_osascript_arguments(self) -> None:
-        with patch("infra_sentinel.app.agent.subprocess.run") as runner:
+        with patch("infra_sentinel.app.agent.sys.platform", "darwin"), patch("infra_sentinel.app.agent.subprocess.run") as runner:
             send_native_notification("流量告警", "5 分钟 ↑250 MiB")
         args, kwargs = runner.call_args
         self.assertEqual(args[0][:2], ["/usr/bin/osascript", "-e"])

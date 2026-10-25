@@ -34,6 +34,37 @@ class InfraProjectionTests(unittest.TestCase):
             privacy="aggregate-only",
         )
 
+    def test_unsupported_local_network_is_disabled_without_a_health_fault_or_fake_metric(self) -> None:
+        projection = build_infra_projection(
+            {**sample(), "mihomo_status": "unsupported"},
+            {"kernel": {"total_bytes": 100}, "vps": {}},
+            {"enabled": False, "status": "disabled", "servers": []}, "none",
+        )
+        source = next(item for item in projection["sources"] if item["id"] == "local-mihomo")
+        network = next(item for item in projection["resources"] if item["id"] == "network")
+        self.assertFalse(source["enabled"])
+        self.assertEqual(source["status"], "disabled")
+        self.assertFalse(network["enabled"])
+        self.assertEqual(network["status"], "disabled")
+        self.assertEqual(projection["metrics"], [])
+        self.assertEqual(projection["overall"]["status"], "healthy")
+
+    def test_unsupported_local_network_keeps_remote_billing_available(self) -> None:
+        projection = build_infra_projection(
+            {**sample(), "mihomo_status": "unsupported"},
+            {"kernel": {}, "vps": {"total_bytes": 250}},
+            {"enabled": True, "status": "ok", "servers": [{
+                "id": "primary", "label": "VPS", "vps": {"enabled": True, "status": "ok"},
+                "xray_stats": {"enabled": False, "status": "disabled"},
+            }]}, "none",
+        )
+        network = next(item for item in projection["resources"] if item["id"] == "network")
+        self.assertTrue(network["enabled"])
+        self.assertEqual(network["primary_value"], 250)
+        self.assertEqual(network["online_source_count"], 1)
+        self.assertEqual(projection["overall"]["status"], "healthy")
+        self.assertNotIn("local-mihomo", {item["source_id"] for item in projection["metrics"]})
+
     def test_local_network_projection_preserves_exact_counter(self) -> None:
         projection = build_infra_projection(
             sample(),

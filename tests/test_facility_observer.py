@@ -3,11 +3,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import json
 import logging
+import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+
+from windows_facility_fixtures import make_private
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -45,8 +48,9 @@ def registration(
         "offers": [{
             "protocol": protocol,
             "protocol_versions": [protocol_version],
-            "binding": "infra.local.unix-socket",
-            "endpoint": f"sockets/{endpoint_token}.sock",
+            "binding": "infra.local.windows-named-pipe" if os.name == "nt" else "infra.local.unix-socket",
+            "endpoint": (rf"\\.\pipe\infra-protocol\{endpoint_token}" if os.name == "nt"
+                         else f"sockets/{endpoint_token}.sock"),
         }],
     }
 
@@ -83,6 +87,8 @@ def private_runtime(temporary: str) -> Path:
     root.chmod(0o700)
     (root / "registrations").mkdir(mode=0o700)
     (root / "sockets").mkdir(mode=0o700)
+    make_private(root)
+    make_private(root / "registrations")
     return root
 
 
@@ -93,6 +99,7 @@ def write_registration(root: Path, value: dict[str, object]) -> Path:
     path = root / "registrations" / f"{service['kind']}--{service['instance_id']}.json"
     path.write_text(json.dumps(value), encoding="utf-8")
     path.chmod(0o600)
+    make_private(path)
     return path
 
 
@@ -270,8 +277,7 @@ class FacilityMonitorTests(unittest.TestCase):
             with patch.object(type(PCP_ADAPTER), "observe", return_value=first):
                 monitor.refresh_once(NOW.timestamp())
 
-            changed = registration()
-            changed["offers"][0]["endpoint"] = "sockets/pcp-rebound.sock"  # type: ignore[index]
+            changed = registration(endpoint_token="pcp-rebound")
             path.write_text(json.dumps(changed), encoding="utf-8")
             path.chmod(0o600)
             with patch.object(type(PCP_ADAPTER), "observe", return_value=first):
@@ -371,6 +377,7 @@ class FacilityMonitorTests(unittest.TestCase):
             self.assertEqual(state["status"], "disabled")
             self.assertNotIn("error_kind", state)
 
+    @unittest.skipUnless(os.name == "posix", "POSIX directory permission validation")
     def test_invalid_runtime_root_requires_confirmation_and_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = private_runtime(temporary)

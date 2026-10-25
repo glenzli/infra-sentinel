@@ -134,7 +134,14 @@ fn launch_once(
     config: &Path,
     cache: ProjectionCache,
 ) -> Result<(), String> {
-    let mut child = Command::new(agent)
+    let mut command = Command::new(agent);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // The Agent needs redirected stdout even though it has no console.
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let mut child = command
         .arg("--config")
         .arg(config)
         .arg("--watch")

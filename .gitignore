@@ -35,3 +35,7 @@ npm-debug.log*
 
 .DS_Store
 ._*
+
+# Local collaboration state is never part of a release.
+.dev-mesh/
+.dev-mesh.bootstrap.lock

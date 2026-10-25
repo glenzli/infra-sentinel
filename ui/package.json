@@ -6,11 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "package:agent": "sh scripts/package-agent.sh",
+    "package:agent": "node scripts/package-agent.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.0.0"
+    "@tauri-apps/api": "~2.11"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0",
