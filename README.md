@@ -2,11 +2,11 @@
 
 **中文** · [English](#english)
 
-当前版本：[2.1.2](https://github.com/glenzli/infra-sentinel/releases/tag/v2.1.2) · [更新日志](CHANGELOG.md)
+macOS 稳定版：[2.1.2](https://github.com/glenzli/infra-sentinel/releases/tag/v2.1.2) · Windows 预览版：[2.2.0-beta.1](https://github.com/glenzli/infra-sentinel/releases/tag/v2.2.0-beta.1) · [更新日志](CHANGELOG.md)
 
-Infra Sentinel 是一个 macOS 桌面监控工具，用于查看网络流量、AI 客户端用量、本机资源、远端主机和服务状态。各类数据按来源和单位分别展示。
+Infra Sentinel 是一个本地桌面监控工具，用于查看网络流量、AI 客户端用量、本机资源、远端主机和服务状态。各类数据按来源和单位分别展示。
 
-Windows 原生日常预览版现可从源码构建：支持桌面与托盘、AI 用量、基础系统资源、上游状态、SSH 远端监控和 Infra Protocol Named Pipe 消费端。构建、验证与接入条件见 [Windows 日常版](docs/windows.md)。Linux 桌面发布排在 Windows 之后。
+Windows 原生日常预览版提供 x64 安装包：支持桌面与托盘、AI 用量、基础系统资源、上游状态、SSH 远端监控和 Infra Protocol Named Pipe 消费端。下载、构建、验证与接入条件见 [Windows 日常版](docs/windows.md)。Linux 桌面发布排在 Windows 之后。
 
 ![Infra Sentinel 中文概览](assets/overview-zh.png)
 
@@ -87,6 +87,8 @@ PYTHONPATH=src python3 -m infra_sentinel.cli.diagnostics --hours 24 --limit 50
 
 ## 安装与构建
 
+Windows x64 用户可从 [2.2.0-beta.1 预发布版](https://github.com/glenzli/infra-sentinel/releases/tag/v2.2.0-beta.1) 下载安装程序和 SHA-256 校验文件。安装包未签名，包含 Agent 和 WebView2 引导程序；无需另装 Python、Node.js 或 Rust。已知限制见 [Windows 日常版](docs/windows.md)。
+
 从 [2.1.2 Release](https://github.com/glenzli/infra-sentinel/releases/tag/v2.1.2) 下载 Apple Silicon App ZIP 和对应 SHA-256 校验文件。
 
 当前桌面包支持 macOS 13+。预编译 App 使用 ad-hoc 签名，未经 Apple 公证；首次启动如被 macOS 拦截，可右键选择“打开”，或在“系统设置 → 隐私与安全性”中确认。
@@ -131,11 +133,11 @@ cd src-tauri && cargo test --offline
 
 [中文](#infra-sentinel)
 
-Current release: [2.1.2](https://github.com/glenzli/infra-sentinel/releases/tag/v2.1.2) · [Changelog](CHANGELOG.md)
+macOS stable: [2.1.2](https://github.com/glenzli/infra-sentinel/releases/tag/v2.1.2) · Windows preview: [2.2.0-beta.1](https://github.com/glenzli/infra-sentinel/releases/tag/v2.2.0-beta.1) · [Changelog](CHANGELOG.md)
 
-Infra Sentinel is a macOS desktop monitor for network traffic, local AI-client usage, host resources, remote hosts, and service status. Each source keeps its own units and accounting method.
+Infra Sentinel is a local desktop monitor for network traffic, local AI-client usage, host resources, remote hosts, and service status. Each source keeps its own units and accounting method.
 
-A native Windows daily-use preview can now be built from source, covering the desktop/tray, AI usage, basic host resources, provider status, SSH monitoring and an Infra Protocol Named Pipe consumer. See the [Windows build and capability notes](docs/windows.md). Windows takes priority over the Linux desktop release.
+A native Windows daily-use preview is available as an x64 installer, covering the desktop/tray, AI usage, basic host resources, provider status, SSH monitoring and an Infra Protocol Named Pipe consumer. See the [Windows download and capability notes](docs/windows.md). Windows takes priority over the Linux desktop release.
 
 ![Infra Sentinel overview](assets/overview-en.png)
 
@@ -204,6 +206,8 @@ PYTHONPATH=src python3 -m infra_sentinel.cli.diagnostics --hours 24 --limit 50
 The packaged `infra-agent --diagnostics` also reads existing state without starting collection or creating a missing journal. See [the diagnostic interface](docs/diagnostics.md) for filters, coverage, and time semantics.
 
 ### Build
+
+Windows x64 users can download the unsigned installer and SHA-256 checksum from the [2.2.0-beta.1 pre-release](https://github.com/glenzli/infra-sentinel/releases/tag/v2.2.0-beta.1). It bundles the Agent and WebView2 bootstrapper; Python, Node.js and Rust are not required. See the [Windows notes](docs/windows.md) for preview limits.
 
 Download the Apple Silicon App ZIP and its SHA-256 checksum from the [2.1.2 Release](https://github.com/glenzli/infra-sentinel/releases/tag/v2.1.2).
 

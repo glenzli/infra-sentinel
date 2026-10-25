@@ -4,6 +4,10 @@ Windows 原生桌面版沿用 Tauri 界面和 Python Agent，共用计量、SQLi
 Projection 和设置协议。首阶段针对 Windows x64；Linux 桌面发布排在 Windows 后。
 现有正式 Release 的 macOS 支持范围不变。
 
+从 [2.2.0-beta.1 预发布版](https://github.com/glenzli/infra-sentinel/releases/tag/v2.2.0-beta.1)
+下载 `Infra-Sentinel-2.2.0-beta.1-windows-x64-unsigned-setup.exe` 和对应 `.sha256`。
+这是 Windows 专用预览发布；macOS 稳定版继续使用 2.1.2。
+
 ## 首阶段范围
 
 | 能力 | Windows 日常版 |
@@ -58,12 +62,20 @@ python -m venv .venv
 构建产物：
 
 ```text
-ui\src-tauri\target\release\bundle\nsis\Infra Sentinel_2.1.2_x64-setup.exe
+ui\src-tauri\target\release\bundle\nsis\Infra Sentinel_2.2.0-beta.1_x64-setup.exe
 ```
 
 安装包按当前用户安装，并内含 Agent、默认配置和 WebView2 引导程序；最终用户
 无需 Python、Node.js 或 Rust。缺少 WebView2 时引导程序需要联网。当前本地预览包
-未做代码签名。正式对外发布、代码签名和 CI 发布矩阵属于后续发布工作。
+未做代码签名。稳定版发布、代码签名和 CI 发布矩阵属于后续发布工作。
+
+发布用的规范文件名和 SHA-256 由以下入口生成，写入 `dist/`：
+
+```powershell
+.\bin\package-release.ps1
+# 已完成本次版本构建时，可复用经版本校验的安装包：
+.\bin\package-release.ps1 -SkipBuild
+```
 
 只生成桌面文件可运行 `.\bin\build-desktop-app.ps1 -NoBundle`。
 直接运行时，将 `infra-sentinel-desktop.exe`、`infra-agent.exe` 和

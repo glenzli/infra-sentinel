@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+## 2.2.0-beta.1 — 2026-10-25
+
+Windows x64 preview. The macOS stable release remains 2.1.2.
+
+### Added
+
+- Native Windows desktop and tray, single-instance activation, console-free
+  Agent supervision, current-user NSIS installation and a bundled WebView2 bootstrapper.
+- Native Windows Infra Protocol Named Pipe consumption for PCP, Infer Runtime
+  and Dev Mesh Observer, including private Discovery file ACLs, server SID
+  admission and bounded, safely cancelled byte-stream I/O.
+- Reproducible packaged Windows checks and independent replay of captured Codex
+  file prefixes, validating restart accounting and production UI aggregates
+  while live rollouts keep growing.
+
+### Fixed
+
+- Probe Windows parent-process liveness without using POSIX signal semantics.
+- Honor CODEX_HOME, close SQLite migration backup handles, use UTF-8 for local
+  subprocess output, and preserve portable event-time conversions and test fixtures.
+- Keep unsupported local Mihomo observation disabled without false failures
+  or fabricated zero-value metrics. SSH remote observation remains available.
+
+### Preview limits
+
+- Unsigned Windows x64 installer; Windows notifications and local Mihomo
+  Controller support remain pending, along with extended sleep/resume testing.
+- Native pipe contract fixtures pass for all three facility protocols;
+  real-product Windows interoperability requires providers publishing compatible offers.
+- No new macOS binary is included. Linux desktop publication follows Windows.
+
 ## 2.1.2 — 2026-10-22
 
 ### Added
