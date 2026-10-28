@@ -83,6 +83,35 @@ class PricingCatalogTests(unittest.TestCase):
         self.assertEqual(estimate.priced_tokens, 0)
         self.assertEqual(estimate.unpriced_tokens, 100)
 
+    def test_terra_launch_date_and_cache_legs(self) -> None:
+        usage = {
+            "gpt-6.1-terra": {
+                "input_tokens": 3_000_000,
+                "cached_input_tokens": 1_000_000,
+                "cache_write_input_tokens": 1_000_000,
+                "output_tokens": 1_000_000,
+                "reasoning_output_tokens": 200_000,
+                "total_tokens": 4_000_000,
+            },
+        }
+        before_launch = estimate_standard_api_cost(usage, usage_date="2026-10-25")
+        at_launch = estimate_standard_api_cost(usage, usage_date="2026-10-26")
+
+        self.assertEqual(before_launch.priced_tokens, 0)
+        self.assertEqual(before_launch.unpriced_tokens, 4_000_000)
+        self.assertAlmostEqual(at_launch.total_cost_usd, 7.30)
+        self.assertEqual(at_launch.priced_tokens, 4_000_000)
+        self.assertEqual(at_launch.unpriced_tokens, 0)
+
+    def test_terra_price_does_not_invent_family_aliases(self) -> None:
+        estimate = estimate_standard_api_cost({
+            "gpt-6-terra": {"input_tokens": 100, "total_tokens": 100},
+            "gpt-6.1-terra-preview": {"input_tokens": 100, "total_tokens": 100},
+        }, usage_date="2026-10-28")
+
+        self.assertEqual(estimate.priced_tokens, 0)
+        self.assertEqual(estimate.unpriced_tokens, 200)
+
     def test_catalog_rejects_overlapping_periods(self) -> None:
         raw = bundled_pricing_catalog().raw.replace(
             b'valid_from = "2027-01-01"',
