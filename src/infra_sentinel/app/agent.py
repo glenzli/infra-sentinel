@@ -77,6 +77,7 @@ from infra_sentinel.resources.ai.antigravity import AntigravityUsageCollector
 from infra_sentinel.resources.ai.infer_runtime import InferRuntimeUsageCollector
 from infra_sentinel.resources.ai.opencode import OpenCodeUsageCollector, discover_opencode, discover_opencode_desktop_database
 from infra_sentinel.resources.ai.pricing_catalog import PricingCatalogManager
+from infra_sentinel.resources.ai.codex_telemetry import CodexTelemetryService
 from infra_sentinel.core.timing import annotate_sample_timing, sample_is_realtime
 from infra_sentinel.resources.network.remote import RemoteFleetMonitor
 from infra_sentinel.resources.network.session import SessionMeter
@@ -929,12 +930,22 @@ def main() -> int:
     mode.add_argument("--watch", action="store_true", help="持续采样并发布本地 Projection")
     mode.add_argument("--maintain", action="store_true", help="离线整理历史指标与临时查询结果")
     mode.add_argument("--diagnostics", action="store_true", help="只读查询诊断历史并输出 JSON")
+    mode.add_argument("--codex-telemetry", choices=("enable", "disable", "status"), help="配置本机 Codex 请求遥测")
     parser.add_argument("--diagnostics-query", metavar="JSON", help="诊断查询条件，仅与 --diagnostics 一起使用")
     args = parser.parse_args()
     if args.diagnostics_query is not None and not args.diagnostics:
         parser.error("--diagnostics-query requires --diagnostics")
     try:
         config_path = args.config or default_config_path()
+        if args.codex_telemetry is not None:
+            from infra_sentinel.cli.codex_telemetry import run_action, telemetry_state_directory
+            try:
+                result = run_action(args.codex_telemetry, telemetry_state_directory(args.config))
+            except (OSError, ValueError):
+                print(json.dumps({"status": "error", "reason": "telemetry setup rejected; existing configuration preserved"}))
+                return 1
+            print(json.dumps({"status": "ok", **result}))
+            return 0
         if args.diagnostics:
             query = json.loads(args.diagnostics_query) if args.diagnostics_query is not None else {}
             result = DiagnosticStore(state_directory_for_config(config_path) / "diagnostics.sqlite3").query(query)
@@ -992,6 +1003,8 @@ def main() -> int:
         collector_registry = network_collector_registry(
             (server.id, server.estimation.billing_mode) for server in config.remote_servers
         )
+        codex_telemetry = CodexTelemetryService(config.state_dir)
+        codex_telemetry.start()
         collector_registry.register(OpenCodeUsageCollector(
             checkpoint_path=config.state_dir / "opencode-usage-counters.json",
             executable_finder=lambda: discover_opencode(config.integrations.opencode_executable),
@@ -1000,6 +1013,7 @@ def main() -> int:
         collector_registry.register(CodexUsageCollector(
             ledger_path=config.state_dir / "codex-rollout-ledger.json",
             pricing_catalog=pricing_catalog,
+            telemetry_details=codex_telemetry.details,
         ))
         collector_registry.register(AntigravityUsageCollector(pricing_catalog=pricing_catalog))
         collector_registry.register(DshUsageCollector(checkpoint_path=config.state_dir / "dsh-usage-seen.json"))
@@ -1084,6 +1098,7 @@ def main() -> int:
                     write_health_state(config, "error", str(exc))
                     time.sleep(min(5, config.monitor.sample_seconds))
         finally:
+            codex_telemetry.stop()
             read_only_command_stop.set()
             read_only_command_thread.join(timeout=1)
             maintenance_stop.set()

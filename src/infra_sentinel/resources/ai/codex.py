@@ -89,6 +89,7 @@ class CodexUsageCollector:
         pricing_catalog: PriceCatalogLookup | None = None,
         clock: Callable[[], float] = time.time,
         poll_seconds: int = CODEX_POLL_SECONDS,
+        telemetry_details: Callable[[], list[dict[str, Any]]] | None = None,
     ) -> None:
         self._rollout_roots_finder = rollout_roots_finder
         self._ledger_path = ledger_path
@@ -96,6 +97,7 @@ class CodexUsageCollector:
         self._pricing_catalog = pricing_catalog or bundled_pricing_catalog()
         self._clock = clock
         self._poll_seconds = max(1, int(poll_seconds))
+        self._telemetry_details = telemetry_details
         self._next_poll_epoch = 0.0
         self._checked_at: str | None = None
         self._snapshot: dict[str, Any] = {"available": False, "status": "unavailable"}
@@ -196,6 +198,7 @@ class CodexUsageCollector:
             ))
         return [
             *self._timing_details(ledger),
+            *self._local_telemetry_details(),
             detail_group("token-breakdown", localized("Token breakdown", "Token 分类明细"), [
                 token_metric("raw-total", localized("Raw total", "原始总量"), today.composition.total_tokens, localized("today · input plus output", "今日 · 输入加输出")),
                 token_metric("input", localized("Input", "输入"), today.composition.input_tokens, localized("today", "今日")),
@@ -224,6 +227,15 @@ class CodexUsageCollector:
                 badge=localized("reference · not billing", "估算 · 非账单"),
             ),
         ]
+
+    def _local_telemetry_details(self) -> list[dict[str, Any]]:
+        if self._telemetry_details is None:
+            return []
+        try:
+            return self._telemetry_details()
+        except Exception:
+            # Optional telemetry cannot interrupt the authoritative rollout ledger.
+            return []
 
     @staticmethod
     def _timing_details(ledger: CodexRolloutLedger) -> list[dict[str, Any]]:

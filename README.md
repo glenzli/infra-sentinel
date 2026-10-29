@@ -2,6 +2,8 @@
 
 **中文** · [English](#english)
 
+当前源码版本：[2.3.0](docs/releases/v2.3.0.md)。已发布安装包按平台分别维护：
+
 macOS 稳定版：[2.1.2](https://github.com/glenzli/infra-sentinel/releases/tag/v2.1.2) · Windows 预览版：[2.2.0-beta.1](https://github.com/glenzli/infra-sentinel/releases/tag/v2.2.0-beta.1) · [更新日志](CHANGELOG.md)
 
 Infra Sentinel 是一个本地桌面监控工具，用于查看网络流量、AI 客户端用量、本机资源、远端主机和服务状态。各类数据按来源和单位分别展示。
@@ -46,9 +48,11 @@ Codex 用量从本机 rollout JSONL 中读取每次请求的 `last_token_usage` 
 
 DSH（DeepSeek Harness）从 `~/.dsh/sessions`（或 `$DSH_HOME/sessions`）只读解析 v4 JSONL / Zstd 会话中的供应商用量，每分钟检查一次。统计包含输入、输出、缓存和按模型、自然日、小时的历史；同次调用的流式与最终报告只计一次，重试单独计数，明确的继承前缀不重复计入。旧会话按事件时间归档，不按文件修改时间计入今日。不会读取凭据或保留对话正文，也不推测模型价格别名。压缩日志在 Python 3.14+ 上直接支持；较早 Python 可安装 `.[dsh]`。
 
-新版 Codex 日志提供计时字段时，AI 用量页会按模型分别保留主对话最近完成轮次的平均输出 `tokens/s`、首 Token 延迟和整轮耗时。平均速度为本轮输出 Token（含推理）除以 Codex 记录的整轮耗时，包含等待与工具执行，不代表纯生成速度。沿用现有约 20 秒的采集间隔，完成后更新；缺少可靠字段时不显示。已有账本无需重建，可读取的旧日志会分批补齐各模型计时，不重复累计 Token。
+AI 用量页按模型显示流速与首 Token 延迟；不展示轮次平均或请求平均。Codex 日志提供有效计时时可单独显示首输出等待，沿用约 20 秒采集间隔；缺少流式计时的样本不显示速度。已有账本无需重建，可读取的旧日志会分批补齐各模型计时，不重复累计 Token。
 
-OpenCode 按已完成用户轮次汇总输出并显示轮次平均（含工具）；DSH 从带时间戳的响应流读取请求平均与客户端流速；Antigravity 使用生成元数据中的首 Token 延迟和流式耗时。请求平均包含首输出等待，客户端流速不含该等待且可能受缓冲交付影响；三种口径分别标注，不作为可互比的纯模型生成速度。缺少可靠起止或重试起点时保持缺失，不改动 Token 用量账本。
+可选启用 [Codex 本机请求遥测](docs/codex-telemetry.md)，显示扣除同一次请求首 Token 等待的“估算流速”，以及该请求的“首 Token 延迟”。估算明确标注，计时缺失、非法或剩余不足 250 ms 时不显示，不视为服务端解码速度。接收器仅监听经认证的回环端点，按同会话、精确模型的成功发送与完成事件配对；只保留受限数值样本，原始遥测正文不落盘。无法可靠配对时不推算速度，用量账本继续使用原有 rollout 来源。
+
+DSH 与 Antigravity 有有效流式计时时显示客户端流速，并配对同一次请求的首 Token 延迟；缓冲可能影响数值，不能当作服务端纯解码速度。OpenCode 或其他只有轮次计时的来源，只显示来源记录的首输出等待，不用整轮均值推测流速。缺少可靠起止时保持缺失，不改动 Token 用量账本。
 
 每个客户端按精确模型名独立保留最新有效样本；切换模型不会覆盖其他模型的速度。用量总览和模型分析只显示所选时段内的速度样本。样本旁显示模型名，悬停或聚焦可查看记录时间和计时口径；尚未完成的轮次不替换已有记录。
 
@@ -133,6 +137,8 @@ cd src-tauri && cargo test --offline
 
 [中文](#infra-sentinel)
 
+Current source version: [2.3.0](docs/releases/v2.3.0.md). Published installers are maintained separately for each platform:
+
 macOS stable: [2.1.2](https://github.com/glenzli/infra-sentinel/releases/tag/v2.1.2) · Windows preview: [2.2.0-beta.1](https://github.com/glenzli/infra-sentinel/releases/tag/v2.2.0-beta.1) · [Changelog](CHANGELOG.md)
 
 Infra Sentinel is a local desktop monitor for network traffic, local AI-client usage, host resources, remote hosts, and service status. Each source keeps its own units and accounting method.
@@ -164,11 +170,13 @@ Mihomo is discovered automatically. Remote hosts are configured by an existing `
 
 Codex usage is calculated from per-request `last_token_usage` increments in local rollout JSONL. `threads.tokens_used` is not used. Fork replay and duplicate records across files are removed. The persistent ledger contains aggregate usage, parser state, and deduplication markers, but no task content.
 
+Optional [local Codex telemetry](docs/codex-telemetry.md) shows an explicitly estimated stream rate excluding first-token waiting, paired with the same request's first-token delay. Estimates are omitted for missing/invalid timing or residual windows below 250 ms; they are not server decoding speed. The authenticated loopback receiver retains bounded numerical samples, discards raw telemetry, and leaves usage accounting independent. Missing or ambiguous send/completion pairs never produce a speed.
+
 DSH (DeepSeek Harness) reads provider usage from local v4 JSONL / Zstd sessions under `~/.dsh/sessions` (or `$DSH_HOME/sessions`), checked once a minute. It includes input, output, cache, model, daily and hourly history. Final usage replaces streaming reports for the same attempt; retries count separately and explicit inherited prefixes are excluded. Historical usage follows event timestamps, not file modification time. Credentials and transcript content are not retained, and model-price aliases are not inferred. Compressed logs work with Python 3.14+; earlier Python versions can install `.[dsh]`.
 
-When newer Codex logs provide timing metadata, AI usage keeps each model's latest completed main-chat turn's average output `tokens/s`, first-token latency, and duration. The average divides turn output Tokens (including reasoning) by Codex-reported turn duration, including waiting and tool execution; it is not pure generation speed. Results update after completion on the existing roughly 20-second collection cadence. Missing reliable timing stays absent. Existing ledgers need no rebuild: readable old logs backfill model timing in batches without replaying Token accounting.
+When Codex logs provide usable timing metadata, AI usage can show each model's latest recorded first-output delay. Completed samples update on the existing roughly 20-second collection interval. Samples without stream timing do not show a speed; no turn average is used as a fallback. Existing ledgers backfill optional timing without rebuilding or replaying Token increments.
 
-OpenCode shows a completed user-turn average including tools. DSH reads request averages and client stream rates from timed response streams; Antigravity uses recorded first-token and streaming durations. Request averages include first-output waiting. Client stream rates exclude it and may be inflated by buffering; these scopes remain separately labeled. Missing timing or an unknown retry start stays absent and never changes Token accounting.
+AI views show stream rate and first-token delay, without turn or request averages. DSH and Antigravity pair client stream rate with first-output delay from the same request. Buffering can inflate stream rates; they are not server decoding speed. OpenCode or other sources with only turn timing show the reported first-output wait without inferring a stream rate. Missing timing stays absent and never changes Token accounting.
 
 Each client keeps the latest usable sample independently for each exact model ID. Switching models preserves the other models' rates. Usage overview and model analysis only show performance samples recorded in the selected time range. Samples show their model; hover or focus reveals the recording time and timing scope. Unfinished turns do not replace completed samples.
 

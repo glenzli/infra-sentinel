@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## 2.3.0 — 2026-10-29
+
+Shared source version with macOS validation. Published platform downloads keep
+their own release status; the existing Windows preview remains 2.2.0-beta.1.
+
+### Added
+
+- Explicit, reversible Codex telemetry setup and an authenticated loopback OTLP
+  log receiver with bounded memory, concurrency, admission and numeric-only storage.
+- Per-model request timing, first-token delay and receiver diagnostics, independent
+  of Token accounting. Local Sol and Astra desktop requests have been verified.
+- Codex telemetry setup, privacy, performance and macOS proxy troubleshooting notes.
+
+### Changed
+
+- Show stream rate and first-token delay from the same source/model/request;
+  Codex estimates subtract first-token waiting and omit unreliable timing samples.
+- Remove turn/request averages from normal AI views. Keep sample hints to source,
+  model and time, with full calculation notes on Methods & estimates.
+- Include updated bundled API-price coverage and GPT-6.1 Terra accounting support.
+
+### Setup and platform notes
+
+- Telemetry requires one explicit enable command. Existing third-party exporters
+  are preserved; running Codex processes need restarting to load configuration.
+- macOS loopback proxy exceptions are documented separately from automatic setup.
+- Windows and Linux packaging/runtime acceptance for this update remains separate.
+
 ## 2.2.0-beta.1 — 2026-10-25
 
 Windows x64 preview. The macOS stable release remains 2.1.2.

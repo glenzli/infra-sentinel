@@ -38,6 +38,13 @@ adapters own timestamp and usage correlation; missing timing stays absent.
 Timing is diagnostic metadata and never enters token accounting; turn markers
 are irreversible hashes. Other AI adapters expose exact event hours when their source has
 timestamps and sampled deltas with explicit estimated provenance otherwise.
+`resources/ai/codex_telemetry/` owns optional authenticated loopback OTLP/JSON
+log admission, volatile request correlation and aggregate-only performance
+checkpoints. `protocol.py` drops all non-allowlisted data before shared state;
+`receiver.py` bounds transport resources; `state.py` owns pairing and missing-data
+policy. Explicit opt-in/configuration lives in `cli/codex_telemetry.py` and its
+setup use case, never in a collector. The Agent wires its lifecycle and the
+Codex collector consumes only safe diagnostic groups, independently of usage.
 `resources/ai/codex.py` consumes that ledger as its
 only Codex usage fact source. `cli/codex_usage_audit.py` only renders an
 aggregate audit; it does not own parsing or persist user rollout data.

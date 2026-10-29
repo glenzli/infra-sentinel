@@ -306,7 +306,7 @@ function providerDetails(source: Record<string, unknown>, providerPanels: Readon
   const open = providerPanels.get(sourceId) === true;
   const today = windowOf(source, "today");
   const cumulative = windowOf(source, "cumulative");
-  const groups = asArray(source.details);
+  const groups = performanceDisplayGroups(asArray(source.details));
   const started = shortStartedAt(today.started_at);
   const todaySource = [started ? tr(`since ${started}`, `${started} 起`) : "", localized(today.detail)].filter(Boolean).join(" · ");
   return `<details class="ai-provider-panel" data-ai-provider-id="${escapeHtml(sourceId)}"${open ? " open" : ""}><summary title="${escapeHtml(todaySource)}"><strong title="${escapeHtml(String(source.collection_method ?? ""))}">${escapeHtml(source.label ?? source.source_id)}</strong><span><small>${tr("Today", "今日")}</small><strong>${today.available ? formatTokens(today.tokens) : "—"}</strong></span><span><small>${tr("Cumulative", "累计")}</small><strong>${cumulative.available ? formatTokens(cumulative.tokens) : "—"}</strong></span></summary><div class="ai-provider-body">${todaySource ? `<p class="ai-provider-basis">${escapeHtml(todaySource)}</p>` : ""}${groups.map(activityDetailGroup).join("")}</div></details>`;
@@ -418,36 +418,78 @@ function modelReferenceAnnotations(
   }).join("");
 }
 
+const PERFORMANCE_GROUP_IDS = new Set([
+  "turn-performance", "request-performance", "estimated-stream-performance", "client-stream-performance",
+]);
+
+function performanceMetric(group: Record<string, unknown>, unit: string, id?: string): Record<string, unknown> | undefined {
+  return asArray(group.metrics).find((metric) => metric.unit === unit && (!id || metric.id === id)
+    && typeof metric.value === "number" && Number.isFinite(metric.value) && metric.value >= 0);
+}
+
+function performanceDisplayGroups(groups: Record<string, unknown>[], window?: AnalysisTimeWindow): Record<string, unknown>[] {
+  const byModel = new Map<string, Record<string, unknown>[]>();
+  const recordedEpoch = (group: Record<string, unknown>) => new Date(String(asRecord(group.sample).recorded_at ?? "")).getTime() / 1000;
+  for (const group of groups) {
+    if (!PERFORMANCE_GROUP_IDS.has(String(group.id))) continue;
+    const epoch = recordedEpoch(group);
+    if (!Number.isFinite(epoch) || (window && (epoch < window.sinceEpoch || epoch > window.untilEpoch))) continue;
+    const model = String(asRecord(group.sample).model ?? "unknown");
+    byModel.set(model, [...(byModel.get(model) ?? []), group]);
+  }
+  const visible: Record<string, unknown>[] = [];
+  for (const samples of byModel.values()) {
+    samples.sort((a, b) => recordedEpoch(b) - recordedEpoch(a)
+      || Number(b.id === "client-stream-performance") - Number(a.id === "client-stream-performance")
+      || Number(b.id === "request-performance") - Number(a.id === "request-performance"));
+    const stream = samples.find((group) => ["estimated-stream-performance", "client-stream-performance"].includes(String(group.id))
+      && performanceMetric(group, "tokens/s"));
+    if (stream) visible.push({ ...stream, metrics: [performanceMetric(stream, "tokens/s")!] });
+    // A matching finish time alone does not make turn-level latency a request latency.
+    const latency = stream
+      ? [stream, ...samples.filter((group) => group.id === "request-performance" && recordedEpoch(group) === recordedEpoch(stream))]
+        .find((group) => performanceMetric(group, "seconds", "first-token-latency"))
+      : samples.find((group) => performanceMetric(group, "seconds", "first-token-latency"));
+    if (!latency) continue;
+    const note = stream
+      ? { en: "Source-reported first-output delay for the same request as this stream-rate sample.", zh: "来源记录的首输出等待，与流速来自同一次请求。" }
+      : latency.id === "turn-performance"
+      ? { en: "Source-reported first-output delay for the latest completed turn. This sample has no usable stream rate.", zh: "来源记录的最近完成轮次的首输出等待；该样本没有可用流速。" }
+      : { en: "Source-reported first-output delay for the latest request. This sample has no usable stream rate.", zh: "来源记录的最近请求的首输出等待；该样本没有可用流速。" };
+    visible.push({ id: "first-token-performance", title: { en: "First token delay", zh: "首 Token 延迟" }, note,
+      badge: latency.badge, sample: latency.sample,
+      metrics: [{ ...performanceMetric(latency, "seconds", "first-token-latency")!, label: { en: "First token delay", zh: "首 Token 延迟" }, detail: note }] });
+  }
+  return [...visible, ...groups.filter((group) => !PERFORMANCE_GROUP_IDS.has(String(group.id)))];
+}
+
 function performanceAnnotations(providerSources: Record<string, unknown>[], dimension: "source" | "model", identifier: string, range: AiTimeRange): string {
   // Samples are live metadata; do not freeze their cutoff at a cached history query.
   const window = analysisTimeWindow(range);
   const labels: Record<string, string> = {
-    "turn-performance": tr("Turn average", "轮次平均"),
-    "request-performance": tr("Request average", "请求平均"),
+    "estimated-stream-performance": tr("Estimated stream", "估算流速"),
     "client-stream-performance": tr("Client stream", "客户端流速"),
+    "first-token-performance": tr("First token delay", "首 Token 延迟"),
   };
   const annotations = providerSources.flatMap((source) => {
     if (dimension === "source" && source.source_id !== identifier) return [];
     const sourceLabel = String(source.label ?? source.source_id ?? "");
-    const tags = asArray(source.details).flatMap((group) => {
+    const tags = performanceDisplayGroups(asArray(source.details), window).flatMap((group) => {
       const label = labels[String(group.id)];
       if (!label) return [];
       const sample = asRecord(group.sample);
       const model = canonicalModelId(sample.model);
       if (dimension === "model" && (!model || model === "mixed" || model === "unknown" || model !== identifier)) return [];
-      const rate = asArray(group.metrics).find((metric) => metric.unit === "tokens/s");
+      const rate = asArray(group.metrics)[0];
       if (!rate || typeof rate.value !== "number" || !Number.isFinite(rate.value) || rate.value < 0) return [];
       const recorded = new Date(String(sample.recorded_at ?? ""));
       const recordedEpoch = recorded.getTime() / 1_000;
       if (!Number.isFinite(recordedEpoch) || recordedEpoch < window.sinceEpoch || recordedEpoch > window.untilEpoch) return [];
       const recordedLabel = recorded.toLocaleString();
       const context = `${sourceLabel} · ${String(sample.model ?? "")}`;
-      const timing = asArray(group.metrics).filter((metric) => metric.unit === "seconds")
-        .map((metric) => `${localized(metric.label)} ${formatMetric(metric.value, metric.unit)}`).join(" · ");
-      const note = localized(group.note);
       const value = formatMetric(rate.value, rate.unit);
-      const hint = [context, `${tr("Latest recorded sample", "最近样本")} · ${recordedLabel}`, `${label} ${value}`, timing, note].filter(Boolean).join("\n");
-      return [{ model: String(sample.model ?? "unknown"), html: `<button type="button" class="ai-performance-tag" aria-label="${escapeHtml(hint)}"><span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b><span class="ai-performance-tooltip" aria-hidden="true"><b>${escapeHtml(context)}</b><time>${escapeHtml(recordedLabel)}</time>${timing ? `<span>${escapeHtml(timing)}</span>` : ""}<span>${escapeHtml(note)}</span></span></button>` }];
+      const hint = [context, `${tr("Latest recorded sample", "最近样本")} · ${recordedLabel}`, `${label} ${value}`].join("\n");
+      return [{ model: String(sample.model ?? "unknown"), html: `<button type="button" class="ai-performance-tag" aria-label="${escapeHtml(hint)}"><span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b><span class="ai-performance-tooltip" aria-hidden="true"><b>${escapeHtml(context)}</b><time>${escapeHtml(recordedLabel)}</time></span></button>` }];
     });
     if (!tags.length) return [];
     const byModel = new Map<string, string[]>();

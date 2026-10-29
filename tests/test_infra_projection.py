@@ -334,6 +334,28 @@ class InfraProjectionTests(unittest.TestCase):
         self.assertEqual(projection["ai_usage"]["aggregate"]["today"]["tokens"], 100)
         self.assertEqual(projection["ai_usage"]["aggregate"]["cumulative"]["tokens"], 200)
 
+    def test_codex_stream_estimate_crosses_projection_without_changing_token_usage(self) -> None:
+        from infra_sentinel.resources.ai.performance import PerformanceSample, performance_details
+        snapshot = self.ai_snapshot("codex", "Codex", today=100, cumulative=200)
+        snapshot["details"] = performance_details(
+            PerformanceSample(1793244658.928, "gpt-6.1-sol", 83, 10287, 8940), scope="codex-request",
+        )
+        codex = CollectorRun(
+            capability=CollectorCapability("ai.codex.local-workload", "codex", "ai.codex", "ai_usage", ("ai.tokens.total",)),
+            status="ok", snapshot=snapshot,
+        )
+        projection = build_infra_projection(
+            sample(), {"kernel": {}, "vps": {}},
+            {"enabled": False, "status": "disabled", "servers": []}, "none", (codex,),
+        )
+        groups = projection["ai_usage"]["sources"][0]["details"]
+        self.assertEqual(groups, snapshot["details"])
+        self.assertEqual(groups[0]["sample"], groups[1]["sample"])
+        self.assertTrue(groups[1]["estimated"])
+        self.assertAlmostEqual(groups[1]["metrics"][0]["value"], 61.6184, places=3)
+        self.assertEqual(projection["ai_usage"]["aggregate"]["today"]["tokens"], 100)
+        self.assertEqual(projection["ai_usage"]["aggregate"]["cumulative"]["tokens"], 200)
+
     def test_future_ai_provider_is_projected_without_a_provider_specific_branch(self) -> None:
         reference = {"model": "gemini-4-argon", "match": "base-reference", "suspected_rollout": False, "available": True, "marker_kind": "trial", "marker": "-trial"}
         snapshot = self.ai_snapshot("future-agent", "Future Agent", today=42, cumulative=420)

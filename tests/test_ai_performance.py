@@ -51,6 +51,46 @@ def generation(*, ttft=True, streaming_nanos=0, model="test-model", epoch=EPOCH,
 
 
 class PerformanceTests(unittest.TestCase):
+    def test_codex_estimate_excludes_ttft_and_shares_the_exact_request_sample(self):
+        sample = PerformanceSample(EPOCH, "gpt-6.1-sol", 83, 10287, 8940)
+        groups = performance_details(sample, scope="codex-request")
+        request, estimate = groups
+        self.assertEqual([g["id"] for g in groups], ["request-performance", "estimated-stream-performance"])
+        self.assertTrue(estimate["estimated"])
+        self.assertEqual(request["sample"], estimate["sample"])
+        values = metrics({"details": groups})
+        self.assertAlmostEqual(values["request-output-rate"], 8.068, places=3)
+        self.assertAlmostEqual(values["estimated-stream-output-rate"], 61.6184, places=3)
+        self.assertAlmostEqual(values["estimated-stream-duration"], 1.347)
+        self.assertNotIn("client-stream-output-rate", values)
+        self.assertIsNone(sample.streaming_ms)
+        for scope in ("turn", "request"):
+            self.assertFalse(any(g["id"] == "estimated-stream-performance" for g in performance_details(sample, scope=scope)))
+
+    def test_codex_estimate_omits_missing_invalid_and_tiny_residual_windows(self):
+        sample = PerformanceSample(EPOCH, "gpt-6.1-terra", 83, 10000, 8000)
+        cases = [replace(sample, first_token_ms=v) for v in (None, True, -1, 0, float("nan"), float("inf"), 10000, 10001, 9999, 9751)]
+        cases += [replace(sample, duration_ms=v) for v in (None, True, -1, float("nan"), float("inf"))]
+        cases += [replace(sample, output_tokens=v) for v in (0, 1)]
+        for case in cases:
+            with self.subTest(case=case):
+                self.assertFalse(any(g["id"] == "estimated-stream-performance" for g in performance_details(case, scope="codex-request")))
+        groups = performance_details(replace(sample, first_token_ms=9750), scope="codex-request")
+        self.assertTrue(any(g["id"] == "estimated-stream-performance" for g in groups))
+        observed = performance_details(replace(sample, streaming_ms=2000), scope="codex-request")
+        self.assertFalse(any(g["id"] == "estimated-stream-performance" for g in observed))
+        self.assertTrue(any(g["id"] == "client-stream-performance" for g in observed))
+
+    def test_codex_estimates_remain_scoped_to_each_models_latest_request(self):
+        groups = model_performance_details([
+            PerformanceSample(EPOCH, "gpt-6-astra", 120, 5000, 2000),
+            PerformanceSample(EPOCH + 1, "gpt-6.1-sol", 83, 10287, 8940),
+            PerformanceSample(EPOCH + 2, "gpt-6-astra", 240, 5000, 2000),
+        ], scope="codex-request")
+        estimates = {g["sample"]["model"]: g for g in groups if g["id"] == "estimated-stream-performance"}
+        self.assertAlmostEqual(estimates["gpt-6-astra"]["metrics"][0]["value"], 80)
+        self.assertAlmostEqual(estimates["gpt-6.1-sol"]["metrics"][0]["value"], 61.6184, places=3)
+
     def test_each_exact_model_keeps_its_latest_usable_sample_and_scopes(self):
         samples = [
             PerformanceSample(EPOCH, "astra", 120, 5000, 2000, 3000),

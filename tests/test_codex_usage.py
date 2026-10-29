@@ -85,6 +85,27 @@ def model_timing_metrics(snapshot):
 
 
 class CodexUsageTests(unittest.TestCase):
+    def test_optional_telemetry_never_changes_rollout_usage_or_turn_timing(self):
+        from infra_sentinel.resources.ai.performance import PerformanceSample, performance_details
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "one.jsonl").write_text(session("user") + usage(100, 100, "2026-08-22T12:00:00Z") + timed_turn())
+            telemetry = performance_details(PerformanceSample(EPOCH, "gpt-5.6-sol", 100, 1000, 100), scope="codex-request")
+            results = []
+            def failed():
+                raise OSError("private error details")
+            for callback in (None, lambda: telemetry, failed):
+                collector = CodexUsageCollector(rollout_roots_finder=lambda: (root,), telemetry_details=callback)
+                results.append(collector.collect(CollectorContext({"epoch": EPOCH + 10}, {})))
+        for result in results:
+            self.assertEqual(result.snapshot["usage"]["today"]["tokens"], 100)
+            self.assertEqual(result.points, results[0].points)
+            self.assertEqual(timing_metrics(result.snapshot), timing_metrics(results[0].snapshot))
+        groups = {g["id"]: g for g in results[1].snapshot["details"]}
+        self.assertEqual(groups["request-performance"]["metrics"][0]["value"], 100)
+        self.assertEqual(groups["turn-performance"]["metrics"][0]["value"], 50)
+        self.assertNotIn("private error", json.dumps(results[2].snapshot))
+
     def test_model_switch_in_one_session_keeps_each_latest_rate_across_restart(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "sessions"
