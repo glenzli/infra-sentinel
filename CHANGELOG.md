@@ -14,6 +14,9 @@ their own release status; the existing Windows preview remains 2.2.0-beta.1.
 - Per-model request timing, first-token delay and receiver diagnostics, independent
   of Token accounting. Local Sol and Astra desktop requests have been verified.
 - Codex telemetry setup, privacy, performance and macOS proxy troubleshooting notes.
+- Counts-only usage receipts for isolated Codex and AGY CLI attempts, with a
+  private local command, durable idempotent storage, and daily/model/hour totals.
+  The outer runner submits final usage; temporary sessions are not auto-discovered.
 
 ### Changed
 
@@ -22,6 +25,11 @@ their own release status; the existing Windows preview remains 2.2.0-beta.1.
 - Remove turn/request averages from normal AI views. Keep sample hints to source,
   model and time, with full calculation notes on Methods & estimates.
 - Include updated bundled API-price coverage and GPT-6.1 Terra accounting support.
+- Apply the shared dated price catalog to CLI receipts, including recognized
+  AGY effort suffixes such as `gemini-3.8-flash-high`. Preserve raw model IDs,
+  count reasoning once, and leave missing required cache breakdowns unpriced.
+- Compact the AI detail header and summary cards, use single-line tabs, and
+  place range and model-measure controls together with narrow-window wrapping.
 
 ### Setup and platform notes
 

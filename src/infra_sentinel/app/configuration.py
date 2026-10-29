@@ -476,6 +476,19 @@ def state_directory_for_config(path: Path | None = None) -> Path:
     return Path(os.environ[STATE_DIRECTORY_ENV]).expanduser() if os.environ.get(STATE_DIRECTORY_ENV) else selected.parent / "state"
 
 
+def desktop_state_directory(config_path: Path | None = None) -> Path:
+    """Match the desktop data_local_dir for standalone integration commands."""
+    if config_path is not None or os.environ.get(STATE_DIRECTORY_ENV):
+        return state_directory_for_config(config_path)
+    if sys.platform == "darwin":
+        data = Path.home() / "Library" / "Application Support"
+    elif sys.platform == "win32":
+        data = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
+    else:
+        data = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share")))
+    return data.expanduser() / "Infra Sentinel" / "state"
+
+
 def read_config(path: Path | None) -> Config:
     selected = path or default_config_path()
     return runtime_config(read_user_settings(selected), state_directory_for_config(selected))

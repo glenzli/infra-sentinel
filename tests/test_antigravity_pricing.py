@@ -10,6 +10,25 @@ from infra_sentinel.resources.ai.pricing_catalog import bundled_pricing_catalog
 
 
 class AntigravityPricingTests(unittest.TestCase):
+    def test_gemini_effort_suffixes_reuse_base_price_and_preserve_exact_override(self):
+        for marker in ("low", "medium", "high", "thinking"):
+            with self.subTest(marker=marker):
+                result = resolve_antigravity_reference(f"gemini-3.8-flash-{marker}", usage_date="2026-10-29")
+                self.assertEqual(result.model, "gemini-3.8-flash")
+                self.assertEqual(result.marker_kind, "effort")
+                self.assertEqual(result.marker, f"-{marker}")
+                self.assertEqual(result.match, "base-reference")
+                self.assertFalse(result.suspected_rollout)
+                self.assertEqual(result.price.output_per_million, 3.75)
+        base = bundled_pricing_catalog().price_for("antigravity", "gemini-3.8-flash", "2026-10-29")
+        class Catalog:
+            def price_for(self, scope, model, usage_date=None):
+                return replace(base, input_per_million=9) if model.endswith("-high") else base
+        exact = resolve_antigravity_reference("gemini-3.8-flash-high", catalog=Catalog(), usage_date="2026-10-29")
+        self.assertEqual(exact.match, "exact")
+        self.assertEqual(exact.model, "gemini-3.8-flash-high")
+        self.assertEqual(exact.price.input_per_million, 9)
+
     def test_known_rollout_markers_use_only_the_same_dated_base(self):
         for marker in ("-n", "-exp-a"):
             with self.subTest(marker=marker):

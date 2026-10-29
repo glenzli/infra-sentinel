@@ -6,9 +6,8 @@ import argparse
 import json
 import os
 from pathlib import Path
-import sys
 
-from infra_sentinel.app.configuration import STATE_DIRECTORY_ENV, state_directory_for_config
+from infra_sentinel.app.configuration import desktop_state_directory
 from infra_sentinel.platform.process_lock import acquire_process_lock
 from infra_sentinel.resources.ai.codex_telemetry.receiver import DEFAULT_PORT
 from infra_sentinel.resources.ai.codex_telemetry.setup import configure
@@ -16,15 +15,7 @@ from infra_sentinel.resources.ai.codex_telemetry.setup import configure
 
 def telemetry_state_directory(config_path: Path | None = None) -> Path:
     """Match the desktop app's data_local_dir, never a bundle extraction path."""
-    if config_path is not None or os.environ.get(STATE_DIRECTORY_ENV):
-        return state_directory_for_config(config_path)
-    if sys.platform == "darwin":
-        data = Path.home() / "Library" / "Application Support"
-    elif sys.platform == "win32":
-        data = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
-    else:
-        data = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share")))
-    return data.expanduser() / "Infra Sentinel" / "state"
+    return desktop_state_directory(config_path)
 
 
 def run_action(action: str, state_dir: Path, codex_config: Path | None = None, *, port: int = DEFAULT_PORT) -> dict:

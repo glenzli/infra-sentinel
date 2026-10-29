@@ -88,8 +88,10 @@ function timestamp(value?: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
-function topbar(status?: OverallStatus): string {
-  return `<header class="topbar"><button class="brand" id="home" type="button" aria-label="Infra Sentinel"><span class="brand-mark" aria-hidden="true"><i></i></span><span>Infra Sentinel</span></button><div class="topbar-actions">${status ? `<div class="agent-state"><span class="source-state source-state--${escapeHtml(status)}"></span>${escapeHtml(statusLabel(status))}</div>` : ""}</div></header>`;
+function topbar(status?: OverallStatus, detail?: { duration: string; navigation: string }): string {
+  const session = detail ? `<div class="topbar-session" role="group" aria-label="${tr("Current session", "当前统计周期")}"><span>${tr("Current session", "当前统计周期")}</span><strong>${escapeHtml(detail.duration)}</strong></div>` : "";
+  const navigation = detail ? `<nav class="topbar-navigation" aria-label="${tr("Page navigation", "页面导航")}">${detail.navigation}</nav>` : "";
+  return `<header class="topbar${detail ? " topbar--compact" : ""}"><button class="brand" id="home" type="button" aria-label="Infra Sentinel"><span class="brand-mark" aria-hidden="true"><i></i></span><span>Infra Sentinel</span></button>${session}<div class="topbar-actions">${status ? `<div class="agent-state"><span class="source-state source-state--${escapeHtml(status)}"></span>${escapeHtml(statusLabel(status))}</div>` : ""}${navigation}</div></header>`;
 }
 
 function bindChrome(): void {
@@ -113,7 +115,8 @@ function renderProjection(projection: AgentProjection): void {
   const upstreamStatus = projection.infra.resources.find((resource) => resource.enabled && resource.id === "upstream_status");
   const sources = network ? projection.infra.sources.filter((source) => source.resource_id === network.id) : [];
   const aiSources = aiUsage ? projection.infra.sources.filter((source) => source.resource_id === aiUsage.id) : [];
-  const controls = `<section class="dashboard-actions"><div><p class="eyebrow">${tr("CURRENT SESSION", "当前统计周期")}</p><strong>${formatDuration(projection.session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button></div></section>`;
+  const navigation = `<button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button>`;
+  const controls = `<section class="dashboard-actions"><div><p class="eyebrow">${tr("CURRENT SESSION", "当前统计周期")}</p><strong>${formatDuration(projection.session.duration_seconds)}</strong></div><div class="hero-actions">${navigation}</div></section>`;
   const facilityControls = `<section class="dashboard-actions"><div><p class="eyebrow">${tr("FACILITY", "运行设施")}</p><strong>${projection.infra.facilities?.total ?? 0} ${tr("discovered", "个已发现")}</strong></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button></div></section>`;
   const diagnosticsControls = `<section class="dashboard-actions"><div><p class="eyebrow">${tr("LOCAL HISTORY", "本机历史")}</p></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button></div></section>`;
   const selectedFacility = projection.infra.facilities?.items.find((facility) => facility.id === selectedFacilityId);
@@ -122,7 +125,7 @@ function renderProjection(projection: AgentProjection): void {
     : activeView === "system" && system
       ? `${controls}${renderSystemResourcePage(system, projection.infra.system, systemAnalysis.snapshot())}`
     : activeView === "ai_usage" && aiUsage
-      ? `${controls}${renderAiUsageResourcePage(projection, aiUsage, aiSources, aiAnalysis.snapshot())}`
+      ? renderAiUsageResourcePage(projection, aiUsage, aiSources, aiAnalysis.snapshot())
       : activeView === "ai_methodology" && aiUsage
         ? renderAiUsageMethodologyPage(projection, aiUsage)
     : activeView === "upstream_status" && upstreamStatus
@@ -132,7 +135,8 @@ function renderProjection(projection: AgentProjection): void {
     : activeView === "diagnostics"
       ? `${diagnosticsControls}${renderDiagnosticsPage(projection.infra.diagnostics, diagnosticsAnalysis.snapshot())}`
     : renderOverview(projection, networkOverviewAnalysis.snapshot(), systemOverviewAnalysis.snapshot());
-  const markup = `<main class="shell">${topbar(projection.infra.overall.status)}${content}${footer(projection)}</main>`;
+  const compactAi = activeView === "ai_usage" && aiUsage;
+  const markup = `<main class="shell${compactAi ? " shell--ai-usage" : ""}">${topbar(projection.infra.overall.status, compactAi ? { duration: formatDuration(projection.session.duration_seconds), navigation } : undefined)}${content}${footer(projection)}</main>`;
   let retainedDiagnosticFilters = false;
   if (activeView === "diagnostics") {
     const existing = root.querySelector<HTMLElement>(".shell");

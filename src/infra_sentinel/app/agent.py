@@ -59,6 +59,7 @@ from infra_sentinel.metrics.query import (
     execute_metric_query,
 )
 from infra_sentinel.metrics.store import MetricStore
+from infra_sentinel.metrics.usage_receipts import UsageReceiptStore
 from infra_sentinel.metrics.diagnostics import DiagnosticStore
 from infra_sentinel.resources.network.mihomo import (
     MIHOMO_SAMPLE_SCHEMA,
@@ -74,6 +75,7 @@ from infra_sentinel.resources.network.metrics import network_collector_registry
 from infra_sentinel.resources.ai.codex import CodexUsageCollector
 from infra_sentinel.resources.ai.dsh import DshUsageCollector
 from infra_sentinel.resources.ai.antigravity import AntigravityUsageCollector
+from infra_sentinel.resources.ai.usage_receipts import CliUsageReceiptCollector
 from infra_sentinel.resources.ai.infer_runtime import InferRuntimeUsageCollector
 from infra_sentinel.resources.ai.opencode import OpenCodeUsageCollector, discover_opencode, discover_opencode_desktop_database
 from infra_sentinel.resources.ai.pricing_catalog import PricingCatalogManager
@@ -714,8 +716,17 @@ def apply_agent_commands(
     restart_requested = False
     for command in consume_commands(
         config.state_dir,
-        accepted_types={"configuration.update", "pricing.catalog.update", "session.reset"},
+        accepted_types={"configuration.update", "pricing.catalog.update", "session.reset", "ai.usage.receipt.record"},
     ):
+        if command.type == "ai.usage.receipt.record":
+            try:
+                result = UsageReceiptStore(config.state_dir).record(command.payload)
+                complete_command(command, status="ok", payload=result)
+            except ValueError as exc:
+                complete_command(command, status="rejected", message=str(exc))
+            except Exception:
+                complete_command(command, status="error", message="usage receipt could not be recorded; retry the same event identity")
+            continue
         if command.type == "configuration.update":
             try:
                 settings = write_user_settings(config_path, command.payload)
@@ -931,12 +942,19 @@ def main() -> int:
     mode.add_argument("--maintain", action="store_true", help="离线整理历史指标与临时查询结果")
     mode.add_argument("--diagnostics", action="store_true", help="只读查询诊断历史并输出 JSON")
     mode.add_argument("--codex-telemetry", choices=("enable", "disable", "status"), help="配置本机 Codex 请求遥测")
+    mode.add_argument("--record-cli-usage", type=Path, metavar="JSON_FILE", help="提交隔离 CLI 的最小 Token 用量回执；- 表示标准输入")
     parser.add_argument("--diagnostics-query", metavar="JSON", help="诊断查询条件，仅与 --diagnostics 一起使用")
     args = parser.parse_args()
     if args.diagnostics_query is not None and not args.diagnostics:
         parser.error("--diagnostics-query requires --diagnostics")
     try:
         config_path = args.config or default_config_path()
+        if args.record_cli_usage is not None:
+            from infra_sentinel.cli.usage_receipts import main as receipt_main
+            receipt_args = ["--receipt", str(args.record_cli_usage)]
+            if args.config is not None:
+                receipt_args.extend(["--config", str(args.config)])
+            return receipt_main(receipt_args)
         if args.codex_telemetry is not None:
             from infra_sentinel.cli.codex_telemetry import run_action, telemetry_state_directory
             try:
@@ -1016,6 +1034,8 @@ def main() -> int:
             telemetry_details=codex_telemetry.details,
         ))
         collector_registry.register(AntigravityUsageCollector(pricing_catalog=pricing_catalog))
+        usage_receipts = UsageReceiptStore(config.state_dir)
+        collector_registry.register(CliUsageReceiptCollector(usage_receipts.summary, pricing_catalog=pricing_catalog))
         collector_registry.register(DshUsageCollector(checkpoint_path=config.state_dir / "dsh-usage-seen.json"))
         collector_registry.register(InferRuntimeUsageCollector(
             checkpoint_path=config.state_dir / "infer-runtime-usage-daily.json",

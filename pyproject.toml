@@ -19,6 +19,7 @@ infra-sentinel-report = "infra_sentinel.cli.report:main"
 infra-sentinel-snapshot = "infra_sentinel.cli.snapshot:main"
 infra-sentinel-codex-audit = "infra_sentinel.cli.codex_usage_audit:main"
 infra-sentinel-diagnostics = "infra_sentinel.cli.diagnostics:main"
+infra-sentinel-cli-usage = "infra_sentinel.cli.usage_receipts:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

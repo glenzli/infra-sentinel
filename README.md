@@ -46,6 +46,10 @@ Xray 用户统计为可选功能。每个客户端需要独立的 `email` 标签
 
 Codex 用量从本机 rollout JSONL 中读取每次请求的 `last_token_usage` 增量，不使用 `threads.tokens_used` 计算。统计会排除 fork 回放和跨文件重复记录。持久化数据只包含聚合用量、解析状态和去重标记，不包含任务内容。
 
+不落常规会话或使用临时状态目录的 Codex / AGY CLI 调用，可由外层运行器提交[最小数字用量回执](docs/cli-usage-receipts.md)。回执独立记账，按稳定尝试编号去重，重启后保留；只保存模型、完成时间、计数和哈希编号。此入口需要运行器显式接入，不自动发现隔离调用，也不要重复提交已有常规来源记录的调用；不依赖遥测，不推算速度。
+
+回执采用共用的适用日期价格目录。AGY 的已知推理强度后缀会匹配基础模型参考价，例如 `gemini-3.8-flash-high` 对应 `gemini-3.8-flash`；精确变体价目优先，原始模型名保留。缺少必要缓存细分的用量不估价，输出中的推理 Token 不重复相加。
+
 DSH（DeepSeek Harness）从 `~/.dsh/sessions`（或 `$DSH_HOME/sessions`）只读解析 v4 JSONL / Zstd 会话中的供应商用量，每分钟检查一次。统计包含输入、输出、缓存和按模型、自然日、小时的历史；同次调用的流式与最终报告只计一次，重试单独计数，明确的继承前缀不重复计入。旧会话按事件时间归档，不按文件修改时间计入今日。不会读取凭据或保留对话正文，也不推测模型价格别名。压缩日志在 Python 3.14+ 上直接支持；较早 Python 可安装 `.[dsh]`。
 
 AI 用量页按模型显示流速与首 Token 延迟；不展示轮次平均或请求平均。Codex 日志提供有效计时时可单独显示首输出等待，沿用约 20 秒采集间隔；缺少流式计时的样本不显示速度。已有账本无需重建，可读取的旧日志会分批补齐各模型计时，不重复累计 Token。
@@ -54,11 +58,13 @@ AI 用量页按模型显示流速与首 Token 延迟；不展示轮次平均或�
 
 DSH 与 Antigravity 有有效流式计时时显示客户端流速，并配对同一次请求的首 Token 延迟；缓冲可能影响数值，不能当作服务端纯解码速度。OpenCode 或其他只有轮次计时的来源，只显示来源记录的首输出等待，不用整轮均值推测流速。缺少可靠起止时保持缺失，不改动 Token 用量账本。
 
-每个客户端按精确模型名独立保留最新有效样本；切换模型不会覆盖其他模型的速度。用量总览和模型分析只显示所选时段内的速度样本。样本旁显示模型名，悬停或聚焦可查看记录时间和计时口径；尚未完成的轮次不替换已有记录。
+每个客户端按精确模型名独立保留最新有效样本；切换模型不会覆盖其他模型的速度。用量总览和模型分析只显示所选时段内的速度样本。悬停或聚焦可查看来源、模型和记录时间；计算口径集中在「口径与估算」。尚未完成的轮次不替换已有记录。
 
 图表显示本机记录到的原始 Token，不是 Codex 账户额度或账单。API 参考价值按模型的输入、缓存输入、缓存写入和输出价格换算。价格目录来自独立的 [api-price](https://github.com/glenzli/api-price) Release：Agent 每日检查一次，遇到没有精确价格的模型时至多每六小时补查一次，也可在设置中手动检查。下载内容会校验大小、结构和 SHA-256；失败时继续使用最后一个有效版本或 App 内置目录。检查请求不包含本机模型 ID 或用量。Antigravity 精确模型价优先；有限后缀可采用标明的本体参考估算，保留原始模型名。`-trial`/`-trail` 标为“试用”，`-free` 标为“免费版”，与 `-n` 等“疑似灰度”分开提示与计数；这些提示和模型计数仅包含所选时间范围内该来源实际有用量的模型；选择“全部”时显示累计历史。名称中的试用或免费不代表 API 参考价值为零，实际扣费以供应商为准。未知本体、未支持后缀以及不适用日期仍保持未计价。
 
 “Agent 活动”默认每个来源一行摘要，展开后以双列排列指标，并保留当前选择的展开状态。长说明通过 ⓘ 悬停或键盘聚焦查看；浮层支持方向键滚动和 Esc 关闭。
+
+AI 详情页使用紧凑页头和摘要卡，Tab 只保留单行标题，时间范围与显示方式并排；窄窗口会自动换行，让首屏更多展示用量、模型列表和图表。
 
 当日用量按小时展示。有时间戳的来源按事件时间归桶；只提供累计值的来源按采样差分归桶。无法定位的起始余额归入统计开始所在小时，并标记为估算。跨日后按自然日汇总。
 
@@ -170,6 +176,10 @@ Mihomo is discovered automatically. Remote hosts are configured by an existing `
 
 Codex usage is calculated from per-request `last_token_usage` increments in local rollout JSONL. `threads.tokens_used` is not used. Fork replay and duplicate records across files are removed. The persistent ledger contains aggregate usage, parser state, and deduplication markers, but no task content.
 
+Codex/AGY CLI runs without persistent sessions or using temporary state can submit [minimal numeric usage receipts](docs/cli-usage-receipts.md) through their outer runner. A separate ledger deduplicates stable attempt identities across retries and restarts, retaining only model, completion time, counters and hashed identity. This requires explicit runner integration; isolated calls are not auto-discovered. Do not resubmit calls already counted by regular sources. Receipts need no telemetry and do not infer speed.
+
+Receipts use the shared dated price catalog. Known AGY effort suffixes use a base-model reference when no exact variant price exists: `gemini-3.8-flash-high` maps to `gemini-3.8-flash` while preserving the original name. Missing required cache breakdowns remain unpriced, and reasoning already included in output is not added again.
+
 Optional [local Codex telemetry](docs/codex-telemetry.md) shows an explicitly estimated stream rate excluding first-token waiting, paired with the same request's first-token delay. Estimates are omitted for missing/invalid timing or residual windows below 250 ms; they are not server decoding speed. The authenticated loopback receiver retains bounded numerical samples, discards raw telemetry, and leaves usage accounting independent. Missing or ambiguous send/completion pairs never produce a speed.
 
 DSH (DeepSeek Harness) reads provider usage from local v4 JSONL / Zstd sessions under `~/.dsh/sessions` (or `$DSH_HOME/sessions`), checked once a minute. It includes input, output, cache, model, daily and hourly history. Final usage replaces streaming reports for the same attempt; retries count separately and explicit inherited prefixes are excluded. Historical usage follows event timestamps, not file modification time. Credentials and transcript content are not retained, and model-price aliases are not inferred. Compressed logs work with Python 3.14+; earlier Python versions can install `.[dsh]`.
@@ -178,11 +188,13 @@ When Codex logs provide usable timing metadata, AI usage can show each model's l
 
 AI views show stream rate and first-token delay, without turn or request averages. DSH and Antigravity pair client stream rate with first-output delay from the same request. Buffering can inflate stream rates; they are not server decoding speed. OpenCode or other sources with only turn timing show the reported first-output wait without inferring a stream rate. Missing timing stays absent and never changes Token accounting.
 
-Each client keeps the latest usable sample independently for each exact model ID. Switching models preserves the other models' rates. Usage overview and model analysis only show performance samples recorded in the selected time range. Samples show their model; hover or focus reveals the recording time and timing scope. Unfinished turns do not replace completed samples.
+Each client keeps the latest usable sample independently for each exact model ID. Switching models preserves the other models' rates. Usage overview and model analysis only show performance samples recorded in the selected time range. Hover or focus reveals the source, model and recording time; calculation notes live in Methods & estimates. Unfinished turns do not replace completed samples.
 
 Charts show raw Tokens recorded on this machine, not Codex account quota or billing. API reference value is calculated from model-specific input, cached-input, cache-write, and output prices. The price catalog comes from independent [api-price](https://github.com/glenzli/api-price) Releases. The Agent checks daily, checks at most every six hours when an exact model price is missing, and also offers a manual check in Settings. Downloads are validated for size, structure, and SHA-256; failures retain the last valid or bundled catalog. Update requests contain no local model IDs or usage. Antigravity exact prices take priority; bounded suffixes may use labeled base-model estimates while preserving raw IDs. `-trial`/`-trail` are labeled Trial and `-free` Free tier, separately from suspected rollouts such as `-n`. Annotations and model counts include only models with usage from that provider in the selected range; All uses cumulative history. These name markers do not imply zero API reference value or establish actual charges. Unknown bases, unsupported suffixes and unavailable usage dates remain unpriced.
 
 Agent activity starts with one summary row per provider. Expanded metrics use two compact columns and retain the current expansion choices. Hover or focus ⓘ to read explanations; arrow keys scroll long hints and Esc closes them.
+
+The AI detail page uses a compact header and summary cards, single-line tabs, and adjacent range/measure controls. Narrow windows wrap controls to keep usage, model lists and charts visible sooner.
 
 The current day is displayed in hourly buckets. Timestamped sources use event time; cumulative-only sources use sampled deltas. An opening balance that cannot be located is assigned to the statistics-start hour and marked as estimated. Older data is summarized by calendar day.
 

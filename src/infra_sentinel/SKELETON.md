@@ -45,6 +45,13 @@ checkpoints. `protocol.py` drops all non-allowlisted data before shared state;
 policy. Explicit opt-in/configuration lives in `cli/codex_telemetry.py` and its
 setup use case, never in a collector. The Agent wires its lifecycle and the
 Codex collector consumes only safe diagnostic groups, independently of usage.
+`metrics/usage_receipts.py` owns strict counts-only admission, hashed attempt
+identities and the durable idempotent ledger for explicitly isolated CLI runs.
+The sampling loop handles `ai.usage.receipt.record`; `cli/usage_receipts.py`
+only publishes private command files and awaits an acknowledgement. The
+read-only `resources/ai/usage_receipts.py` adapter receives grouped counts from
+the ledger owner and exposes daily/model/hour totals without timing. This is
+an outer-caller integration, not discovery of arbitrary temporary state.
 `resources/ai/codex.py` consumes that ledger as its
 only Codex usage fact source. `cli/codex_usage_audit.py` only renders an
 aggregate audit; it does not own parsing or persist user rollout data.
