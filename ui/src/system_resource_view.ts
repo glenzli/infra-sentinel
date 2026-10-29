@@ -3,6 +3,7 @@ import { ResourceProjection, SystemResourceProjection } from "./bridge";
 import { formatBytes, number } from "./format";
 import { tr } from "./i18n";
 import { SystemAnalysisSnapshot, SystemTimeRange } from "./system_resource_analysis";
+import { renderAttentionDiagnostics } from "./attention_diagnostics";
 
 const COLORS = { cpu: "#3178dc", read: "#2f9461", write: "#9468c9" };
 
@@ -343,9 +344,8 @@ export function renderSystemResourcePage(
   const hasProcessAttribution = supports(snapshot, "disk.process-attribution");
   const hasThermal = supports(snapshot, "thermal.pressure");
   const diagnostics = systemDiagnostics(snapshot);
-  const diagnosticRows = diagnostics.map((item) => `<li data-system-reason="${escapeHtml(item.code)}"><span class="system-diagnostic__state system-diagnostic__state--${item.level}" aria-hidden="true"></span><div><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.basis)}</small><small><b>${tr("Next", "建议")}</b> · ${escapeHtml(item.action)}</small></div><span>${escapeHtml(item.current)}</span></li>`).join("");
   const diagnosticPanel = diagnostics.length
-    ? `<section class="system-diagnostics system-diagnostics--${escapeHtml(resource.status)}"><div class="system-diagnostics__heading"><p>${tr("WHY THIS NEEDS ATTENTION", "为什么需要关注")}</p><strong>${diagnostics.length === 1 ? escapeHtml(diagnostics[0].title) : tr(`${diagnostics.length} active conditions`, `${diagnostics.length} 项当前异常`)}</strong></div><ul>${diagnosticRows}</ul></section>`
+    ? `<div class="system-attention">${renderAttentionDiagnostics(diagnostics.map((item) => ({ ...item, id: `system:${item.code}`, subject: platformLabel(snapshot?.platform) })))}</div>`
     : "";
   const cpuPoints = metric(analysis.data.gaugePoints, "system.cpu.percent");
   const readPoints = metric(analysis.data.counterPoints, "system.disk.read_bytes");

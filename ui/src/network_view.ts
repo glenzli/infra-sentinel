@@ -54,8 +54,8 @@ function renderControls(snapshot: NetworkAnalysisSnapshot): string {
   ];
   const visual = snapshot.mode === "billing" && snapshot.range === "recorded" ? `<div class="network-history-picker" role="group" aria-label="${tr("History visualization", "历史图表")}"><button type="button" class="network-history-visual${snapshot.historyVisual === "bars" ? " is-active" : ""}" data-network-history-visual="bars">${tr("Bars", "柱状")}</button><button type="button" class="network-history-visual${snapshot.historyVisual === "calendar" ? " is-active" : ""}" data-network-history-visual="calendar">${tr("Activity", "活动日历")}</button></div>` : "";
   return `<section class="network-analysis-toolbar">
-    <div class="network-mode-tabs" role="tablist" aria-label="${tr("Network observation", "网络观测维度")}">${modes.map(([mode, label, detail]) => `<button type="button" role="tab" aria-selected="${mode === snapshot.mode}" class="network-mode-tab${mode === snapshot.mode ? " is-active" : ""}" data-network-mode="${mode}"><strong>${label}</strong><small>${detail}</small></button>`).join("")}</div>
-    <div class="network-range-picker"><span>${tr("Time range", "时间范围")}</span><div role="group" aria-label="${tr("Network time range", "网络时间范围")}">${ranges.map(([range, label]) => `<button type="button" class="network-range${range === snapshot.range ? " is-active" : ""}" data-network-range="${range}">${label}</button>`).join("")}</div>${visual}</div>
+    <div class="network-mode-tabs" role="tablist" aria-label="${tr("Network observation", "网络观测维度")}">${modes.map(([mode, label, detail]) => `<button type="button" role="tab" aria-selected="${mode === snapshot.mode}" title="${detail}" class="network-mode-tab${mode === snapshot.mode ? " is-active" : ""}" data-network-mode="${mode}"><strong>${label}</strong></button>`).join("")}</div>
+    <div class="network-range-picker"><div role="group" aria-label="${tr("Network time range", "网络时间范围")}">${ranges.map(([range, label]) => `<button type="button" class="network-range${range === snapshot.range ? " is-active" : ""}" data-network-range="${range}">${label}</button>`).join("")}</div>${visual}</div>
   </section>`;
 }
 
@@ -218,7 +218,6 @@ function renderBillingView(
 ): string {
   const recordedByHost = totalsBySource(analysis.vpsPoints);
   return `<section class="network-view-panel">
-    <div class="network-view-heading"><div><p>${tr("Selected range", "所选范围")}</p><strong>${formatBytes(total(analysis.vpsPoints))}</strong></div><span>${rangeLabel(range)} · ${tr("billable VPS traffic", "VPS 计费流量")}</span></div>
     ${billingHistory(analysis, remoteServers, range, visual)}
     <article class="detail-panel"><div class="detail-panel__heading"><h3>${tr("Host billing checks", "主机用量检测")}</h3><span>${remoteServers.length}</span></div><ul class="traffic-list network-host-list">${remoteServers.map((server) => {
       const id = String(server.id ?? "");
@@ -284,9 +283,8 @@ function renderAttributionView(
   const maximum = Math.max(...visible.map((row) => row.total), 1);
   const xrayClients = xrayClientTotals(analysis.xrayPoints, remoteServers);
   return `<section class="network-view-panel">
-    <div class="network-view-heading"><div><p>${tr("Attributed local traffic", "本机已归因流量")}</p><strong>${formatBytes(attributedTotal)}</strong></div><span>${rangeLabel(range)} · ${tr(`${(coverage * 100).toFixed(1)}% coverage`, `覆盖率 ${(coverage * 100).toFixed(1)}%`)}</span></div>
     <div class="network-attribution-grid">
-      <article class="detail-panel traffic-total-chart"><div class="detail-panel__heading"><h3>${tr("Service attribution", "服务流量归因")}</h3><span>Mihomo</span></div><div class="traffic-total-bars">${visible.map((row, index) => `<div class="traffic-total-bar"><div><span><i class="chart-dot" style="background:${TRAFFIC_COLORS[index % TRAFFIC_COLORS.length]}"></i>${escapeHtml(row.label)}</span><strong>${formatBytes(row.total)}</strong></div><p><i style="background:${TRAFFIC_COLORS[index % TRAFFIC_COLORS.length]};width:${Math.max(1, (row.total / maximum) * 100)}%"></i></p></div>`).join("") || `<div class="chart-empty">${tr("Waiting for attributed service samples.", "等待已归因的服务采样。")}</div>`}</div><p class="panel-footnote">${tr(`Local total ${formatBytes(localTotal)} · unattributed ${formatBytes(unattributed)}`, `本机总量 ${formatBytes(localTotal)} · 未归因 ${formatBytes(unattributed)}`)}</p></article>
+      <article class="detail-panel traffic-total-chart"><div class="detail-panel__heading"><div class="network-panel-title"><h3>${tr("Service attribution", "服务流量归因")}</h3><strong>${formatBytes(attributedTotal)}</strong></div><span>${rangeLabel(range)} · ${tr(`${(coverage * 100).toFixed(1)}% coverage`, `覆盖率 ${(coverage * 100).toFixed(1)}%`)}</span></div><div class="traffic-total-bars">${visible.map((row, index) => `<div class="traffic-total-bar"><div><span><i class="chart-dot" style="background:${TRAFFIC_COLORS[index % TRAFFIC_COLORS.length]}"></i>${escapeHtml(row.label)}</span><strong>${formatBytes(row.total)}</strong></div><p><i style="background:${TRAFFIC_COLORS[index % TRAFFIC_COLORS.length]};width:${Math.max(1, (row.total / maximum) * 100)}%"></i></p></div>`).join("") || `<div class="chart-empty">${tr("Waiting for attributed service samples.", "等待已归因的服务采样。")}</div>`}</div><p class="panel-footnote">${tr(`Local total ${formatBytes(localTotal)} · unattributed ${formatBytes(unattributed)}`, `本机总量 ${formatBytes(localTotal)} · 未归因 ${formatBytes(unattributed)}`)}</p></article>
       <article class="detail-panel"><div class="detail-panel__heading"><h3>${tr("Xray client traffic", "Xray 客户端流量")}</h3><span>${rangeLabel(range)} · ${xrayClients.length}</span></div><ul class="traffic-list">${xrayClients.slice(0, 10).map((client) => `<li><span>${escapeHtml(client.label)}</span><strong>${formatBytes(client.total)}</strong></li>`).join("") || `<li class="empty">${tr("No Xray client traffic in this range.", "所选范围内暂无 Xray 客户端流量。")}</li>`}</ul><p class="panel-footnote">${tr("Xray traffic is derived from recorded interval deltas and uses the same selected time range as the other network measurements.", "Xray 流量由已记录的间隔增量聚合，与其他网络指标使用同一所选时间范围。")}</p></article>
     </div>
   </section>`;
@@ -305,8 +303,7 @@ function renderEfficiencyView(analysis: NetworkAnalysisData, remoteServers: Reco
   const xrayTotals = totalsBySource(analysis.xrayPoints);
   const trendWindowMinutes = number(trend.window_minutes) || 60;
   return `<section class="network-view-panel">
-    <div class="network-view-heading"><div><p>${tr("Comparable hosts", "可比较主机")}</p><strong>${remoteServers.filter((server) => (xrayTotals.get(`xray:${server.id}`) ?? 0) > 0).length} / ${remoteServers.length}</strong></div><span>${rangeLabel(range)} · ${tr("ratios remain per host", "倍率始终按主机独立计算")}</span></div>
-    <article class="detail-panel"><div class="detail-panel__heading"><h3>${tr("Billable versus logical traffic", "账单流量与逻辑流量")}</h3><span>${rangeLabel(range)}</span></div><div class="efficiency-table">${remoteServers.map((server) => {
+    <article class="detail-panel"><div class="detail-panel__heading"><h3>${tr("Billable versus logical traffic", "账单流量与逻辑流量")}</h3><span>${rangeLabel(range)} · ${tr("Comparable hosts", "可比较主机")} ${remoteServers.filter((server) => (xrayTotals.get(`xray:${server.id}`) ?? 0) > 0).length} / ${remoteServers.length}</span></div><div class="efficiency-table">${remoteServers.map((server) => {
       const id = String(server.id ?? "");
       const billed = vpsTotals.get(`vps:${id}`) ?? 0;
       const logical = xrayTotals.get(`xray:${id}`) ?? 0;
@@ -359,9 +356,10 @@ function renderCurrentSummary(
         : tr("Selected range loaded", "所选范围已对齐");
   const statusTone = dailyStatus && critical ? "critical" : dailyStatus && warning ? "warning" : "healthy";
   const value = (amount: number) => !ready ? "—" : formatBytes(amount);
-  return `<section class="network-ledger-summary">
-    <article class="network-ledger-primary"><p>${tr("VPS billing in range", "所选范围 VPS 账单量")}</p><strong>${value(billed)}</strong><small>${rangeLabel(range)} · ${tr("configured billing direction per host", "按每台主机配置的计费方向汇总")}</small><span class="network-ledger-status network-ledger-status--${statusTone}">${status}</span></article>
-    <article class="network-path-card"><div class="detail-panel__heading"><h3>${tr("Observation path in range", "所选范围观测链路")}</h3><span>${rangeLabel(range)} · ${tr("same window · not additive", "同一时间范围 · 不可相加")}</span></div><div class="network-path"><span><small>Mihomo</small><strong>${value(local)}</strong></span><i>→</i><span><small>${tr("Proxy route", "代理路径")}</small><strong>${value(proxy)}</strong></span><i>→</i><span><small>Xray</small><strong>${value(xray)}</strong></span><i>→</i><span><small>${tr("VPS billed", "VPS 账单")}</small><strong>${value(billed)}</strong></span></div></article>
+  return `<section class="network-ledger-summary detail-panel">
+    <div class="detail-panel__heading"><h3>${tr("Observation path in range", "所选范围观测链路")}</h3><span>${rangeLabel(range)} · ${tr("same window · not additive", "同一时间范围 · 不可相加")}</span></div>
+    <div class="network-path"><span><small>Mihomo</small><strong>${value(local)}</strong></span><i>→</i><span><small>${tr("Proxy route", "代理路径")}</small><strong>${value(proxy)}</strong></span><i>→</i><span><small>Xray</small><strong>${value(xray)}</strong></span><i>→</i><span class="network-path__billing"><small>${tr("VPS billing in range", "所选范围 VPS 账单量")}</small><strong>${value(billed)}</strong></span></div>
+    <div class="network-ledger-footer"><small>${tr("Configured billing direction per host", "按每台主机配置的计费方向汇总")}</small><span class="network-ledger-status network-ledger-status--${statusTone}">${status}</span></div>
   </section>`;
 }
 

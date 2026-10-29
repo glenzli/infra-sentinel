@@ -4,7 +4,7 @@
 
 当前源码版本：[2.3.0](docs/releases/v2.3.0.md)。已发布安装包按平台分别维护：
 
-macOS 稳定版：[2.1.2](https://github.com/glenzli/infra-sentinel/releases/tag/v2.1.2) · Windows 预览版：[2.2.0-beta.1](https://github.com/glenzli/infra-sentinel/releases/tag/v2.2.0-beta.1) · [更新日志](CHANGELOG.md)
+macOS 稳定版：[2.3.0](https://github.com/glenzli/infra-sentinel/releases/tag/v2.3.0) · Windows 预览版：[2.2.0-beta.1](https://github.com/glenzli/infra-sentinel/releases/tag/v2.2.0-beta.1) · [更新日志](CHANGELOG.md)
 
 Infra Sentinel 是一个本地桌面监控工具，用于查看网络流量、AI 客户端用量、本机资源、远端主机和服务状态。各类数据按来源和单位分别展示。
 
@@ -64,7 +64,7 @@ DSH 与 Antigravity 有有效流式计时时显示客户端流速，并配对同
 
 “Agent 活动”默认每个来源一行摘要，展开后以双列排列指标，并保留当前选择的展开状态。长说明通过 ⓘ 悬停或键盘聚焦查看；浮层支持方向键滚动和 Esc 关闭。
 
-AI 详情页使用紧凑页头和摘要卡，Tab 只保留单行标题，时间范围与显示方式并排；窄窗口会自动换行，让首屏更多展示用量、模型列表和图表。
+所有资源页共用紧凑页头，将统计周期、状态和操作合在一起。概览将异常与恢复入口并入健康卡；AI 所选时段总量并入图表标题，网络账单与观测链路合为一张卡。Tab 使用单行标题，时间范围与显示方式相邻，窄窗口自动换行。告警标题直接可见，证据按需展开；严重告警默认展开，刷新保留展开选择。
 
 当日用量按小时展示。有时间戳的来源按事件时间归桶；只提供累计值的来源按采样差分归桶。无法定位的起始余额归入统计开始所在小时，并标记为估算。跨日后按自然日汇总。
 
@@ -99,7 +99,7 @@ PYTHONPATH=src python3 -m infra_sentinel.cli.diagnostics --hours 24 --limit 50
 
 Windows x64 用户可从 [2.2.0-beta.1 预发布版](https://github.com/glenzli/infra-sentinel/releases/tag/v2.2.0-beta.1) 下载安装程序和 SHA-256 校验文件。安装包未签名，包含 Agent 和 WebView2 引导程序；无需另装 Python、Node.js 或 Rust。已知限制见 [Windows 日常版](docs/windows.md)。
 
-从 [2.1.2 Release](https://github.com/glenzli/infra-sentinel/releases/tag/v2.1.2) 下载 Apple Silicon App ZIP 和对应 SHA-256 校验文件。
+从 [2.3.0 Release](https://github.com/glenzli/infra-sentinel/releases/tag/v2.3.0) 下载 Apple Silicon App ZIP 和对应 SHA-256 校验文件。
 
 当前桌面包支持 macOS 13+。预编译 App 使用 ad-hoc 签名，未经 Apple 公证；首次启动如被 macOS 拦截，可右键选择“打开”，或在“系统设置 → 隐私与安全性”中确认。
 
@@ -145,7 +145,7 @@ cd src-tauri && cargo test --offline
 
 Current source version: [2.3.0](docs/releases/v2.3.0.md). Published installers are maintained separately for each platform:
 
-macOS stable: [2.1.2](https://github.com/glenzli/infra-sentinel/releases/tag/v2.1.2) · Windows preview: [2.2.0-beta.1](https://github.com/glenzli/infra-sentinel/releases/tag/v2.2.0-beta.1) · [Changelog](CHANGELOG.md)
+macOS stable: [2.3.0](https://github.com/glenzli/infra-sentinel/releases/tag/v2.3.0) · Windows preview: [2.2.0-beta.1](https://github.com/glenzli/infra-sentinel/releases/tag/v2.2.0-beta.1) · [Changelog](CHANGELOG.md)
 
 Infra Sentinel is a local desktop monitor for network traffic, local AI-client usage, host resources, remote hosts, and service status. Each source keeps its own units and accounting method.
 
@@ -194,7 +194,7 @@ Charts show raw Tokens recorded on this machine, not Codex account quota or bill
 
 Agent activity starts with one summary row per provider. Expanded metrics use two compact columns and retain the current expansion choices. Hover or focus ⓘ to read explanations; arrow keys scroll long hints and Esc closes them.
 
-The AI detail page uses a compact header and summary cards, single-line tabs, and adjacent range/measure controls. Narrow windows wrap controls to keep usage, model lists and charts visible sooner.
+Resource pages share a compact header for session, status and actions. The overview places diagnostic history in the health card; AI range totals appear in chart headings, and network billing shares a card with the observation path. Single-line tabs and adjacent range/measure controls wrap in narrow windows. Attention titles stay visible, with evidence available on demand; critical evidence starts open and refreshes retain disclosure choices.
 
 The current day is displayed in hourly buckets. Timestamped sources use event time; cumulative-only sources use sampled deltas. An opening balance that cannot be located is assigned to the statistics-start hour and marked as estimated. Older data is summarized by calendar day.
 
@@ -229,7 +229,7 @@ The packaged `infra-agent --diagnostics` also reads existing state without start
 
 Windows x64 users can download the unsigned installer and SHA-256 checksum from the [2.2.0-beta.1 pre-release](https://github.com/glenzli/infra-sentinel/releases/tag/v2.2.0-beta.1). It bundles the Agent and WebView2 bootstrapper; Python, Node.js and Rust are not required. See the [Windows notes](docs/windows.md) for preview limits.
 
-Download the Apple Silicon App ZIP and its SHA-256 checksum from the [2.1.2 Release](https://github.com/glenzli/infra-sentinel/releases/tag/v2.1.2).
+Download the Apple Silicon App ZIP and its SHA-256 checksum from the [2.3.0 Release](https://github.com/glenzli/infra-sentinel/releases/tag/v2.3.0).
 
 The desktop package supports macOS 13+. Prebuilt apps use ad-hoc signing and are not notarized by Apple. Building from source requires Xcode Command Line Tools, Rust, Node.js LTS, Python 3.11+, and PyInstaller:
 

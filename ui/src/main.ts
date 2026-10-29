@@ -17,6 +17,7 @@ import { renderSystemResourcePage } from "./system_resource_view";
 import { SystemResourceAnalysisController, SystemTimeRange } from "./system_resource_analysis";
 import { DiagnosticsAnalysisController, DiagnosticsCategoryFilter, DiagnosticsTimeRange } from "./diagnostics_analysis";
 import { renderDiagnosticsPage } from "./diagnostics_view";
+import { bindAttentionDiagnostics } from "./attention_diagnostics";
 
 type AppView = "overview" | "system" | "network" | "ai_usage" | "ai_methodology" | "upstream_status" | "facility" | "diagnostics" | "settings";
 
@@ -115,28 +116,27 @@ function renderProjection(projection: AgentProjection): void {
   const upstreamStatus = projection.infra.resources.find((resource) => resource.enabled && resource.id === "upstream_status");
   const sources = network ? projection.infra.sources.filter((source) => source.resource_id === network.id) : [];
   const aiSources = aiUsage ? projection.infra.sources.filter((source) => source.resource_id === aiUsage.id) : [];
-  const navigation = `<button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button>`;
-  const controls = `<section class="dashboard-actions"><div><p class="eyebrow">${tr("CURRENT SESSION", "当前统计周期")}</p><strong>${formatDuration(projection.session.duration_seconds)}</strong></div><div class="hero-actions">${navigation}</div></section>`;
-  const facilityControls = `<section class="dashboard-actions"><div><p class="eyebrow">${tr("FACILITY", "运行设施")}</p><strong>${projection.infra.facilities?.total ?? 0} ${tr("discovered", "个已发现")}</strong></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button></div></section>`;
-  const diagnosticsControls = `<section class="dashboard-actions"><div><p class="eyebrow">${tr("LOCAL HISTORY", "本机历史")}</p></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button></div></section>`;
+  const back = activeView === "overview" ? "" : activeView === "ai_methodology"
+    ? `<button class="button button--subtle" data-ai-methodology-back><span>← ${tr("AI usage", "AI 用量")}</span></button>`
+    : `<button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button>`;
+  const navigation = `${back}<button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button>${activeView === "network" ? `<button class="button button--danger" id="reset"><span>${tr("Reset totals", "重置统计")}</span></button>` : ""}`;
   const selectedFacility = projection.infra.facilities?.items.find((facility) => facility.id === selectedFacilityId);
   const content = activeView === "network" && network
-    ? `<section class="dashboard-actions"><div><p class="eyebrow">${tr("CURRENT SESSION", "当前统计周期")}</p><strong>${formatDuration(projection.session.duration_seconds)}</strong></div><div class="hero-actions"><button class="button button--subtle" id="back"><span>← ${tr("Overview", "概览")}</span></button><button class="button button--subtle" id="settings"><span>${tr("Settings", "设置")}</span></button><button class="button button--subtle" id="refresh"><span>${tr("Refresh", "刷新")}</span></button><button class="button button--danger" id="reset"><span>${tr("Reset totals", "重置统计")}</span></button></div></section>${renderNetworkResourcePage(projection, network, sources, networkAnalysis.snapshot())}`
+    ? renderNetworkResourcePage(projection, network, sources, networkAnalysis.snapshot())
     : activeView === "system" && system
-      ? `${controls}${renderSystemResourcePage(system, projection.infra.system, systemAnalysis.snapshot())}`
+      ? renderSystemResourcePage(system, projection.infra.system, systemAnalysis.snapshot())
     : activeView === "ai_usage" && aiUsage
       ? renderAiUsageResourcePage(projection, aiUsage, aiSources, aiAnalysis.snapshot())
       : activeView === "ai_methodology" && aiUsage
         ? renderAiUsageMethodologyPage(projection, aiUsage)
     : activeView === "upstream_status" && upstreamStatus
-      ? `${controls}${renderUpstreamStatusResourcePage(upstreamStatus, projection.infra.upstream_status)}`
+      ? renderUpstreamStatusResourcePage(upstreamStatus, projection.infra.upstream_status)
     : activeView === "facility"
-      ? `${facilityControls}${renderFacilityDetailPage(selectedFacility)}`
+      ? renderFacilityDetailPage(selectedFacility)
     : activeView === "diagnostics"
-      ? `${diagnosticsControls}${renderDiagnosticsPage(projection.infra.diagnostics, diagnosticsAnalysis.snapshot())}`
+      ? renderDiagnosticsPage(projection.infra.diagnostics, diagnosticsAnalysis.snapshot())
     : renderOverview(projection, networkOverviewAnalysis.snapshot(), systemOverviewAnalysis.snapshot());
-  const compactAi = activeView === "ai_usage" && aiUsage;
-  const markup = `<main class="shell${compactAi ? " shell--ai-usage" : ""}">${topbar(projection.infra.overall.status, compactAi ? { duration: formatDuration(projection.session.duration_seconds), navigation } : undefined)}${content}${footer(projection)}</main>`;
+  const markup = `<main class="shell">${topbar(projection.infra.overall.status, { duration: formatDuration(projection.session.duration_seconds), navigation })}${content}${footer(projection)}</main>`;
   let retainedDiagnosticFilters = false;
   if (activeView === "diagnostics") {
     const existing = root.querySelector<HTMLElement>(".shell");
@@ -148,6 +148,7 @@ function renderProjection(projection: AgentProjection): void {
     }
   }
   if (!retainedDiagnosticFilters) root.innerHTML = markup;
+  bindAttentionDiagnostics(root);
   root.querySelector<HTMLButtonElement>("#settings")?.addEventListener("click", () => void openSettings());
   root.querySelector<HTMLButtonElement>("#refresh")?.addEventListener("click", () => {
     if (activeView === "diagnostics") diagnosticsAnalysis.invalidate();

@@ -102,10 +102,11 @@ export function renderTimeBucketBarChart(
   }).join(" ") : "";
   const overlayLegend = overlay ? `<span class="daily-bars__overlay-legend"><i style="background:${overlay.color}"></i>${escapeHtml(overlay.label)}</span>` : "";
   const bucketCount = Math.max(1, buckets.length);
-  return `<article class="detail-panel daily-history-chart"><div class="detail-panel__heading"><h3>${escapeHtml(options.title)}</h3><span>${escapeHtml(options.detail)}</span></div>${barLegend || overlayLegend ? `<div class="daily-bars__legend">${barLegend}${overlayLegend}</div>` : ""}<div class="daily-bars-frame" style="--daily-bucket-count:${bucketCount}"><span class="daily-bars__axis">${escapeHtml(options.formatValue(maximum))}</span>${overlay ? `<span class="daily-bars__overlay-axis">${escapeHtml(overlay.formatValue(overlayMaximum))}</span>` : ""}<div class="daily-bars__plot"><div class="daily-bars" role="img" aria-label="${escapeHtml(options.ariaLabel)}">${buckets.map((bucket) => {
+  return `<article class="detail-panel daily-history-chart"><div class="detail-panel__heading"><h3>${escapeHtml(options.title)}</h3><span>${escapeHtml(options.detail)}</span></div>${barLegend || overlayLegend ? `<div class="daily-bars__legend">${barLegend}${overlayLegend}</div>` : ""}<div class="daily-bars-frame" style="--daily-bucket-count:${bucketCount}"><span class="daily-bars__axis">${escapeHtml(options.formatValue(maximum))}</span>${overlay ? `<span class="daily-bars__overlay-axis">${escapeHtml(overlay.formatValue(overlayMaximum))}</span>` : ""}<div class="daily-bars__plot"><div class="daily-bars" role="img" aria-label="${escapeHtml(options.ariaLabel)}">${buckets.map((bucket, index) => {
     const hint = tooltip(bucket, usable, options.formatValue, bucketLabel, overlay);
+    const edge = index + .5 < bucketCount / 4 ? " daily-bar-day--start" : index + .5 >= bucketCount * 3 / 4 ? " daily-bar-day--end" : "";
     const empty = usable.every((item) => !(bucket.values.get(item.id) ?? 0));
-    return `<div class="daily-bar-day${empty ? " daily-bar-day--empty" : ""}"><button type="button" class="daily-bar-day__trigger" aria-label="${escapeHtml(hint.label)}"><span class="daily-bar-day__bars${stacked ? " daily-bar-day__bars--stacked" : ""}">${usable.map((item) => {
+    return `<div class="daily-bar-day${edge}${empty ? " daily-bar-day--empty" : ""}"><button type="button" class="daily-bar-day__trigger" aria-label="${escapeHtml(hint.label)}"><span class="daily-bar-day__bars${stacked ? " daily-bar-day__bars--stacked" : ""}">${usable.map((item) => {
       const value = bucket.values.get(item.id) ?? 0;
       const height = value > 0 ? Math.max(0.2, (value / maximum) * 100) : 0;
       return `<i style="--daily-bar-color:${item.color};height:${height}%"></i>`;

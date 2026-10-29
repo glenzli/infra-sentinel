@@ -5,9 +5,9 @@
   border-radius: 12px;
   display: grid;
   gap: 10px;
-  min-height: 154px;
+  min-height: 0;
   min-width: 0;
-  padding: 15px 16px 13px;
+  padding: 12px 14px;
   transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease;
   width: 100%;
 }
@@ -26,8 +26,8 @@
 
 .resource-grid--compact > .facility-card {
   grid-column: span 2;
-  min-height: 176px;
-  padding: 17px 18px;
+  min-height: 0;
+  padding: 12px 14px;
 }
 
 .facility-card--unavailable,
@@ -224,7 +224,7 @@
 }
 
 .facility-instance-page > .attention-diagnostics .attention-diagnostic {
-  padding: 17px 18px;
+  padding: 12px 14px;
 }
 
 .facility-detail__identity {

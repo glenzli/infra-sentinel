@@ -4,7 +4,7 @@
 
 ## 2.3.0 — 2026-10-29
 
-Shared source version with macOS validation. Published platform downloads keep
+macOS stable release for Apple Silicon on macOS 13+. Platform downloads keep
 their own release status; the existing Windows preview remains 2.2.0-beta.1.
 
 ### Added
@@ -28,8 +28,13 @@ their own release status; the existing Windows preview remains 2.2.0-beta.1.
 - Apply the shared dated price catalog to CLI receipts, including recognized
   AGY effort suffixes such as `gemini-3.8-flash-high`. Preserve raw model IDs,
   count reasoning once, and leave missing required cache breakdowns unpriced.
-- Compact the AI detail header and summary cards, use single-line tabs, and
-  place range and model-measure controls together with narrow-window wrapping.
+- Share compact session/status/navigation headers across resource pages and
+  reduce repeated titles, card padding, tab height and empty-state whitespace.
+- Merge overview diagnostics into the health card, AI range totals into chart
+  headings, and network billing into its observation-path card.
+- Use keyboard-accessible attention disclosures across network, AI, system and
+  upstream/facility views. Critical evidence starts open; refreshes retain choices.
+- Align time-bucket hints inward at chart edges to avoid horizontal overflow.
 
 ### Setup and platform notes
 

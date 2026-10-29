@@ -75,7 +75,7 @@ function coverageLabel(data?: DiagnosticsProjection): string {
     disabled ? tr(`${disabled} disabled`, `${disabled} 项停用`) : ""].filter(Boolean).join(" · ");
 }
 
-export function renderDiagnosticsOverview(data?: DiagnosticsProjection): string {
+export function renderDiagnosticsOverview(data?: DiagnosticsProjection, compact = false): string {
   const count = activeCount(data);
   const badge = count === undefined ? tr("Unavailable", "暂不可用")
     : tr(`${count} unresolved`, `${count} 项待确认异常`);
@@ -83,7 +83,9 @@ export function renderDiagnosticsOverview(data?: DiagnosticsProjection): string 
   const detail = count === undefined ? tr("Diagnostic history is not available yet.", "诊断历史暂不可用。")
     : active.length ? active.map((item) => `${sourceLabel(item)} · ${diagnosticText(item, "title")}`).join(" · ")
       : tr("No unresolved diagnostics in the latest recorded observation.", "最近一次已记录观测中没有待确认异常。");
-  return `<section class="diagnostics-overview" aria-label="${tr("Diagnostic history", "诊断历史")}"><div class="diagnostics-overview__body"><div class="diagnostics-overview__heading"><strong>${tr("Attention & recovery", "异常与恢复")}</strong><span class="diagnostics-overview__count${count !== undefined && count > 0 ? " diagnostics-overview__count--attention" : ""}">${badge}</span></div><p>${escapeHtml(detail)}${count !== undefined ? ` · ${escapeHtml(freshnessLabel(data))}` : ""}</p></div><button class="button button--subtle" type="button" data-diagnostics-open>${tr("View history", "查看历史")} →</button></section>`;
+  const countClass = `diagnostics-overview__count${count !== undefined && count > 0 ? " diagnostics-overview__count--attention" : ""}`;
+  if (compact) return `<button class="diagnostics-overview-link" type="button" data-diagnostics-open aria-label="${escapeHtml(`${tr("View diagnostic history", "查看诊断历史")} · ${badge} · ${detail} · ${freshnessLabel(data)}`)}"><span>${tr("Attention & recovery", "异常与恢复")}</span><span class="${countClass}">${badge}</span><span aria-hidden="true">→</span></button>`;
+  return `<section class="diagnostics-overview" aria-label="${tr("Diagnostic history", "诊断历史")}"><div class="diagnostics-overview__body"><div class="diagnostics-overview__heading"><strong>${tr("Attention & recovery", "异常与恢复")}</strong><span class="${countClass}">${badge}</span></div><p>${escapeHtml(detail)}${count !== undefined ? ` · ${escapeHtml(freshnessLabel(data))}` : ""}</p></div><button class="button button--subtle" type="button" data-diagnostics-open>${tr("View history", "查看历史")} →</button></section>`;
 }
 
 function renderCurrentAttention(data: DiagnosticsProjection | undefined, state: DiagnosticsAnalysisSnapshot): string {

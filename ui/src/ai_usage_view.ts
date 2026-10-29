@@ -79,7 +79,7 @@ function renderControls(snapshot: AiAnalysisSnapshot): string {
     ["30d", tr("30 days", "30 天")], ["recorded", tr("All", "全部")],
   ];
   const measure = snapshot.mode === "models" ? `<div class="ai-measure-picker" role="group" aria-label="${tr("Model measure", "模型统计维度")}"><button type="button" class="ai-measure${snapshot.modelMeasure === "tokens" ? " is-active" : ""}" data-ai-model-measure="tokens">${tr("Tokens", "Token")}</button><button type="button" class="ai-measure${snapshot.modelMeasure === "value" ? " is-active" : ""}" data-ai-model-measure="value">${tr("Equivalent value", "等价价值")}</button></div>` : "";
-  return `<section class="ai-analysis-toolbar"><div class="ai-mode-tabs" role="tablist" aria-label="${tr("AI usage observation", "AI 用量观测维度")}">${modes.map(([mode, label, detail]) => `<button type="button" role="tab" aria-selected="${mode === snapshot.mode}" title="${detail}" class="ai-mode-tab${mode === snapshot.mode ? " is-active" : ""}" data-ai-mode="${mode}"><strong>${label}</strong></button>`).join("")}</div>${snapshot.mode === "activity" ? `<span class="ai-current-context">${tr("Current provider snapshot", "当前来源快照")}</span>` : `<div class="ai-range-picker"><div role="group" aria-label="${tr("Time range", "时间范围")}">${ranges.map(([range, label]) => `<button type="button" class="ai-range${range === snapshot.range ? " is-active" : ""}" data-ai-range="${range}">${label}</button>`).join("")}</div>${measure}</div>`}</section>`;
+  return `<section class="ai-analysis-toolbar"><div class="ai-mode-tabs" role="tablist" aria-label="${tr("AI usage observation", "AI 用量观测维度")}">${modes.map(([mode, label, detail]) => `<button type="button" role="tab" aria-selected="${mode === snapshot.mode}" title="${detail}" class="ai-mode-tab${mode === snapshot.mode ? " is-active" : ""}" data-ai-mode="${mode}"><strong>${label}</strong></button>`).join("")}</div>${snapshot.mode === "activity" ? `<span class="ai-current-context">${tr("Current diagnostics · not additive", "当前诊断 · 不可与 Token 总量相加")}</span>` : `<div class="ai-range-picker"><div role="group" aria-label="${tr("Time range", "时间范围")}">${ranges.map(([range, label]) => `<button type="button" class="ai-range${range === snapshot.range ? " is-active" : ""}" data-ai-range="${range}">${label}</button>`).join("")}</div>${measure}</div>`}</section>`;
 }
 
 function historyVisualControl(range: AiTimeRange, visual: AiHistoryVisual): string {
@@ -99,10 +99,11 @@ function horizontalBars(
   estimates?: Map<string, number>,
   formatValue: (value: number) => string = formatTokens,
   annotations?: (identifier: string) => string,
+  summary?: { total: string; context?: string; reference?: PriceReference },
 ): string {
   const ranked = [...totals.entries()].filter(([, value]) => value > 0).sort((left, right) => right[1] - left[1]).slice(0, 8);
   const maximum = Math.max(...ranked.map(([, value]) => value), 1);
-  return `<article class="detail-panel ai-ranked-panel"><div class="detail-panel__heading"><h3>${escapeHtml(title)}</h3><span>${escapeHtml(detail)}</span></div><div class="ai-ranked-bars">${ranked.map(([label, value], index) => {
+  return `<article class="detail-panel ai-ranked-panel"><div class="detail-panel__heading"><div class="ai-ranked-panel__title"><h3>${escapeHtml(title)}</h3>${summary ? `<strong class="ai-range-total">${escapeHtml(summary.total)}</strong>` : ""}</div><aside class="ai-ranked-panel__context"><span>${escapeHtml(summary?.context ?? detail)}</span>${referencePriceTag(summary?.reference)}</aside></div><div class="ai-ranked-bars">${ranked.map(([label, value], index) => {
     const estimate = estimates?.get(label) ?? 0;
     return `<div class="ai-ranked-bar"><div><span class="ai-ranked-bar__identity"><span><i class="chart-dot" style="background:${colors[index % colors.length]}"></i>${escapeHtml(labelFor(label))}</span>${annotations?.(label) ?? ""}</span><span class="ai-ranked-bar__value"><strong>${formatValue(value)}</strong>${estimate > 0 ? `<small>≈ ${formatReferenceUsd(estimate)}</small>` : ""}</span></div><p><i style="background:${colors[index % colors.length]};width:${Math.max(.2, value / maximum * 100)}%"></i></p></div>`;
   }).join("") || `<div class="chart-empty">${tr("Waiting for recorded Token increments.", "等待已记录的 Token 增量。")}</div>`}</div></article>`;
@@ -194,7 +195,7 @@ function renderOverview(usage: ProjectedUsage, providerSources: Record<string, u
   const sources = usage.sourceTotals;
   const selectedTotal = [...sources.values()].reduce((sum, value) => sum + value, 0);
   const reference = projectPriceReference(providerSources, usage, range, window);
-  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Selected range total", "所选时段总量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)} · ${sources.size} ${tr("Agents", "个 Agent")}</span>${referencePriceTag(reference)}</aside></div>${horizontalBars(tr("Usage by Agent", "按 Agent 的用量"), rangeLabel(range), sources, SOURCE_COLORS, undefined, undefined, undefined, (id) => modelReferenceAnnotations(providerSources, usage, range, "source", id) + performanceAnnotations(providerSources, "source", id, range))}${historyVisualControl(range, visual)}${usageHistory(usage.intervals, "source", range, window, visual, usage.undatedTotal, reference)}</section>`;
+  return `<section class="ai-view-panel">${horizontalBars(tr("Usage by Agent", "按 Agent 的用量"), rangeLabel(range), sources, SOURCE_COLORS, undefined, undefined, undefined, (id) => modelReferenceAnnotations(providerSources, usage, range, "source", id) + performanceAnnotations(providerSources, "source", id, range), { total: formatTokens(selectedTotal), context: `${rangeLabel(range)} · ${sources.size} ${tr("Agents", "个 Agent")}`, reference })}${historyVisualControl(range, visual)}${usageHistory(usage.intervals, "source", range, window, visual, usage.undatedTotal, reference)}</section>`;
 }
 
 function valueHistory(reference: PriceReference, range: AiTimeRange, window: AnalysisTimeWindow, visual: AiHistoryVisual): string {
@@ -248,11 +249,11 @@ function renderModels(usage: ProjectedUsage, providerSources: Record<string, unk
   if (measure === "value") {
     const values = reference?.byModel ?? new Map<string, number>();
     const total = reference?.costUsd ?? 0;
-    return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Equivalent value in range", "所选时段等价价值")}</p><strong>${total > 0 ? `≈ ${formatReferenceUsd(total)}` : "—"}</strong></div><aside><span>${rangeLabel(range)}</span></aside></div>${total > 0
-      ? `${horizontalBars(tr("Equivalent value by model", "按模型的等价价值"), rangeLabel(range), values, MODEL_COLORS, modelLabel, undefined, formatReferenceUsd, (id) => modelReferenceAnnotations(providerSources, usage, range, "model", id) + performanceAnnotations(providerSources, "model", id, range))}${historyVisualControl(range, visual)}${valueHistory(reference!, range, window, visual)}`
+    return `<section class="ai-view-panel">${total > 0
+      ? `${horizontalBars(tr("Equivalent value by model", "按模型的等价价值"), rangeLabel(range), values, MODEL_COLORS, modelLabel, undefined, formatReferenceUsd, (id) => modelReferenceAnnotations(providerSources, usage, range, "model", id) + performanceAnnotations(providerSources, "model", id, range), { total: `≈ ${formatReferenceUsd(total)}` })}${historyVisualControl(range, visual)}${valueHistory(reference!, range, window, visual)}`
       : `<article class="detail-panel ai-analysis-state"><p>${tr("No model rows in this range have an available price reference.", "所选时段没有可用参考价的模型行。")}</p></article>`}</section>`;
   }
-  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Model total in range", "所选时段模型量")}</p><strong>${formatTokens(selectedTotal)}</strong></div><aside><span>${rangeLabel(range)}</span></aside></div>${horizontalBars(tr("Model composition", "模型构成"), rangeLabel(range), models, MODEL_COLORS, modelLabel, undefined, undefined, (id) => modelReferenceAnnotations(providerSources, usage, range, "model", id) + performanceAnnotations(providerSources, "model", id, range))}${historyVisualControl(range, visual)}${usageHistory(usage.intervals, "model", range, window, visual, usage.undatedTotal)}</section>`;
+  return `<section class="ai-view-panel">${horizontalBars(tr("Model composition", "模型构成"), rangeLabel(range), models, MODEL_COLORS, modelLabel, undefined, undefined, (id) => modelReferenceAnnotations(providerSources, usage, range, "model", id) + performanceAnnotations(providerSources, "model", id, range), { total: formatTokens(selectedTotal) })}${historyVisualControl(range, visual)}${usageHistory(usage.intervals, "model", range, window, visual, usage.undatedTotal)}</section>`;
 }
 
 /** Keep diagnostic hints visible at window edges without changing metric state. */
@@ -313,7 +314,7 @@ function providerDetails(source: Record<string, unknown>, providerPanels: Readon
 }
 
 function renderActivity(providerSources: Record<string, unknown>[], providerPanels: ReadonlyMap<string, boolean>): string {
-  return `<section class="ai-view-panel"><div class="ai-view-heading"><div><p>${tr("Provider snapshots", "来源快照")}</p><strong>${providerSources.length}</strong></div><span>${tr("Current diagnostics · not additive", "当前诊断 · 不可与 Token 总量相加")}</span></div><div class="ai-provider-list">${providerSources.map((source) => providerDetails(source, providerPanels)).join("") || `<div class="chart-empty">${tr("No AI usage provider available.", "暂无可用的 AI 用量来源。")}</div>`}</div></section>`;
+  return `<section class="ai-view-panel"><div class="ai-provider-list" aria-label="${tr("Provider snapshots", "来源快照")}">${providerSources.map((source) => providerDetails(source, providerPanels)).join("") || `<div class="chart-empty">${tr("No AI usage provider available.", "暂无可用的 AI 用量来源。")}</div>`}</div></section>`;
 }
 
 function analysisBody(snapshot: AiAnalysisSnapshot, providerSources: Record<string, unknown>[]): string {
@@ -502,5 +503,5 @@ function renderCurrentSummary(providerSources: Record<string, unknown>[], source
   const today = providerSources.reduce((sum, source) => sum + number(windowOf(source, "today").tokens), 0);
   const cumulative = providerSources.reduce((sum, source) => sum + number(windowOf(source, "cumulative").tokens), 0);
   const online = sources.filter((source) => source.enabled && source.status === "ok").length;
-  return `<section class="ai-usage-summary"><article><p>${tr("Observed today", "今日已观测")}</p><div class="ai-summary-value"><strong>${formatTokens(today)}</strong></div><small>${tr("Available source windows combined", "合并当前可用来源窗口")}</small></article><article><p>${tr("Local history total", "本机历史总量")}</p><strong>${formatTokens(cumulative)}</strong><small>${tr("All readable local records · not billing", "全部可读本地记录 · 非账单")}</small></article><article><p>${tr("Collector coverage", "采集覆盖")}</p><strong>${online} / ${sources.length}</strong><small>${tr("sources online", "个来源在线")}</small></article></section>`;
+  return `<section class="ai-usage-summary"><article><p>${tr("Observed today", "今日已观测")}</p><strong>${formatTokens(today)}</strong><small>${tr("Available source windows combined", "合并当前可用来源窗口")}</small></article><article><p>${tr("Local history total", "本机历史总量")}</p><strong>${formatTokens(cumulative)}</strong><small>${tr("All readable local records · not billing", "全部可读本地记录 · 非账单")}</small></article><article><p>${tr("Collector coverage", "采集覆盖")}</p><strong>${online} / ${sources.length}</strong><small>${tr("sources online", "个来源在线")}</small></article></section>`;
 }

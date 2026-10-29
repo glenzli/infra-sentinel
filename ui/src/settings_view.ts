@@ -158,15 +158,15 @@ export function renderSettings(root: HTMLDivElement, initial: SettingsPayload, a
     const hosts = remoteSources(settings);
     root.innerHTML = `
       <main class="shell">
-        <header class="topbar"><button class="brand" id="back" type="button"><span class="brand-mark" aria-hidden="true"><i></i></span><span>Infra Sentinel</span></button><div class="topbar-actions"><button class="button button--subtle" id="back-overview">${icon("arrow-left")}<span>Back to overview / 返回概览</span></button></div></header>
-        <section class="settings-header"><p class="eyebrow">CONFIGURATION</p><h1>Settings / 设置</h1><p>Local Mihomo is discovered automatically. Choose how Infra Sentinel appears, which hosts it observes, and when it should notify you.</p></section>
+        <header class="topbar"><div class="settings-identity"><button class="brand" id="back" type="button"><span class="brand-mark" aria-hidden="true"><i></i></span><span>Infra Sentinel</span></button><h1>${tr("Settings", "设置")}</h1></div><div class="topbar-actions"><button class="button button--subtle" id="back-overview">${icon("arrow-left")}<span>${tr("Overview", "概览")}</span></button></div></header>
+        <p class="settings-intro">${tr("Local collection is discovered automatically. Configure integrations, remote hosts and notifications here.", "本机采集自动发现；可在这里设置本地集成、远端主机和告警。")}</p>
         <div class="settings-layout"><nav class="settings-nav" aria-label="Settings sections"><button type="button" data-settings-section="general" class="${activeSection === "general" ? "is-active" : ""}">General / 通用</button><button type="button" data-settings-section="integrations" class="${activeSection === "integrations" ? "is-active" : ""}">Local integrations / 本地集成</button><button type="button" data-settings-section="pricing" class="${activeSection === "pricing" ? "is-active" : ""}">API pricing / API 价格</button><button type="button" data-settings-section="network" class="${activeSection === "network" ? "is-active" : ""}">Network configuration / 网络配置</button></nav>
         <form id="settings-form" class="settings-form">
           <section class="settings-section settings-panel ${activeSection === "general" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">GENERAL</p><h2>Appearance / 外观</h2></div></div>
             <div class="general-grid"><label class="setting-choice"><span>Language / 语言</span>${languagePicker()}</label></div>
           </section>
           <section class="settings-section settings-panel ${activeSection === "integrations" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">LOCAL INTEGRATIONS</p><h2>Application paths / 应用路径</h2></div></div>
-            <p class="settings-note">Leave a field empty to use platform discovery. Set an absolute path for portable or non-standard installations, including Windows installations outside their usual folders.</p>
+            <p class="settings-note">${tr("Leave blank for automatic discovery. Use absolute paths for portable or custom installations.", "留空使用自动发现；便携版或自定义安装位置请填写绝对路径。")}</p>
             <div class="integration-grid">
               <label><span>SSH executable / SSH 程序</span><input name="integration-ssh-executable" value="${escapeHtml(settings.integrations.ssh_executable)}" placeholder="Auto discover / 自动发现" /></label>
               <label><span>OpenCode executable / OpenCode 程序</span><input name="integration-opencode-executable" value="${escapeHtml(settings.integrations.opencode_executable)}" placeholder="Auto discover / 自动发现" /></label>
@@ -174,10 +174,10 @@ export function renderSettings(root: HTMLDivElement, initial: SettingsPayload, a
             </div>
           </section>
           <section class="settings-section settings-panel ${activeSection === "pricing" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">API PRICING</p><h2>Price catalog / 价格目录</h2></div><button class="button button--subtle" type="button" id="update-api-price">${icon("refresh")}<span>Check now / 立即检查</span></button></div>
-            <p class="settings-note">Infra Sentinel checks the latest <code>glenzli/api-price</code> GitHub Release daily and when an exact model price is missing. Only the public catalog assets are requested; local model IDs and usage never leave this Mac. A validated downloaded catalog is cached locally, with the bundled catalog kept as an offline fallback.</p>
+            <p class="settings-note">${tr('Infra Sentinel checks the latest <code>glenzli/api-price</code> GitHub Release daily and when an exact model price is missing. Only public catalog assets are requested; model IDs and usage stay local. A validated download is cached, with the bundled catalog as an offline fallback.', '每天及缺少精确价格时，从 <code>glenzli/api-price</code> 的 GitHub Release 检查更新。仅下载公共价格表，模型名称与用量保留在本机；校验后的价格表缓存在本地，离线时使用内置版本。')}</p>
           </section>
           <section class="settings-section settings-panel ${activeSection === "network" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">NETWORK SOURCES</p><h2>Remote host configuration / 远端主机配置</h2></div><button class="button button--subtle" type="button" id="add-host">${icon("plus")}<span>Add VPS / 添加 VPS</span></button></div>
-            <p class="settings-note">Use a Host alias from <code>~/.ssh/config</code>. Xray StatsService remains limited to remote <code>127.0.0.1:10085</code>.</p>
+            <p class="settings-note">${tr('Use a Host alias from <code>~/.ssh/config</code>. Xray StatsService is restricted to remote <code>127.0.0.1:10085</code>.', '使用 <code>~/.ssh/config</code> 中的主机别名；Xray StatsService 仅监听远端 <code>127.0.0.1:10085</code>。')}</p>
             <div class="host-list">${hosts.map((source) => sourceRow(source, budgetPolicy(settings, String(source.id)))).join("") || "<p class=\"empty\">No remote host configured / 尚未配置远端主机</p>"}</div>
           </section>
           <section class="settings-section settings-panel ${activeSection === "network" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">NETWORK ALERTS</p><h2>Traffic alerts / 流量告警</h2></div></div>

@@ -23,6 +23,7 @@ the matching `*_analysis.ts` module.
 | --- | --- |
 | Projection/command types or one new allowlisted operation | `src/bridge.ts`, then the paired Rust bridge implementation |
 | Shared formatting, localization, visual primitives | `src/format.ts`, `src/i18n.ts`, `src/icons.ts`, or `src/styles.css` |
+| Shared attention summaries, keyboard-native disclosure and refresh-safe expansion choices | `src/attention_diagnostics.ts` and its scoped CSS; `main.ts` binds fresh elements |
 | Network, AI, or system time-range state | The matching `*_analysis.ts` module |
 | Cross-resource diagnostic history, category/time filters, and disclosure state | `src/diagnostics_analysis.ts` for bounded read-only queries and query identity; `src/diagnostics_view.ts` for localized event rows and the overview summary |
 | Network, AI, AI methodology, system, facility, or upstream-status presentation | The matching `*_view.ts` and scoped CSS module |
