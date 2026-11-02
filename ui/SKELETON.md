@@ -30,6 +30,7 @@ the matching `*_analysis.ts` module.
 | Reusable time-bucket chart behavior | `src/time_bucket_bar_chart.ts` for hourly/daily quantitative bars and `src/daily_activity_calendar.ts` for recorded-history heatmaps, with their scoped CSS |
 | Overview-only composition | `src/overview_view.ts` |
 | Native menu, notification, URL, sidecar, cache, or app-path behavior | The matching module under `src-tauri/src/` |
+| Windows logon startup registration and quiet tray launch | `src-tauri/src/desktop_startup.rs`; `src/desktop_startup.ts` owns its immediate settings interaction, independently of Agent configuration |
 
 ## Native bridge rules
 

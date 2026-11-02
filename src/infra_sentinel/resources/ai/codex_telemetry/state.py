@@ -13,6 +13,7 @@ import time
 from ..contract import detail_group, localized, token_metric
 from ..performance import PerformanceSample, model_performance_details, performance_details
 from .protocol import MAX_DURATION_MS, MODEL_RE, RequestEvent
+from ....platform.private_files import private_write
 
 MAX_STREAMS = 256
 MAX_SEEN = 4096
@@ -158,10 +159,5 @@ class TelemetryState:
             if not self._dirty:
                 return
             payload = json.dumps({"schema": 1, "samples": [asdict(s) for s in self._samples.values()]}, separators=(",", ":"))
-            self._checkpoint.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self._checkpoint.with_suffix(".tmp")
-            with temporary.open("w", encoding="utf-8") as stream:
-                temporary.chmod(0o600)
-                stream.write(payload)
-            temporary.replace(self._checkpoint)
+            private_write(self._checkpoint, payload.encode("utf-8"))
             self._dirty = False

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import closing
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from io import BytesIO, StringIO
@@ -151,7 +152,7 @@ class UsageReceiptTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 restarted.record(conflict)
             self.assertEqual(restarted.summary()["daily"][0]["total_tokens"], 34044)
-            with sqlite3.connect(root / RECEIPT_FILENAME) as connection:
+            with closing(sqlite3.connect(root / RECEIPT_FILENAME)) as connection:
                 rows = connection.execute("SELECT canonical_json FROM usage_receipts").fetchall()
             self.assertEqual(len(rows), 1)
             self.assertNotIn(raw["event_id"], rows[0][0])
@@ -172,7 +173,7 @@ class UsageReceiptTests(unittest.TestCase):
             with patch("infra_sentinel.metrics.usage_receipts.sqlite3.connect") as connect:
                 self.assertIs(store.summary(), first)
                 connect.assert_not_called()
-            with sqlite3.connect(store.path) as connection:
+            with closing(sqlite3.connect(store.path)) as connection:
                 stored = json.loads(connection.execute("SELECT canonical_json FROM usage_receipts").fetchone()[0])
             self.assertEqual(stored["usage"], raw["usage"])
 

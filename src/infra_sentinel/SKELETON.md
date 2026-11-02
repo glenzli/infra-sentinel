@@ -21,7 +21,7 @@ belongs in `resources/` and SQL mechanics belong in `metrics/`.
 | `resources/network/` | Local proxy traffic, VPS/Xray reads, billing policy, attribution, and logical-versus-billed traffic semantics |
 | `resources/system/` | Capability-driven CPU, memory, disk, and process-IO observation; `backends/` selects one OS-specific implementation |
 | `resources/upstream/` | Read-only official upstream-status observation |
-| `platform/` | Narrow process-level host primitives: the single-Agent lock, non-destructive parent liveness probes, and console-free child-process options |
+| `platform/` | Host primitives: single-Agent locking, parent liveness, console-free child processes, atomic private-file publication and Windows user identity |
 | `cli/` | Report and snapshot entry points over the package's typed APIs |
 
 Within the AI boundary, `resources/ai/codex_sampling.py` owns privacy-bounded
@@ -89,7 +89,9 @@ Within facilities, `discovery.py` owns declaration validation and native binding
 selection inputs; `protocols.py` owns provider messages, framing, limits and
 privacy normalization. `windows_pipe.py` owns bounded native pipe connection and
 I/O cancellation lifetimes. `windows_security.py` owns Windows file admission
-and connected-server SID checks. Windows transports never enter the metric or UI layers.
+and connected-server SID checks. Shared SID queries and private file creation live in
+`platform/windows_security.py`; `platform/private_files.py` owns atomic publication
+with POSIX modes or a protected Windows DACL. Windows transports never enter the metric or UI layers.
 
 Within the system boundary, `resources/system/smartctl.py` owns optional
 discovery of an already installed smartctl, bounded read-only NVMe SMART

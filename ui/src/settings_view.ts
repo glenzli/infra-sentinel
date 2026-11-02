@@ -1,6 +1,7 @@
 import { requestAgentCommand } from "./agent_client";
 import { bindLanguagePicker, languagePicker, localizeInlinePairs, tr } from "./i18n";
 import { icon } from "./icons";
+import { bindDesktopStartup } from "./desktop_startup";
 
 type JsonObject = Record<string, unknown>;
 
@@ -83,7 +84,7 @@ function sourceRow(source: JsonObject, budget: JsonObject | undefined): string {
         <label>Warning threshold / 警告阈值<input name="budget-warning:${escapeHtml(id)}" type="number" min="1" value="${warning}" ${budgetEnabled && enabled ? "" : "disabled"} /><span>GiB/day</span></label>
         <label>Critical threshold / 严重阈值<input name="budget-critical:${escapeHtml(id)}" type="number" min="1" value="${critical}" ${budgetEnabled && enabled ? "" : "disabled"} /><span>GiB/day</span></label>
       </div>
-      <p class="host-budget-note">Daily check: resets at 00:00 in this Mac's timezone / 每日检测：按本机时区每日 00:00 重置</p>
+      <p class="host-budget-note">Daily check: resets at 00:00 in this computer's timezone / 每日检测：按本机时区每日 00:00 重置</p>
     </article>`;
 }
 
@@ -164,6 +165,7 @@ export function renderSettings(root: HTMLDivElement, initial: SettingsPayload, a
         <form id="settings-form" class="settings-form">
           <section class="settings-section settings-panel ${activeSection === "general" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">GENERAL</p><h2>Appearance / 外观</h2></div></div>
             <div class="general-grid"><label class="setting-choice"><span>Language / 语言</span>${languagePicker()}</label></div>
+            <div id="desktop-startup" class="general-grid"></div>
           </section>
           <section class="settings-section settings-panel ${activeSection === "integrations" ? "" : "is-hidden"}"><div class="section-heading"><div><p class="eyebrow">LOCAL INTEGRATIONS</p><h2>Application paths / 应用路径</h2></div></div>
             <p class="settings-note">${tr("Leave blank for automatic discovery. Use absolute paths for portable or custom installations.", "留空使用自动发现；便携版或自定义安装位置请填写绝对路径。")}</p>
@@ -195,6 +197,7 @@ export function renderSettings(root: HTMLDivElement, initial: SettingsPayload, a
     const form = root.querySelector<HTMLFormElement>("#settings-form");
     if (!form) return;
     localizeInlinePairs(root);
+    void bindDesktopStartup(root);
     refreshHostControlState(form);
     bindLanguagePicker(root, () => render());
     form.addEventListener("change", () => refreshHostControlState(form));

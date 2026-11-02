@@ -483,9 +483,9 @@ def desktop_state_directory(config_path: Path | None = None) -> Path:
     if sys.platform == "darwin":
         data = Path.home() / "Library" / "Application Support"
     elif sys.platform == "win32":
-        data = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
+        data = Path(os.environ["LOCALAPPDATA"]) if os.environ.get("LOCALAPPDATA") else Path.home() / "AppData" / "Local"
     else:
-        data = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share")))
+        data = Path(os.environ["XDG_DATA_HOME"]) if os.environ.get("XDG_DATA_HOME") else Path.home() / ".local" / "share"
     return data.expanduser() / "Infra Sentinel" / "state"
 
 

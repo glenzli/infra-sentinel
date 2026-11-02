@@ -22,3 +22,4 @@ objc2-foundation = { version = "0.3.2", features = ["NSString", "NSUserNotificat
 
 [target.'cfg(target_os = "windows")'.dependencies]
 tauri-plugin-single-instance = "~2.4"
+winreg = "0.55"

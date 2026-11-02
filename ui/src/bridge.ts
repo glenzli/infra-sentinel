@@ -1,5 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
 
+export interface DesktopStartupStatus {
+  supported: boolean;
+  enabled: boolean;
+}
+
+export function getDesktopStartup(): Promise<DesktopStartupStatus> {
+  return invoke<DesktopStartupStatus>("desktop_startup_get");
+}
+
+export function setDesktopStartup(enabled: boolean): Promise<DesktopStartupStatus> {
+  return invoke<DesktopStartupStatus>("desktop_startup_set", { enabled });
+}
+
 export type OverallStatus = "healthy" | "warning" | "critical" | "degraded" | string;
 
 export interface SourceProjection {

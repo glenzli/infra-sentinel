@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add a Windows sign-in startup switch, quiet tray launch, and duplicate-background-launch handling.
+- Publish optional Codex telemetry files with protected native Windows permissions and bind its loopback listener exclusively.
+- Avoid resolving an unavailable home directory when an explicit desktop data root exists, and close SQLite test readers on Windows.
+
+## Unreleased
+
 ## 2.3.0 — 2026-10-29
 
 macOS stable release for Apple Silicon on macOS 13+. Platform downloads keep

@@ -12,6 +12,12 @@ import ctypes
 from ctypes import wintypes as W
 from pathlib import Path
 
+from ...platform.windows_security import (
+    current_user_sid,
+    process_user_sid as _process_user,
+    sid_bytes as _sid_bytes,
+)
+
 
 _kernel = ctypes.WinDLL("kernel32", use_last_error=True)
 _security = ctypes.WinDLL("advapi32", use_last_error=True)
@@ -34,14 +40,9 @@ _file_info = _declare(_kernel, "GetFileInformationByHandleEx", [W.HANDLE, ctypes
 _drive_type = _declare(_kernel, "GetDriveTypeW", [W.LPCWSTR], W.UINT)
 _read_file = _declare(_kernel, "ReadFile", [W.HANDLE, _P, W.DWORD, _DWORD_P, _P], W.BOOL)
 _local_free = _declare(_kernel, "LocalFree", [_P], _P)
-_current_process = _declare(_kernel, "GetCurrentProcess", [], W.HANDLE)
 _open_process = _declare(_kernel, "OpenProcess", [W.DWORD, W.BOOL, W.DWORD], W.HANDLE)
 _server_pid = _declare(_kernel, "GetNamedPipeServerProcessId", [W.HANDLE, _DWORD_P], W.BOOL)
-_open_token = _declare(_security, "OpenProcessToken", [W.HANDLE, W.DWORD, ctypes.POINTER(W.HANDLE)], W.BOOL)
-_token_info = _declare(_security, "GetTokenInformation", [W.HANDLE, ctypes.c_int, _P, W.DWORD, _DWORD_P], W.BOOL)
 _get_security = _declare(_security, "GetSecurityInfo", [W.HANDLE, ctypes.c_int, W.DWORD, ctypes.POINTER(_P), _P, ctypes.POINTER(_P), _P, ctypes.POINTER(_P)], W.DWORD)
-_valid_sid = _declare(_security, "IsValidSid", [_P], W.BOOL)
-_sid_length = _declare(_security, "GetLengthSid", [_P], W.DWORD)
 _well_known_sid = _declare(_security, "IsWellKnownSid", [_P, ctypes.c_int], W.BOOL)
 _valid_acl = _declare(_security, "IsValidAcl", [_P], W.BOOL)
 _get_ace = _declare(_security, "GetAce", [_P, W.DWORD, ctypes.POINTER(_P)], W.BOOL)
@@ -58,33 +59,6 @@ class _Acl(ctypes.Structure):
 
 class _AceHeader(ctypes.Structure):
     _fields_ = [("kind", W.BYTE), ("flags", W.BYTE), ("size", W.WORD)]
-
-
-def _sid_bytes(pointer: int) -> bytes:
-    if not pointer or not _valid_sid(pointer):
-        raise PermissionError("invalid Windows user SID")
-    return ctypes.string_at(pointer, _sid_length(pointer))
-
-
-def _process_user(process) -> bytes:
-    token = W.HANDLE()
-    if not _open_token(process, 0x0008, ctypes.byref(token)):  # TOKEN_QUERY
-        raise ctypes.WinError(ctypes.get_last_error())
-    try:
-        size = W.DWORD()
-        _token_info(token, 1, None, 0, ctypes.byref(size))  # TokenUser
-        if not ctypes.sizeof(_P) <= size.value <= 65536:
-            raise PermissionError("invalid Windows token size")
-        buffer = ctypes.create_string_buffer(size.value)
-        if not _token_info(token, 1, buffer, size, ctypes.byref(size)):
-            raise ctypes.WinError(ctypes.get_last_error())
-        return _sid_bytes(_P.from_buffer(buffer).value)
-    finally:
-        _close(token)
-
-
-def current_user_sid() -> bytes:
-    return _process_user(_current_process())
 
 
 def _check_security(handle) -> None:

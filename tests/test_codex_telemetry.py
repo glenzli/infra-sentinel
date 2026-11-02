@@ -27,6 +27,14 @@ EPOCH = 1793242590
 TOKEN = "local-test-token-" + "x" * 40
 
 
+def assert_private(test, path):
+    if os.name == "nt":
+        from infra_sentinel.resources.facilities.windows_security import read_private_file
+        test.assertEqual(read_private_file(path.resolve(), 32768), path.read_bytes())
+    else:
+        test.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+
 def log(kind, seconds, *, model="gpt-6-luna", session="private-conversation", output=83, ttft=880, duration=0, **extra):
     values = {"event.name": "codex.websocket_request" if kind in {"start", "failed"} else "codex.sse_event",
               "event.timestamp": datetime.fromtimestamp(EPOCH + seconds, timezone.utc).isoformat(timespec="milliseconds"),
@@ -133,7 +141,7 @@ class CorrelationTests(unittest.TestCase):
             for private in ["private-conversation", "private-account", "private@example", "private-prompt", "private-command", "private-response", "/private-project", TOKEN]:
                 self.assertNotIn(private, raw)
                 self.assertNotIn(private, json.dumps(state.details("receiving")))
-            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            assert_private(self, path)
             mtime = path.stat().st_mtime_ns
             ingest(state, log("start", 4))
             state.checkpoint()
@@ -292,7 +300,9 @@ class SetupTests(unittest.TestCase):
             self.assertIn(original.rstrip(), enabled)
             self.assertIn('trace_exporter = "none"', enabled)
             self.assertIn(settings["token"], enabled)
-            self.assertEqual(config.stat().st_mode & 0o777, 0o600)
+            assert_private(self, config)
+            assert_private(self, state / SETTINGS_FILENAME)
+            assert_private(self, config.with_name(config.name + ".infra-sentinel-before-telemetry"))
             configure("enable", state, config)
             self.assertEqual(config.read_text(), enabled)
             self.assertTrue(configure("status", state, config)["configured"])

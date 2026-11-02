@@ -3,30 +3,16 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 import secrets
-import tempfile
 import tomllib
+
+from ....platform.private_files import private_write
 
 from .receiver import DEFAULT_PORT, SETTINGS_FILENAME, read_settings
 
 BEGIN = "# BEGIN Infra Sentinel local Codex telemetry"
 END = "# END Infra Sentinel local Codex telemetry"
-
-
-def private_write(path: Path, raw: bytes):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(dir=path.parent, prefix="." + path.name + "-", delete=False) as stream:
-            temporary = Path(stream.name)
-            os.chmod(temporary, 0o600)
-            stream.write(raw)
-        temporary.replace(path)
-    finally:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
 
 
 def managed_block(settings: dict) -> str:

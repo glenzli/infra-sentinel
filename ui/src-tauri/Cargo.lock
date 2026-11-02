@@ -1708,6 +1708,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "url",
  "uuid",
+ "winreg",
 ]
 
 [[package]]

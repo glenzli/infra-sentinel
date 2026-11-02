@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from socketserver import ThreadingMixIn
 import hmac
 import json
+import os
 from pathlib import Path
 import socket
 import threading
@@ -44,7 +45,12 @@ class _Server(ThreadingMixIn, HTTPServer):
     daemon_threads = True
     block_on_close = False
     request_queue_size = 4
-    allow_reuse_address = True
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self):
+        if os.name == "nt":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
     def __init__(self, service, port):
         self.service = service

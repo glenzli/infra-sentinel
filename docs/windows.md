@@ -6,7 +6,8 @@ Projection 和设置协议。首阶段针对 Windows x64；Linux 桌面发布排
 
 从 [2.2.0-beta.1 预发布版](https://github.com/glenzli/infra-sentinel/releases/tag/v2.2.0-beta.1)
 下载 `Infra-Sentinel-2.2.0-beta.1-windows-x64-unsigned-setup.exe` 和对应 `.sha256`。
-这是 Windows 专用预览发布；macOS 稳定版继续使用 2.1.2。
+该链接是已发布的 Windows 预览版；下述源码构建已跟进 2.3.0，包含紧凑界面、
+更新的 AI 用量功能，以及 Windows 登录自动启动。macOS 正式版见仓库 Releases。
 
 ## 首阶段范围
 
@@ -14,6 +15,7 @@ Projection 和设置协议。首阶段针对 Windows x64；Linux 桌面发布排
 | --- | --- |
 | 桌面、托盘、恢复窗口 | 支持；关闭窗口保留托盘，托盘菜单退出 |
 | 重复启动 | 激活已有窗口，保持一个桌面实例 |
+| 登录自动启动 | 设置 → 通用中开关，立即生效；登录后静默驻留托盘 |
 | AI 用量 | 沿用各来源解析器；读取本机已有记录，不自动读取 WSL |
 | Codex 路径 | `%USERPROFILE%\.codex`，或启动应用时继承的 `CODEX_HOME` |
 | DSH 路径 | `%USERPROFILE%\.dsh`，或 `DSH_HOME`；下述构建包含 Zstd 支持 |
@@ -62,7 +64,7 @@ python -m venv .venv
 构建产物：
 
 ```text
-ui\src-tauri\target\release\bundle\nsis\Infra Sentinel_2.2.0-beta.1_x64-setup.exe
+ui\src-tauri\target\release\bundle\nsis\Infra Sentinel_2.3.0_x64-setup.exe
 ```
 
 安装包按当前用户安装，并内含 Agent、默认配置和 WebView2 引导程序；最终用户
@@ -82,6 +84,19 @@ ui\src-tauri\target\release\bundle\nsis\Infra Sentinel_2.2.0-beta.1_x64-setup.ex
 `config.example.toml` 保留在同一目录。
 
 ## 本地数据与生命周期
+
+“设置 → 通用 → 登录 Windows 时自动启动”只修改当前用户的启动注册，立即生效，
+无需保存 Agent 设置或重启采集器。初次安装默认关闭；升级保留原有选择。
+启用后，Windows 登录时运行安装位置的 `infra-sentinel-desktop.exe --autostart`，
+后台采集并驻留托盘；点击托盘或正常启动应用可打开窗口，重复自动启动不会弹出窗口。
+也可以在 Windows 的启动应用设置中停用。卸载时安装器清理该应用的启动项。
+静态演示与隔离验证运行时不提供修改真实用户启动项的入口。
+
+注册位于 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，值名为
+`Infra Sentinel`；路径带引号，只接受当前桌面程序的路径，不经过命令解释器。
+安装和更新不自动启用 Codex 请求遥测；该可选集成沿用单独的显式启用流程。
+启用时，凭据和数值快照使用当前用户、SYSTEM、Administrators 的受保护 DACL，
+临时文件在写入内容前即为私有；回环接收器在 Windows 上独占监听端口。
 
 默认配置和状态分别保存在：
 

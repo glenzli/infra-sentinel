@@ -165,16 +165,48 @@ def lock_pid(state: Path) -> int | None:
         return None
 
 
+def desktop_visible(pid: int) -> bool:
+    """Observe only windows belonging to this isolated desktop process."""
+    import ctypes
+    from ctypes import wintypes as W
+
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(W.BOOL, W.HWND, W.LPARAM)
+    user.GetWindowThreadProcessId.argtypes = [W.HWND, ctypes.POINTER(W.DWORD)]
+    user.GetClassNameW.argtypes = [W.HWND, W.LPWSTR, ctypes.c_int]
+    user.IsWindowVisible.argtypes = [W.HWND]
+    user.EnumWindows.argtypes = [callback_type, W.LPARAM]
+    visible = []
+
+    @callback_type
+    def visit(window, _):
+        owner = W.DWORD()
+        user.GetWindowThreadProcessId(window, ctypes.byref(owner))
+        if owner.value == pid:
+            kind = ctypes.create_unicode_buffer(64)
+            user.GetClassNameW(window, kind, len(kind))
+            # Tao and the single-instance plugin also own message-only helper
+            # windows with WS_VISIBLE; those are not the dashboard surface.
+            if kind.value == "Tauri Window" and user.IsWindowVisible(window):
+                visible.append(window)
+        return True
+
+    if not user.EnumWindows(visit, 0):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return bool(visible)
+
+
 def desktop_smoke(executable: Path, directory: Path, environment: dict[str, str]) -> None:
-    child = subprocess.Popen([str(executable)], env=environment, cwd=executable.parent,
+    child = subprocess.Popen([str(executable), "--autostart"], env=environment, cwd=executable.parent,
                              **background_subprocess_options())
     agent_pid = None
     state = directory / "state"
     try:
         check_projection(wait_for(lambda: load_json(state / "projection.json")))
         assert child.poll() is None
+        assert not desktop_visible(child.pid), "automatic startup showed a window"
         agent_pid = wait_for(lambda: lock_pid(state))
-        duplicate = subprocess.Popen([str(executable)], env=environment, cwd=executable.parent,
+        duplicate = subprocess.Popen([str(executable), "--autostart"], env=environment, cwd=executable.parent,
                                      **background_subprocess_options())
         try:
             assert duplicate.wait(timeout=15) == 0
@@ -184,6 +216,17 @@ def desktop_smoke(executable: Path, directory: Path, environment: dict[str, str]
                 duplicate.wait(timeout=10)
         assert child.poll() is None and lock_pid(state) == agent_pid
         settings = command(state, "configuration.get")["settings"]
+        assert not desktop_visible(child.pid), "duplicate automatic startup showed a window"
+        manual = subprocess.Popen([str(executable)], env=environment, cwd=executable.parent,
+                                  **background_subprocess_options())
+        try:
+            assert manual.wait(timeout=15) == 0
+            wait_for(lambda: desktop_visible(child.pid))
+        finally:
+            if manual.poll() is None:
+                manual.kill()
+                manual.wait(timeout=10)
+        assert lock_pid(state) == agent_pid, "normal activation started another Agent"
         settings["policies"][0]["warning_mib"] += 1
         command(state, "configuration.update", settings)
         agent_pid = wait_for(lambda: (pid if (pid := lock_pid(state)) != agent_pid else None))
@@ -213,6 +256,7 @@ def main() -> None:
         (directory / "config.toml").unlink()  # Exercise native first-run bootstrap.
         desktop_smoke(executable, directory, environment)
     print(json.dumps({"status": "ok", "mode": "agent" if args.agent else "desktop",
+                      "quiet_startup_and_normal_activation": bool(args.desktop),
                       "tokens_after_restart": 140, "state": str(directory)}))
 
 

@@ -3,6 +3,7 @@
 mod agent_bridge;
 mod agent_supervisor;
 mod app_paths;
+mod desktop_startup;
 mod menu_bar;
 mod native_notifications;
 mod projection_cache;
@@ -10,11 +11,21 @@ mod projection_cache;
 use projection_cache::ProjectionCache;
 
 fn main() {
+    #[allow(unused_mut)]
+    let mut context = tauri::generate_context!();
+    #[cfg(target_os = "windows")]
+    for window in &mut context.config_mut().app.windows {
+        if window.label == "main" {
+            window.visible = false;
+        }
+    }
     let projection_cache = ProjectionCache::default();
     let builder = tauri::Builder::default();
     #[cfg(target_os = "windows")]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
-        menu_bar::show_dashboard(app);
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, arguments, _| {
+        if !desktop_startup::background_launch(arguments) {
+            menu_bar::show_dashboard(app);
+        }
     }));
     let builder = match agent_supervisor::static_demo_locale() {
         Some(locale) => builder.append_invoke_initialization_script(format!(
@@ -33,6 +44,10 @@ fn main() {
                 .map_err(std::io::Error::other)?;
             native_notifications::start(app.handle().clone(), projection_cache.clone())
                 .map_err(std::io::Error::other)?;
+            #[cfg(target_os = "windows")]
+            if !desktop_startup::background_launch(std::env::args().skip(1)) {
+                menu_bar::show_dashboard(app.handle());
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -47,7 +62,9 @@ fn main() {
             agent_bridge::submit_agent_command,
             agent_bridge::open_console,
             agent_bridge::open_external_status,
+            desktop_startup::desktop_startup_get,
+            desktop_startup::desktop_startup_set,
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("failed to run Infra Sentinel desktop shell");
 }
