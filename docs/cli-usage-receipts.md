@@ -45,8 +45,13 @@ model name is not independent verification of the backend model.
 API reference estimates use the shared price catalog at the receipt's completion
 date. AGY names such as `gemini-3.8-flash-high` retain their original identity
 but use the dated `gemini-3.8-flash` reference when no exact variant entry exists;
-`high` is a recognized effort marker. Known `low`, `medium`, `high`, and
-`thinking` markers use the same bounded resolver as ordinary AGY history.
+`high` is a recognized effort marker. Known `low`, `medium`, `high`, `xhigh`,
+and `thinking` markers use the same bounded resolver as ordinary AGY history.
+The desktop groups these known effort variants under the base model in Token,
+history, and equivalent-value views, adding their counters and already computed
+price references. Raw model names remain in receipts and provider snapshots for
+audit and exact dated-price matching; effort does not create a separate display
+row or variant warning.
 Unknown suffixes and pricing-relevant variants (for example image, TTS, preview,
 or a different base model) are not guessed. Exact variant catalog entries win.
 These are text API reference values, not the CLI provider's actual charges.

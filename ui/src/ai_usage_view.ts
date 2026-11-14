@@ -389,7 +389,7 @@ function modelReferenceAnnotations(
       const reference = asRecord(model.price_reference);
       const kind = reference.marker_kind === "trial" || reference.marker_kind === "free" ? reference.marker_kind
         : reference.suspected_rollout === true ? "rollout"
-        : dimension === "model" && reference.match === "base-reference" ? "base" : null;
+        : dimension === "model" && reference.match === "base-reference" && reference.marker_kind !== "effort" ? "base" : null;
       if (!kind) continue;
       const variants = groups.get(kind) ?? [];
       variants.push(model);
@@ -486,10 +486,10 @@ function performanceAnnotations(providerSources: Record<string, unknown>[], dime
       const recordedEpoch = recorded.getTime() / 1_000;
       if (!Number.isFinite(recordedEpoch) || recordedEpoch < window.sinceEpoch || recordedEpoch > window.untilEpoch) return [];
       const recordedLabel = recorded.toLocaleString();
-      const context = `${sourceLabel} · ${String(sample.model ?? "")}`;
+      const context = `${sourceLabel} · ${model}`;
       const value = formatMetric(rate.value, rate.unit);
       const hint = [context, `${tr("Latest recorded sample", "最近样本")} · ${recordedLabel}`, `${label} ${value}`].join("\n");
-      return [{ model: String(sample.model ?? "unknown"), html: `<button type="button" class="ai-performance-tag" aria-label="${escapeHtml(hint)}"><span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b><span class="ai-performance-tooltip" aria-hidden="true"><b>${escapeHtml(context)}</b><time>${escapeHtml(recordedLabel)}</time></span></button>` }];
+      return [{ model: model || "unknown", html: `<button type="button" class="ai-performance-tag" aria-label="${escapeHtml(hint)}"><span>${escapeHtml(label)}</span><b>${escapeHtml(value)}</b><span class="ai-performance-tooltip" aria-hidden="true"><b>${escapeHtml(context)}</b><time>${escapeHtml(recordedLabel)}</time></span></button>` }];
     });
     if (!tags.length) return [];
     const byModel = new Map<string, string[]>();

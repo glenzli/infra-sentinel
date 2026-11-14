@@ -21,7 +21,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from infra_sentinel.app.agent import apply_agent_commands, main as agent_main
 from infra_sentinel.cli.usage_receipts import main as cli_main, submit_receipt
-from infra_sentinel.core.collectors import CollectorContext, CollectorRegistry
+from infra_sentinel.core.collectors import CollectorContext, CollectorRegistry, CollectorRun
 from infra_sentinel.core.projection import build_infra_projection
 from infra_sentinel.metrics.usage_receipts import (
     RECEIPT_FILENAME, RECEIPT_SCHEMA, UsageReceiptStore, prepare_receipt, validate_receipt,
@@ -48,6 +48,35 @@ def apply(state_dir: Path) -> None:
 
 
 class UsageReceiptTests(unittest.TestCase):
+    def test_argon_effort_receipts_keep_raw_provenance_and_price_every_variant(self) -> None:
+        completed = datetime(2026, 11, 12, 12).astimezone()
+        names = ["gemini-4-argon", "gemini-4-argon-high", "gemini-4-argon-xhigh", "gemini-4-argon-medium"]
+        with tempfile.TemporaryDirectory() as temporary:
+            store = UsageReceiptStore(Path(temporary))
+            for index, model in enumerate(names):
+                raw = receipt(event_id=f"argon-effort-fixture-{index}", client="agy", model=model,
+                              completed_at=completed.isoformat())
+                raw["usage"] = {"input_tokens": 100, "cached_input_tokens": 40,
+                                "output_tokens": 20, "reasoning_output_tokens": 15, "total_tokens": 120}
+                store.record(prepare_receipt(raw))
+            collector = CliUsageReceiptCollector(store.summary)
+            snapshot = collector.collect(CollectorContext({"epoch": completed.timestamp()}, {})).snapshot
+            projection = build_infra_projection(
+                {"timestamp": completed.isoformat()}, {"kernel": {}, "vps": {}},
+                {"enabled": False, "status": "disabled", "servers": []}, "none",
+                (CollectorRun(capability=collector.capability, status="ok", snapshot=snapshot),),
+            )
+            source = projection["ai_usage"]["sources"][0]
+            self.assertEqual({model["id"] for model in source["models"]}, set(names))
+            self.assertEqual(source["usage"]["today"]["tokens"], 480)
+            self.assertEqual(projection["ai_usage"]["aggregate"]["today"]["tokens"], 480)
+            reference = source["pricing"]["daily"][0]["reference"]
+            self.assertEqual(reference["priced_tokens"], 480)
+            self.assertEqual(reference["unpriced_tokens"], 0)
+            self.assertAlmostEqual(reference["cost_usd"], 4 * (60 * 2 + 40 * .1 + 20 * 10) / 1_000_000)
+            for model in source["models"]:
+                self.assertEqual(model["price_reference"]["model"], "gemini-4-argon")
+
     def test_receipt_effort_pricing_preserves_raw_model_and_includes_reasoning_once(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             store = UsageReceiptStore(Path(temporary))

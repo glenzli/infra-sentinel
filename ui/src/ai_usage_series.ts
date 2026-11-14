@@ -20,9 +20,14 @@ export type ProjectedUsage = {
 type MutableInterval = UsageInterval & { rawModels: Map<string, number> };
 type TodayTarget = { tokens: number; startedEpoch?: number; models: Map<string, number> };
 
+// Effort is a display dimension of these model families. Keep access, rollout,
+// preview and modality variants distinct; source receipts retain their raw IDs.
+const EFFORT_MODEL = /^((?:gemini-[0-9]+(?:\.[0-9]+)?-(?:argon|carbon|pro|flash(?:-lite)?)|claude-(?:opus|sonnet|haiku|fable)-[0-9]+(?:-[0-9]+)?))-(?:low|medium|high|xhigh|thinking)$/;
+
 export function canonicalModelId(value: unknown): string {
-  const model = String(value ?? "").trim().toLowerCase();
-  return model.startsWith("openai/") ? model.slice("openai/".length) : model;
+  const raw = String(value ?? "").trim().toLowerCase();
+  const model = raw.startsWith("openai/") ? raw.slice("openai/".length) : raw;
+  return model.replace(EFFORT_MODEL, "$1");
 }
 
 function rawIntervals(points: Record<string, unknown>[]): UsageInterval[] {
@@ -64,7 +69,7 @@ function todayTargets(providerSources: Record<string, unknown>[]): Map<string, T
     for (const model of asArray(source.models)) {
       const id = canonicalModelId(model.id);
       const window = asRecord(model.today);
-      if (id && window.available !== false && typeof window.tokens === "number") models.set(id, number(window.tokens));
+      if (id && window.available !== false && typeof window.tokens === "number") models.set(id, (models.get(id) ?? 0) + number(window.tokens));
     }
     targets.set(sourceId, {
       tokens: number(today.tokens),

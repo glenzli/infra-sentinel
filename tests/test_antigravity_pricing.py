@@ -11,7 +11,7 @@ from infra_sentinel.resources.ai.pricing_catalog import bundled_pricing_catalog
 
 class AntigravityPricingTests(unittest.TestCase):
     def test_gemini_effort_suffixes_reuse_base_price_and_preserve_exact_override(self):
-        for marker in ("low", "medium", "high", "thinking"):
+        for marker in ("low", "medium", "high", "xhigh", "thinking"):
             with self.subTest(marker=marker):
                 result = resolve_antigravity_reference(f"gemini-3.8-flash-{marker}", usage_date="2026-10-29")
                 self.assertEqual(result.model, "gemini-3.8-flash")
@@ -28,6 +28,28 @@ class AntigravityPricingTests(unittest.TestCase):
         self.assertEqual(exact.match, "exact")
         self.assertEqual(exact.model, "gemini-3.8-flash-high")
         self.assertEqual(exact.price.input_per_million, 9)
+
+    def test_argon_xhigh_and_downloaded_carbon_effort_use_dated_base_prices(self):
+        for marker in ("high", "xhigh", "medium"):
+            with self.subTest(marker=marker):
+                before = resolve_antigravity_reference(f"gemini-4-argon-{marker}", usage_date="2026-10-12")
+                self.assertIsNone(before.price)
+                current = resolve_antigravity_reference(f"gemini-4-argon-{marker}", usage_date="2026-11-30")
+                future = resolve_antigravity_reference(f"gemini-4-argon-{marker}", usage_date="2026-12-01")
+                self.assertEqual(current.model, "gemini-4-argon")
+                self.assertEqual(current.marker_kind, "effort")
+                self.assertEqual(current.price.input_per_million, 2)
+                self.assertEqual(future.price.input_per_million, 4)
+        # Carbon can arrive through the independently downloaded catalog.
+        base = bundled_pricing_catalog().price_for("antigravity", "gemini-4-argon", "2026-11-14")
+        class DownloadedCatalog:
+            def price_for(self, scope, model, usage_date=None):
+                return base if scope == "antigravity" and model == "gemini-4-carbon" and usage_date >= "2026-11-10" else None
+        carbon = resolve_antigravity_reference("gemini-4-carbon-xhigh", catalog=DownloadedCatalog(), usage_date="2026-11-14")
+        self.assertEqual(carbon.model, "gemini-4-carbon")
+        self.assertEqual(carbon.marker_kind, "effort")
+        self.assertEqual(carbon.match, "base-reference")
+        self.assertEqual(carbon.price, base)
 
     def test_known_rollout_markers_use_only_the_same_dated_base(self):
         for marker in ("-n", "-exp-a"):

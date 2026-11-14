@@ -20,11 +20,11 @@ GOOGLE_CLOUD_ANTHROPIC_PRICES_URL = "https://cloud.google.com/gemini-enterprise-
 # They describe the name, not actual charges. Other pricing-relevant markers
 # such as preview, lite, image, TTS, live and service tiers are not stripped.
 _ACCESS_ID = re.compile(r"(?P<base>.+)(?P<marker>-(?:trial|trail|free))\Z")
-_GEMINI_BASE = r"gemini-[0-9]+(?:\.[0-9]+)?-(?:argon|pro|flash(?:-lite)?)"
+_GEMINI_BASE = r"gemini-[0-9]+(?:\.[0-9]+)?-(?:argon|carbon|pro|flash(?:-lite)?)"
 _ROLLOUT_ID = re.compile(rf"(?P<base>{_GEMINI_BASE})(?P<marker>-(?:[a-z]|exp(?:-[a-z0-9]+)?))\Z")
 _EFFORT_ID = re.compile(
     rf"(?P<base>{_GEMINI_BASE}|claude-(?:opus|sonnet|haiku|fable)-[0-9]+(?:-[0-9]+)?)"
-    r"(?P<marker>-(?:low|medium|high|thinking))\Z"
+    r"(?P<marker>-(?:low|medium|high|xhigh|thinking))\Z"
 )
 
 
