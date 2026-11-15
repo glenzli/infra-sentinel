@@ -195,6 +195,22 @@ class PerformanceTests(unittest.TestCase):
         self.assertEqual(values["first-token-latency"], 0)
         self.assertNotIn("client-stream-output-rate", values)
 
+    def test_buffered_delivery_window_is_not_a_generation_rate(self):
+        sample = PerformanceSample(EPOCH, "gemini-4-hydrogen", 83,
+                                   2221.558459, 2220.102375, 1.456084)
+        values = metrics({"details": performance_details(sample)})
+        self.assertNotIn("client-stream-output-rate", values)
+        self.assertAlmostEqual(values["first-token-latency"], 2.220102375)
+        self.assertEqual(sample.output_tokens, 83)
+        for duration in (0.001, 1, 249.999):
+            self.assertNotIn("client-stream-output-rate", metrics({"details": performance_details(
+                replace(sample, streaming_ms=duration))}))
+        for output in (0, 1):
+            self.assertNotIn("client-stream-output-rate", metrics({"details": performance_details(
+                replace(sample, output_tokens=output, streaming_ms=1000))}))
+        usable = metrics({"details": performance_details(replace(sample, streaming_ms=250))})
+        self.assertEqual(usable["client-stream-output-rate"], 332)
+
     def test_opencode_completed_parent_turn_includes_reasoning_and_tool_gaps(self):
         with tempfile.TemporaryDirectory() as temporary:
             db = Path(temporary) / "opencode.db"

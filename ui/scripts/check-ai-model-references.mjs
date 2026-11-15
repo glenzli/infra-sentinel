@@ -120,17 +120,70 @@ assert(!fallbackAnnotations.includes("Antigravity · older-rollout"), "interval 
 
 const baseModel = "gemini-4-argon";
 const effortModels = [baseModel, `${baseModel}-high`, `${baseModel}-xhigh`, `${baseModel}-medium`];
-for (const base of [baseModel, "gemini-4-carbon", "gemini-3.8-flash", "gemini-3.1-pro", "gemini-3.1-flash-lite", "claude-fable-5-2"]) {
+for (const base of [baseModel, "gemini-4-carbon", "gemini-4-hydrogen", "gemini-3.8-flash", "gemini-3.1-pro", "gemini-3.1-flash-lite", "claude-fable-5-2"]) {
   for (const effort of ["low", "medium", "high", "xhigh", "thinking"]) {
     assert.equal(canonicalModelId(`${base}-${effort}`), base, "known effort is a model display grouping");
   }
 }
+for (const base of ["gemini-4-hydrogen", "gemini-99-new-family", "gpt-6.1-terra", "other", "gemini-3-flash-preview"]) {
+  for (const effort of ["none", "minimal", "low", "medium", "high", "xhigh", "max"]) {
+    assert.equal(canonicalModelId(`${base}-${effort}`), base, "new families do not need a display allowlist update");
+  }
+}
+for (const base of ["claude-opus-5-5", "claude-sonnet-5-5", "claude-glm-5.3", "claude-kimi-k3.1-pro"]) {
+  assert.equal(canonicalModelId(`${base}[1m]`), base);
+  assert.equal(canonicalModelId(`${base}-xhigh[1m]`), base);
+  assert.equal(canonicalModelId(`${base}[1m]-xhigh`), base);
+}
 for (const model of ["gemini-4-argon-trial", "gemini-4-argon-free", "gemini-4-argon-n", "gemini-3.7-flash-exp-b",
-  "gemini-3-flash-preview", "gemini-3-flash-preview-high", "gemini-4-carbon-image", "gemini-4-argon-turbo",
-  "gemini-4-argon-xhigh-turbo", "other-high"]) {
+  "gemini-3-flash-preview", "gemini-4-carbon-image", "gemini-4-argon-turbo", "claude-opus-5-5[2m]",
+  "gemini-4-argon-xhigh-turbo", "other-thinking"]) {
   assert.equal(canonicalModelId(model), model, "access, rollout and unsupported variants keep distinct IDs");
 }
 assert.equal(canonicalModelId(" OpenAI/GPT-6.1-SOL "), "gpt-6.1-sol", "existing OpenAI normalization is preserved");
+
+const newModelRows = [
+  { id: "gemini-4-hydrogen", tokens: 100 }, { id: "gemini-4-hydrogen-xhigh", tokens: 200 },
+  { id: "claude-opus-5-5[1m]", tokens: 40 }, { id: "claude-opus-5-5", tokens: 60 },
+  { id: "claude-glm-5.3[1m]", tokens: 10 }, { id: "claude-kimi-k3.1-pro[1m]", tokens: 10 },
+];
+const newModels = {
+  source_id: "cli-receipts", label: "CLI receipts",
+  usage: { today: usageWindow(420), cumulative: usageWindow(840) },
+  models: newModelRows.map(({ id, tokens }) => ({ id, today: usageWindow(tokens), cumulative: usageWindow(tokens * 2),
+    price_reference: { model: canonicalModelId(id), available: true, match: "base-reference",
+      marker_kind: id.endsWith("[1m]") ? "context" : "effort" },
+  })),
+  history: { daily_available: true, daily: [0, 6].map((age) => ({ date: dated(age), tokens: 420, models: newModelRows })),
+    hourly_available: true, hourly: [{ epoch: now.getTime() / 1000 - 3600, tokens: 420, models: newModelRows }] },
+  pricing: { daily: [0, 6].map((age) => ({ date: dated(age), reference: {
+    kind: "catalog-text-api-reference", cost_usd: 2.1, priced_tokens: 400, unpriced_tokens: 20,
+    models: newModelRows.map(({ id, tokens }, index) => ({ id, cost_usd: (index + 1) / 10, priced_tokens: tokens })),
+  } })) },
+};
+const newModelsOriginal = JSON.stringify(newModels);
+for (const range of ["today", "7d", "30d", "recorded"]) {
+  const window = analysisTimeWindow(range, 3600, now);
+  const usage = projectUsage([], [newModels], range, window);
+  const factor = range === "today" ? 1 : 2;
+  assert.equal(usage.modelTotals.get("gemini-4-hydrogen"), 300 * factor);
+  assert.equal(usage.modelTotals.get("claude-opus-5-5"), 100 * factor);
+  assert.equal([...usage.modelTotals.values()].reduce((sum, value) => sum + value, 0), 420 * factor);
+  const price = projectPriceReference([newModels], usage, range, window);
+  assert.equal(price.costUsd, 2.1 * factor);
+  assert.equal(price.unpricedTokens, 20 * factor);
+  assert.equal(price.byModel.get("claude-opus-5-5"), .7 * factor);
+  for (const locale of ["en", "zh"]) {
+    setLocale(locale);
+    for (const measure of ["tokens", "value"]) {
+      const html = render([newModels], range, "models", measure);
+      assert(html.includes("gemini-4-hydrogen") && html.includes("claude-opus-5-5"));
+      assert(!html.includes("[1m]") && !html.includes("-xhigh"), "context and effort stay out of chart labels and hints");
+      assert.equal(annotations(html), "", "context selection needs no variant warning");
+    }
+  }
+}
+assert.equal(JSON.stringify(newModels), newModelsOriginal, "display grouping preserves raw records");
 
 const modelRows = effortModels.map((id, index) => ({ id, tokens: (index + 1) * 100 }));
 const effortSource = {

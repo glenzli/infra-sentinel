@@ -41,6 +41,94 @@ def manifest(raw: bytes, version: str) -> bytes:
 
 
 class PricingCatalogTests(unittest.TestCase):
+    def test_mainstream_provider_coverage_and_real_tariff_boundaries(self) -> None:
+        catalog = bundled_pricing_catalog()
+        scopes = {p.scope for p in catalog.periods}
+        self.assertTrue({"openai", "google", "anthropic", "deepseek", "qwen", "zai", "kimi", "minimax", "xai", "mistral", "cohere"} <= scopes)
+        day = "2026-11-15"
+        self.assertEqual(catalog.price_for("openai", "gpt-6.1-terra", day).input_per_million, 1)
+        self.assertEqual(catalog.price_for("mistral", "mistral-large-4", day).cached_input_per_million, .07)
+        self.assertIsNone(catalog.price_for("anthropic", "claude-haiku-5-5", day))
+        self.assertEqual(catalog.price_for("anthropic", "claude-haiku-5-5", day, request_input_tokens=100000).input_per_million, .1)
+        self.assertEqual(catalog.price_for("anthropic", "claude-haiku-5-5", day, request_input_tokens=100001).input_per_million, .5)
+        self.assertEqual(catalog.price_for("xai", "grok-4.7", day, request_input_tokens=199999).input_per_million, 2)
+        self.assertEqual(catalog.price_for("xai", "grok-4.7", day, request_input_tokens=200000).input_per_million, 4)
+        self.assertEqual(catalog.price_for("qwen", "qwen3.7-flash", day, request_input_tokens=32000).input_per_million, .03)
+        self.assertEqual(catalog.price_for("qwen", "qwen3.7-flash", day, request_input_tokens=32001).input_per_million, .1)
+        self.assertIsNone(catalog.price_for("qwen", "qwen3.7-flash", day, request_input_tokens=10).cached_input_per_million)
+        self.assertIsNone(catalog.price_for("qwen", "qwen3.7-plus", "2026-11-16", request_input_tokens=10))
+        self.assertIsNone(catalog.price_for("deepseek", "deepseek-v4-pro", day))
+        self.assertEqual(catalog.price_for("deepseek", "deepseek-v4-pro", day, rate_tier="peak").input_per_million, 1.32)
+        self.assertEqual(catalog.price_for("deepseek", "deepseek-v4-pro", day, rate_tier="off-peak").input_per_million, .66)
+        self.assertIsNone(catalog.price_for("minimax", "MiniMax-M3", day))
+        self.assertEqual(catalog.price_for("minimax", "MiniMax-M3", day, rate_tier="standard-short-context").input_per_million, .3)
+        self.assertEqual(catalog.price_for("minimax", "MiniMax-M3", day, rate_tier="priority-long-context").input_per_million, .9)
+        self.assertIsNone(catalog.price_for("cohere", "command-r-08-2024", day).cached_input_per_million)
+        self.assertIsNone(catalog.price_for("cohere", "command-a-plus-05-2026", day))
+        self.assertEqual(catalog.price_for("antigravity", "gemini-2.5-pro", "2026-11-14").input_per_million, 1.25)
+        self.assertEqual(catalog.price_for("antigravity", "gemini-2.5-pro", day).input_per_million, .75)
+
+    def test_codex_effort_prices_use_only_the_exact_dated_base_and_keep_raw_identity(self) -> None:
+        from infra_sentinel.resources.ai.codex_pricing import resolve_standard_api_reference
+        from dataclasses import replace
+        raw = {"input_tokens": 60, "cached_input_tokens": 30, "cache_write_input_tokens": 20,
+               "output_tokens": 40, "total_tokens": 100}
+        for effort in ("none", "minimal", "low", "medium", "high", "xhigh", "max"):
+            model = "gpt-6.1-terra-" + effort
+            result = estimate_standard_api_cost({model: raw}, usage_date="2026-11-15")
+            self.assertEqual(result.priced_tokens, 100)
+            self.assertEqual(result.models[0].model, model)
+            self.assertAlmostEqual(result.total_cost_usd, 236.5 / 1_000_000)
+        base = bundled_pricing_catalog().price_for("codex", "gpt-6.1-terra", "2026-11-15")
+        class ExactCatalog:
+            def price_for(self, scope, model, _date):
+                return replace(base, input_per_million=9) if model == "gpt-6.1-terra-xhigh" else base
+        model, price = resolve_standard_api_reference("gpt-6.1-terra-xhigh", catalog=ExactCatalog(), usage_date="2026-11-15")
+        self.assertEqual((model, price.input_per_million), ("gpt-6.1-terra-xhigh", 9))
+        self.assertIsNone(resolve_standard_api_reference("gpt-6.1-terra-fast", usage_date="2026-11-15")[1])
+        self.assertIsNone(resolve_standard_api_reference("unknown-family-xhigh", usage_date="2026-11-15")[1])
+
+    def test_request_context_and_rate_tiers_require_explicit_conditions(self) -> None:
+        header = '''schema = "api-price/v1"
+catalog_version = "2026.11.15.2"
+updated_at = "2026-11-15T00:00:00+00:00"
+currency = "USD"
+unit = "per_million_tokens"
+[[references]]
+id = "fixture"
+url = "https://example.org/pricing"
+checked_at = "2026-11-15"
+'''
+        row = '''
+[[prices]]
+scope = "xai"
+model = "fixture-model"
+reference = "fixture"
+valid_from = "2026-11-15"
+input_per_million = 1
+output_per_million = 2
+'''
+        low = row + 'request_input_max = 199999\n'
+        high = row.replace('input_per_million = 1', 'input_per_million = 2') + 'request_input_min = 200000\n'
+        catalog = PricingCatalog.from_bytes((header + low + high).encode())
+        self.assertIsNone(catalog.price_for("xai", "fixture-model", "2026-11-15"))
+        self.assertEqual(catalog.price_for("xai", "fixture-model", "2026-11-15", request_input_tokens=199999).input_per_million, 1)
+        self.assertEqual(catalog.price_for("xai", "fixture-model", "2026-11-15", request_input_tokens=200000).input_per_million, 2)
+        self.assertIsNone(catalog.price_for("xai", "fixture-model", "2026-11-15", request_input_tokens=True))
+        self.assertIsNone(catalog.price_for("xai", "fixture-model", "2026-11-14", request_input_tokens=10))
+        self.assertIsNone(catalog.price_for("xai", "fixture-model", "2026-11-15", request_input_tokens=10).cached_input_per_million)
+        peaks = PricingCatalog.from_bytes((header + row + 'rate_tier = "peak"\n' + high + 'rate_tier = "off-peak"\n').encode())
+        self.assertIsNone(peaks.price_for("xai", "fixture-model", "2026-11-15"))
+        self.assertEqual(peaks.price_for("xai", "fixture-model", "2026-11-15", rate_tier="peak").input_per_million, 1)
+        self.assertIsNone(peaks.price_for("xai", "fixture-model", "2026-11-15", rate_tier="off-peak"))
+        self.assertEqual(peaks.price_for("xai", "fixture-model", "2026-11-15", rate_tier="off-peak", request_input_tokens=200000).input_per_million, 2)
+        for invalid in [high.replace('200000', '199999'), low + 'request_input_min = 200000\n',
+                        row + 'request_input_max = true\n', row + 'rate_tier = "unknown"\n',
+                        row.replace('scope = "xai"', 'scope = "unverified-provider"'),
+                        row.replace('scope = "xai"', 'scope = "codex"')]:
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                PricingCatalog.from_bytes((header + low + invalid).encode())
+
     def test_fetch_survives_packaged_ca_file_disappearing_after_startup(self) -> None:
         class Response(BytesIO):
             headers = {"Content-Length": "3"}

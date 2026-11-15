@@ -47,10 +47,17 @@ _REFERENCE_KEYS = {"id", "url", "checked_at"}
 _PRICE_KEYS = {
     "scope", "model", "reference", "valid_from", "valid_until", "input_per_million",
     "cached_input_per_million", "cache_write_per_million", "output_per_million", "note",
+    "request_input_min", "request_input_max", "rate_tier",
 }
 _REQUIRED_PRICE_KEYS = {
     "scope", "model", "reference", "valid_from", "input_per_million",
-    "cached_input_per_million", "output_per_million",
+    "output_per_million",
+}
+_CLIENT_SCOPES = {"codex", "antigravity", "claude-code"}
+_PROVIDER_SCOPES = {"openai", "google", "anthropic", "deepseek", "qwen", "zai", "kimi", "minimax", "xai", "mistral", "cohere"}
+_RATE_TIERS = {
+    "standard", "priority", "fast", "ultrafast", "batch", "flex", "peak", "off-peak",
+    "standard-short-context", "standard-long-context", "priority-short-context", "priority-long-context",
 }
 _MANIFEST_KEYS = {"schema", "catalog_schema", "catalog_version", "asset", "size", "sha256"}
 _ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}\Z")
@@ -63,7 +70,7 @@ class TextTokenPrice:
     """One effective text-token rate in USD per million tokens."""
 
     input_per_million: float
-    cached_input_per_million: float
+    cached_input_per_million: float | None
     cache_write_per_million: float | None
     output_per_million: float
     reference: str
@@ -77,6 +84,9 @@ class _PricePeriod:
     valid_from: date
     valid_until: date | None
     price: TextTokenPrice
+    request_input_min: int | None = None
+    request_input_max: int | None = None
+    rate_tier: str = "standard"
 
 
 class PriceCatalogLookup(Protocol):
@@ -86,7 +96,8 @@ class PriceCatalogLookup(Protocol):
     @property
     def checked_at(self) -> str: ...
 
-    def price_for(self, scope: str, model: str, usage_date: str | date | None = None) -> TextTokenPrice | None: ...
+    def price_for(self, scope: str, model: str, usage_date: str | date | None = None, *,
+                  request_input_tokens: int | None = None, rate_tier: str = "standard") -> TextTokenPrice | None: ...
 
 
 class PricingCatalog:
@@ -105,6 +116,9 @@ class PricingCatalog:
         self.updated_at = updated_at
         self.checked_at = checked_at
         self.periods = periods
+        self._by_model: dict[tuple[str, str], list[_PricePeriod]] = {}
+        for period in periods:
+            self._by_model.setdefault((period.scope, period.model), []).append(period)
         self.raw = raw
         self.sha256 = hashlib.sha256(raw).hexdigest()
 
@@ -156,14 +170,24 @@ class PricingCatalog:
             scope = _text(row["scope"], where=f"prices[{index}].scope")
             model = _text(row["model"], where=f"prices[{index}].model")
             reference = _text(row["reference"], where=f"prices[{index}].reference")
-            if scope not in {"codex", "antigravity"} or not _ID_RE.fullmatch(model):
+            if scope not in _CLIENT_SCOPES | _PROVIDER_SCOPES or not _ID_RE.fullmatch(model):
                 raise ValueError(f"prices[{index}] has an unsupported scope or model")
+            if scope in _CLIENT_SCOPES and "cached_input_per_million" not in row:
+                raise ValueError(f"prices[{index}] requires the client cache-read reference")
             if reference not in references:
                 raise ValueError(f"prices[{index}] uses an unknown reference")
             start = _date(row["valid_from"], where=f"prices[{index}].valid_from")
             end = _date(row["valid_until"], where=f"prices[{index}].valid_until") if "valid_until" in row else None
             if end is not None and end < start:
                 raise ValueError(f"prices[{index}] has an inverted date range")
+            lower, upper = row.get("request_input_min"), row.get("request_input_max")
+            if any(value is not None and (type(value) is not int or not 0 <= value <= 2**53 - 1) for value in (lower, upper)):
+                raise ValueError(f"prices[{index}] has invalid request-input bounds")
+            if lower is not None and upper is not None and upper < lower:
+                raise ValueError(f"prices[{index}] has inverted request-input bounds")
+            tier = row.get("rate_tier", "standard")
+            if not isinstance(tier, str) or tier not in _RATE_TIERS:
+                raise ValueError(f"prices[{index}] has an unsupported rate tier")
             period = _PricePeriod(
                 scope=scope,
                 model=model,
@@ -171,7 +195,10 @@ class PricingCatalog:
                 valid_until=end,
                 price=TextTokenPrice(
                     input_per_million=_rate(row["input_per_million"], where=f"prices[{index}].input_per_million"),
-                    cached_input_per_million=_rate(row["cached_input_per_million"], where=f"prices[{index}].cached_input_per_million"),
+                    cached_input_per_million=(
+                        _rate(row["cached_input_per_million"], where=f"prices[{index}].cached_input_per_million")
+                        if "cached_input_per_million" in row else None
+                    ),
                     cache_write_per_million=(
                         _rate(row["cache_write_per_million"], where=f"prices[{index}].cache_write_per_million")
                         if "cache_write_per_million" in row else None
@@ -180,15 +207,21 @@ class PricingCatalog:
                     reference=reference,
                     note=_text(row["note"], where=f"prices[{index}].note") if "note" in row else None,
                 ),
+                request_input_min=lower, request_input_max=upper, rate_tier=tier,
             )
             periods.append(period)
             grouped.setdefault((scope, model), []).append(period)
 
         for key, values in grouped.items():
-            values.sort(key=lambda item: item.valid_from)
-            for previous, current in zip(values, values[1:]):
-                if previous.valid_until is None or current.valid_from <= previous.valid_until:
-                    raise ValueError(f"overlapping date ranges for {key[0]}:{key[1]}")
+            for index, previous in enumerate(values):
+                for current in values[index + 1:]:
+                    dates_overlap = max(previous.valid_from, current.valid_from) <= min(
+                        previous.valid_until or date.max, current.valid_until or date.max)
+                    inputs_overlap = max(previous.request_input_min or 0, current.request_input_min or 0) <= min(
+                        previous.request_input_max if previous.request_input_max is not None else 2**53 - 1,
+                        current.request_input_max if current.request_input_max is not None else 2**53 - 1)
+                    if previous.rate_tier == current.rate_tier and dates_overlap and inputs_overlap:
+                        raise ValueError(f"overlapping date ranges and input tiers for {key[0]}:{key[1]}")
         return cls(
             catalog_version=version,
             updated_at=updated_at,
@@ -202,13 +235,23 @@ class PricingCatalog:
         scope: str,
         model: str,
         usage_date: str | date | None = None,
+        *, request_input_tokens: int | None = None, rate_tier: str = "standard",
     ) -> TextTokenPrice | None:
         when = date.today() if usage_date is None else (
             usage_date if isinstance(usage_date, date) else date.fromisoformat(usage_date)
         )
-        for period in self.periods:
-            if period.scope != scope or period.model != model or when < period.valid_from:
+        if request_input_tokens is not None and (type(request_input_tokens) is not int or not 0 <= request_input_tokens <= 2**53 - 1):
+            return None
+        for period in self._by_model.get((scope, model), ()):
+            if period.rate_tier != rate_tier or when < period.valid_from:
                 continue
+            if period.request_input_min is not None or period.request_input_max is not None:
+                if request_input_tokens is None:
+                    continue
+                if period.request_input_min is not None and request_input_tokens < period.request_input_min:
+                    continue
+                if period.request_input_max is not None and request_input_tokens > period.request_input_max:
+                    continue
             if period.valid_until is None or when <= period.valid_until:
                 return period.price
         return None
@@ -260,9 +303,11 @@ class PricingCatalogManager:
         scope: str,
         model: str,
         usage_date: str | date | None = None,
+        *, request_input_tokens: int | None = None, rate_tier: str = "standard",
     ) -> TextTokenPrice | None:
         with self._lock:
-            price = self._catalog.price_for(scope, model, usage_date)
+            price = self._catalog.price_for(scope, model, usage_date,
+                                            request_input_tokens=request_input_tokens, rate_tier=rate_tier)
         if price is None:
             self.schedule_refresh_if_due(MISSING_MODEL_CHECK_SECONDS)
         return price

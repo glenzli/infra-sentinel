@@ -10,10 +10,25 @@ from infra_sentinel.resources.ai.pricing_catalog import (
     TextTokenPrice,
     bundled_pricing_catalog,
 )
+from infra_sentinel.resources.ai.model_reference import effort_variant
 
 
 OPENAI_STANDARD_TEXT_PRICES_URL = "https://developers.openai.com/api/docs/models"
 StandardTextPrice = TextTokenPrice
+
+
+def resolve_standard_api_reference(
+    model: str, *, catalog: PriceCatalogLookup | None = None, usage_date: str | None = None,
+) -> tuple[str, TextTokenPrice | None]:
+    """An exact tariff wins; known effort can use only its exact dated base."""
+    lookup = catalog or bundled_pricing_catalog()
+    price = lookup.price_for("codex", model, usage_date)
+    if price is not None:
+        return model, price
+    effort = effort_variant(model)
+    if effort is not None:
+        return effort.base, lookup.price_for("codex", effort.base, usage_date)
+    return model, None
 
 
 @dataclass(frozen=True)
@@ -51,7 +66,7 @@ def estimate_standard_api_cost(
         tokens = _tokens(raw.get("total_tokens"))
         if tokens <= 0:
             continue
-        price = lookup.price_for("codex", model, usage_date)
+        _, price = resolve_standard_api_reference(model, catalog=lookup, usage_date=usage_date)
         if price is None:
             unpriced_tokens += tokens
             continue

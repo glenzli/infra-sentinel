@@ -942,7 +942,7 @@ def main() -> int:
     mode.add_argument("--maintain", action="store_true", help="离线整理历史指标与临时查询结果")
     mode.add_argument("--diagnostics", action="store_true", help="只读查询诊断历史并输出 JSON")
     mode.add_argument("--codex-telemetry", choices=("enable", "disable", "status"), help="配置本机 Codex 请求遥测")
-    mode.add_argument("--record-cli-usage", type=Path, metavar="JSON_FILE", help="提交隔离 CLI 的最小 Token 用量回执；- 表示标准输入")
+    mode.add_argument("--record-cli-usage", type=Path, metavar="JSON_FILE", help="提交尚未由其他来源统计的 CLI 最小 Token 用量回执；- 表示标准输入")
     parser.add_argument("--diagnostics-query", metavar="JSON", help="诊断查询条件，仅与 --diagnostics 一起使用")
     args = parser.parse_args()
     if args.diagnostics_query is not None and not args.diagnostics:

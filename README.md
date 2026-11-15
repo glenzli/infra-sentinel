@@ -46,7 +46,9 @@ Xray 用户统计为可选功能。每个客户端需要独立的 `email` 标签
 
 Codex 用量从本机 rollout JSONL 中读取每次请求的 `last_token_usage` 增量，不使用 `threads.tokens_used` 计算。统计会排除 fork 回放和跨文件重复记录。持久化数据只包含聚合用量、解析状态和去重标记，不包含任务内容。
 
-不落常规会话或使用临时状态目录的 Codex / AGY CLI 调用，可由外层运行器提交[最小数字用量回执](docs/cli-usage-receipts.md)。回执独立记账，按稳定尝试编号去重，重启后保留；只保存模型、完成时间、计数和哈希编号。此入口需要运行器显式接入，不自动发现隔离调用，也不要重复提交已有常规来源记录的调用；不依赖遥测，不推算速度。
+不落常规会话或使用临时状态目录的 Codex / AGY CLI 调用，以及尚未被其他来源统计的 Claude Code 调用，可由外层运行器提交[最小数字用量回执](docs/cli-usage-receipts.md)。回执独立记账，按稳定尝试编号去重，重启后保留；只保存模型、完成时间、计数和哈希编号。Claude Code 提供新会话终态的逐模型计数转换，包含缓存读取与写入，保留原生模型名，并使用独立的 API 参考价；缓存写入缺少有效期费率时保留未估价。此入口需要运行器显式接入，不自动发现调用，也不要重复提交已有来源记录的调用；不依赖遥测，不推算速度。
+
+API 参考价目录涵盖 11 家主要厂商的 114 个型号与别名，保留按日期、请求长度和服务价档划分的 183 个价格区间。估价依赖已知型号和适用条件；缺少请求长度、峰谷时段或缓存费率的部分保留未估价。流速诊断不展示不足两个输出 Token 或不足 250 ms 的客户端交付窗口；首 Token 延迟与用量计数独立保留。
 
 回执采用共用的适用日期价格目录。AGY 的已知推理强度后缀会匹配基础模型参考价，例如 `gemini-3.8-flash-high` 对应 `gemini-3.8-flash`；精确变体价目优先，原始模型名保留。缺少必要缓存细分的用量不估价，输出中的推理 Token 不重复相加。
 
@@ -176,7 +178,9 @@ Mihomo is discovered automatically. Remote hosts are configured by an existing `
 
 Codex usage is calculated from per-request `last_token_usage` increments in local rollout JSONL. `threads.tokens_used` is not used. Fork replay and duplicate records across files are removed. The persistent ledger contains aggregate usage, parser state, and deduplication markers, but no task content.
 
-Codex/AGY CLI runs without persistent sessions or using temporary state can submit [minimal numeric usage receipts](docs/cli-usage-receipts.md) through their outer runner. A separate ledger deduplicates stable attempt identities across retries and restarts, retaining only model, completion time, counters and hashed identity. This requires explicit runner integration; isolated calls are not auto-discovered. Do not resubmit calls already counted by regular sources. Receipts need no telemetry and do not infer speed.
+Codex/AGY CLI runs without persistent sessions or using temporary state, and otherwise uncollected Claude Code runs, can submit [minimal numeric usage receipts](docs/cli-usage-receipts.md) through their outer runner. A separate ledger deduplicates stable attempt identities across retries and restarts, retaining only model, completion time, counters and hashed identity. The Claude Code adapter converts fresh-session terminal counts per native model, including cache reads and writes, with dedicated dated API references. Cache writes without a known TTL tariff remain unpriced. This requires explicit runner integration; calls are not auto-discovered. Do not resubmit calls already counted by another source. Receipts need no telemetry and do not infer speed.
+
+The API reference catalog covers 114 model IDs and aliases across 11 major providers, with 183 dated or qualified price periods. Estimates require the applicable model, request length and service band; missing context, peak/off-peak or cache tariffs remain unpriced. Stream diagnostics omit client delivery windows below 250 ms or with fewer than two output tokens, independently of first-token latency and token accounting.
 
 Receipts use the shared dated price catalog. Known AGY effort suffixes use a base-model reference when no exact variant price exists: `gemini-3.8-flash-high` maps to `gemini-3.8-flash` while preserving the original name. Missing required cache breakdowns remain unpriced, and reasoning already included in output is not added again.
 

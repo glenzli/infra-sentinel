@@ -1,6 +1,6 @@
 schema = "api-price/v1"
-catalog_version = "2026.10.28.1"
-updated_at = "2026-10-28T22:54:51+08:00"
+catalog_version = "2026.11.15.2"
+updated_at = "2026-11-15T10:03:03+08:00"
 currency = "USD"
 unit = "per_million_tokens"
 
@@ -113,6 +113,126 @@ checked_at = "2026-10-28"
 id = "google-cloud-pricing-20261028"
 url = "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing"
 checked_at = "2026-10-28"
+
+[[references]]
+id = "openai-pricing-20261112"
+url = "https://developers.openai.com/api/docs/pricing"
+checked_at = "2026-11-12"
+
+[[references]]
+id = "google-gemini-pricing-20261112"
+url = "https://ai.google.dev/gemini-api/docs/pricing"
+checked_at = "2026-11-12"
+
+[[references]]
+id = "google-model-garden-pricing-20261112"
+url = "https://cloud.google.com/model-garden/pricing"
+checked_at = "2026-11-12"
+
+[[references]]
+id = "google-partner-pricing-20261112"
+url = "https://cloud.google.com/model-garden/partner-models/pricing"
+checked_at = "2026-11-12"
+
+[[references]]
+id = "google-gemini-4-carbon-public-launch"
+url = "https://blog.google/innovation-and-ai/models-and-research/gemini-models/gemini-4-carbon-now-available/"
+checked_at = "2026-11-12"
+
+[[references]]
+id = "google-cloud-claude-fable-5-2"
+url = "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/fable-5-2"
+checked_at = "2026-11-12"
+
+[[references]]
+id = "google-gemini-pricing-20261115"
+url = "https://ai.google.dev/gemini-api/docs/pricing"
+checked_at = "2026-11-15"
+
+[[references]]
+id = "google-hydrogen-launch-20261112"
+url = "https://blog.google/innovation-and-ai/models-and-research/gemini-models/introducing-gemini-4-hydrogen/"
+checked_at = "2026-11-15"
+
+[[references]]
+id = "anthropic-pricing-20261115"
+url = "https://platform.claude.com/docs/en/about-claude/pricing"
+checked_at = "2026-11-15"
+
+[[references]]
+id = "anthropic-opus-5-5-launch"
+url = "https://www.anthropic.com/claude-opus-5-5"
+checked_at = "2026-11-15"
+
+[[references]]
+id = "anthropic-sonnet-5-5-launch"
+url = "https://www.anthropic.com/claude-sonnet-5-5"
+checked_at = "2026-11-15"
+
+[[references]]
+id = "kimi-api-pricing-20261115"
+url = "https://platform.kimi.ai/"
+checked_at = "2026-11-15"
+
+[[references]]
+id = "kimi-cache-ttl-20261115"
+url = "https://platform.kimi.ai/docs/guide/context-caching"
+checked_at = "2026-11-15"
+
+[[references]]
+id = "kimi-k3-1-pro-release"
+url = "https://www.kimi.com/code/docs/en/kimi-code/whats-new.html"
+checked_at = "2026-11-15"
+
+[[references]]
+id = "zai-pricing-20261115"
+url = "https://docs.z.ai/guides/overview/pricing"
+checked_at = "2026-11-15"
+
+[[references]]
+id = "provider-openai-20261115"
+url = "https://developers.openai.com/api/docs/pricing"
+checked_at = "2026-11-15"
+
+[[references]]
+id = "provider-deepseek-20261115"
+url = "https://api-docs.deepseek.com/quick_start/pricing/"
+checked_at = "2026-11-15"
+
+[[references]]
+id = "provider-qwen-20261115"
+url = "https://www.alibabacloud.com/help/en/model-studio/model-pricing"
+checked_at = "2026-11-15"
+
+[[references]]
+id = "provider-qwen-cache-20261115"
+url = "https://www.alibabacloud.com/help/en/model-studio/context-cache"
+checked_at = "2026-11-15"
+
+[[references]]
+id = "provider-minimax-20261115"
+url = "https://platform.minimax.io/docs/pricing/overview"
+checked_at = "2026-11-15"
+
+[[references]]
+id = "provider-xai-20261115"
+url = "https://docs.x.ai/developers/pricing"
+checked_at = "2026-11-15"
+
+[[references]]
+id = "provider-mistral-20261115"
+url = "https://docs.mistral.ai/inference/pricing"
+checked_at = "2026-11-15"
+
+[[references]]
+id = "provider-cohere-20261115"
+url = "https://cohere.com/pricing"
+checked_at = "2026-11-15"
+
+[[references]]
+id = "provider-cohere-r-20261115"
+url = "https://docs.cohere.com/changelog/command-gets-refreshed"
+checked_at = "2026-11-15"
 
 [[prices]]
 scope = "codex"
@@ -403,6 +523,7 @@ scope = "antigravity"
 model = "gemini-2.5-pro"
 reference = "google-gemini-pricing-20261028"
 valid_from = "2026-09-23"
+valid_until = "2026-11-14"
 input_per_million = 1.25
 cached_input_per_million = 0.125
 output_per_million = 10.00
@@ -600,3 +721,1419 @@ cached_input_per_million = 0.05
 cache_write_per_million = 1.25
 output_per_million = 5.00
 note = "Standard short-context text-token rates (<=272K input tokens); cache writes use 30-minute retention. 12-hour cache writes, long-context, Fast, and regional uplifts excluded. Released October 26, 2026 in the OpenAI API changelog."
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-4-carbon"
+reference = "google-gemini-pricing-20261112"
+valid_from = "2026-11-10"
+valid_until = "2026-11-30"
+input_per_million = 2.00
+cached_input_per_million = 0.10
+output_per_million = 10.00
+note = "Public API launch November 10, 2026; introductory Standard text pricing through November 30. Implicit caching only; output includes thinking."
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-4-carbon"
+reference = "google-gemini-pricing-20261112"
+valid_from = "2026-12-01"
+input_per_million = 4.00
+cached_input_per_million = 0.20
+output_per_million = 20.00
+note = "Published post-introductory Standard text pricing from December 1, 2026. Implicit caching only; output includes thinking."
+
+[[prices]]
+scope = "antigravity"
+model = "claude-fable-5-2"
+reference = "google-partner-pricing-20261112"
+valid_from = "2026-11-09"
+input_per_million = 8.00
+cached_input_per_million = 0.20
+output_per_million = 40.00
+note = "Google Cloud global Standard text reference from the November 9, 2026 release. Cache writes, Fast mode, tools and regional uplifts remain excluded."
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-4-hydrogen"
+reference = "google-gemini-pricing-20261115"
+valid_from = "2026-11-12"
+input_per_million = 1.5
+cached_input_per_million = 0.075
+output_per_million = 7.5
+note = "Standard text API rates across the 1M context window; output includes thinking. Implicit caching only. Effort settings use the same tariff; tools, storage, regions and non-Standard services are excluded."
+
+[[prices]]
+scope = "claude-code"
+model = "claude-opus-5-5"
+reference = "anthropic-pricing-20261115"
+valid_from = "2026-09-22"
+input_per_million = 4.0
+cached_input_per_million = 0.2
+output_per_million = 20.0
+note = "Standard API reference for the native CLI label, including 1M context. Cache writes cost $5 for 5m or $8 for 1h per million; aggregate writes without TTL remain unpriced. No backend identity or CLI invoice is asserted."
+
+[[prices]]
+scope = "claude-code"
+model = "claude-sonnet-5-5"
+reference = "anthropic-pricing-20261115"
+valid_from = "2026-09-28"
+input_per_million = 2.0
+cached_input_per_million = 0.1
+output_per_million = 10.0
+note = "Standard API reference for the native CLI label, including 1M context. Cache writes cost $2.50 for 5m or $4 for 1h per million; aggregate writes without TTL remain unpriced. No backend identity or CLI invoice is asserted."
+
+[[prices]]
+scope = "claude-code"
+model = "claude-kimi-k3.1-pro"
+reference = "kimi-api-pricing-20261115"
+valid_from = "2026-10-23"
+input_per_million = 2.0
+cached_input_per_million = 0.2
+output_per_million = 10.0
+note = "Named-model Standard API reference for the explicit Claude Code proxy label, not backend verification. 1M context is supported. Cache-write fees vary with 5m/1h TTL, so aggregate writes without TTL remain unpriced."
+
+[[prices]]
+scope = "claude-code"
+model = "claude-glm-5.3"
+reference = "zai-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 1.4
+cached_input_per_million = 0.26
+cache_write_per_million = 1.4
+output_per_million = 4.4
+note = "Current USD Standard API reference for the explicit CLI proxy label, not backend verification. Cache-creation input is ordinary processed input; temporary free cache storage does not make input free. Reviewed November 15; earlier rates are not established by this snapshot."
+
+[[prices]]
+scope = "openai"
+model = "gpt-6-astra"
+reference = "provider-openai-20261115"
+valid_from = "2026-11-15"
+input_per_million = 10
+output_per_million = 50
+cached_input_per_million = 1
+note = "Standard global text rates. Cache writes: 30m $12.5/M, 12h $25/M; an unspecified TTL does not select either write tariff. Fast/Flex/Batch/Ultrafast and regional uplifts are separate."
+
+[[prices]]
+scope = "openai"
+model = "gpt-6.1-sol"
+reference = "provider-openai-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2
+output_per_million = 10
+cached_input_per_million = 0.1
+note = "Standard global text rates. Cache writes: 30m $2.5/M, 12h $5/M; an unspecified TTL does not select either write tariff. Fast/Flex/Batch/Ultrafast and regional uplifts are separate."
+
+[[prices]]
+scope = "openai"
+model = "gpt-6.1-terra"
+reference = "provider-openai-20261115"
+valid_from = "2026-11-15"
+input_per_million = 1
+output_per_million = 5
+cached_input_per_million = 0.05
+note = "Standard global text rates. Cache writes: 30m $1.25/M, 12h $2.5/M; an unspecified TTL does not select either write tariff. Fast/Flex/Batch/Ultrafast and regional uplifts are separate."
+
+[[prices]]
+scope = "openai"
+model = "gpt-6-luna"
+reference = "provider-openai-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.1
+output_per_million = 0.5
+cached_input_per_million = 0.01
+note = "Standard global text rates. Cache writes: 30m $0.125/M, 12h $0.25/M; an unspecified TTL does not select either write tariff. Fast/Flex/Batch/Ultrafast and regional uplifts are separate."
+
+[[prices]]
+scope = "google"
+model = "gemini-4-carbon"
+reference = "google-gemini-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2
+output_per_million = 10
+cached_input_per_million = 0.1
+valid_until = "2026-11-30"
+note = "Standard text rates during the published introductory period; output includes thinking. Storage, tools, media and regional premiums are excluded."
+
+[[prices]]
+scope = "google"
+model = "gemini-4-carbon"
+reference = "google-gemini-pricing-20261115"
+valid_from = "2026-12-01"
+input_per_million = 4
+output_per_million = 20
+cached_input_per_million = 0.2
+note = "Announced Standard text rates after the introductory period. Output includes thinking; storage, tools and media charges are excluded."
+
+[[prices]]
+scope = "google"
+model = "gemini-4-argon"
+reference = "google-gemini-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2
+output_per_million = 10
+cached_input_per_million = 0.1
+valid_until = "2026-11-30"
+note = "Standard text rates during the published introductory period; output includes thinking. Storage, tools, media and regional premiums are excluded."
+
+[[prices]]
+scope = "google"
+model = "gemini-4-argon"
+reference = "google-gemini-pricing-20261115"
+valid_from = "2026-12-01"
+input_per_million = 4
+output_per_million = 20
+cached_input_per_million = 0.2
+note = "Announced Standard text rates after the introductory period. Output includes thinking; storage, tools and media charges are excluded."
+
+[[prices]]
+scope = "google"
+model = "gemini-3.8-flash"
+reference = "google-gemini-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.75
+output_per_million = 3.75
+cached_input_per_million = 0.075
+valid_until = "2026-12-31"
+note = "Standard text rates during the published introductory period; output includes thinking. Storage, tools, media and regional premiums are excluded."
+
+[[prices]]
+scope = "google"
+model = "gemini-3.8-flash"
+reference = "google-gemini-pricing-20261115"
+valid_from = "2027-01-01"
+input_per_million = 1.5
+output_per_million = 7.5
+cached_input_per_million = 0.15
+note = "Announced Standard text rates after the introductory period. Output includes thinking; storage, tools and media charges are excluded."
+
+[[prices]]
+scope = "google"
+model = "gemini-3.6-flash"
+reference = "google-gemini-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.75
+output_per_million = 3.75
+cached_input_per_million = 0.075
+valid_until = "2026-12-31"
+note = "Standard text rates during the published introductory period; output includes thinking. Storage, tools, media and regional premiums are excluded."
+
+[[prices]]
+scope = "google"
+model = "gemini-3.6-flash"
+reference = "google-gemini-pricing-20261115"
+valid_from = "2027-01-01"
+input_per_million = 1.5
+output_per_million = 7.5
+cached_input_per_million = 0.15
+note = "Announced Standard text rates after the introductory period. Output includes thinking; storage, tools and media charges are excluded."
+
+[[prices]]
+scope = "google"
+model = "gemini-4-hydrogen"
+reference = "google-gemini-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 1.5
+output_per_million = 7.5
+cached_input_per_million = 0.075
+note = "Standard text rates across the 1M context window. Output includes thinking; implicit caching only. Storage, tools and media are excluded."
+
+[[prices]]
+scope = "google"
+model = "gemini-2.5-pro"
+reference = "google-gemini-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.75
+output_per_million = 3.75
+cached_input_per_million = 0.075
+valid_until = "2026-12-31"
+note = "The current Google API pricing page says the retired Gemini 2.5 Pro ID is served and billed as Gemini 3.8 Flash. This redirect reference is recorded from the November 15 review, without backdating the provider change."
+
+[[prices]]
+scope = "google"
+model = "gemini-2.5-pro"
+reference = "google-gemini-pricing-20261115"
+valid_from = "2027-01-01"
+input_per_million = 1.5
+output_per_million = 7.5
+cached_input_per_million = 0.15
+note = "Retired Gemini 2.5 Pro API alias, billed at the announced Gemini 3.8 Flash Standard rates. This is an API reference, not proof of a third-party backend."
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-2.5-pro"
+reference = "google-gemini-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.75
+output_per_million = 3.75
+cached_input_per_million = 0.075
+valid_until = "2026-12-31"
+note = "The current Google API pricing page says the retired Gemini 2.5 Pro ID is served and billed as Gemini 3.8 Flash. This redirect reference is recorded from the November 15 review, without backdating the provider change."
+
+[[prices]]
+scope = "antigravity"
+model = "gemini-2.5-pro"
+reference = "google-gemini-pricing-20261115"
+valid_from = "2027-01-01"
+input_per_million = 1.5
+output_per_million = 7.5
+cached_input_per_million = 0.15
+note = "Retired Gemini 2.5 Pro API alias, billed at the announced Gemini 3.8 Flash Standard rates. This is an API reference, not proof of a third-party backend."
+
+[[prices]]
+scope = "anthropic"
+model = "claude-fable-5-2"
+reference = "anthropic-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 8
+output_per_million = 40
+cached_input_per_million = 0.2
+note = "First-party Standard text reference. Cache writes have separate 5m/1h tariffs and are not represented as a single aggregate write rate. Fast/Batch, residency and tools are excluded; a listed rate does not assert account access to gated models."
+
+[[prices]]
+scope = "anthropic"
+model = "claude-mythos-5-2"
+reference = "anthropic-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 8
+output_per_million = 40
+cached_input_per_million = 0.2
+note = "First-party Standard text reference. Cache writes have separate 5m/1h tariffs and are not represented as a single aggregate write rate. Fast/Batch, residency and tools are excluded; a listed rate does not assert account access to gated models."
+
+[[prices]]
+scope = "anthropic"
+model = "claude-opus-5-5"
+reference = "anthropic-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 4
+output_per_million = 20
+cached_input_per_million = 0.2
+note = "First-party Standard text reference. Cache writes have separate 5m/1h tariffs and are not represented as a single aggregate write rate. Fast/Batch, residency and tools are excluded; a listed rate does not assert account access to gated models."
+
+[[prices]]
+scope = "anthropic"
+model = "claude-sonnet-5-5"
+reference = "anthropic-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2
+output_per_million = 10
+cached_input_per_million = 0.1
+note = "First-party Standard text reference. Cache writes have separate 5m/1h tariffs and are not represented as a single aggregate write rate. Fast/Batch, residency and tools are excluded; a listed rate does not assert account access to gated models."
+
+[[prices]]
+scope = "anthropic"
+model = "claude-fable-5-1"
+reference = "anthropic-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 10
+output_per_million = 50
+cached_input_per_million = 0.25
+note = "First-party Standard text reference. Cache writes have separate 5m/1h tariffs and are not represented as a single aggregate write rate. Fast/Batch, residency and tools are excluded; a listed rate does not assert account access to gated models."
+
+[[prices]]
+scope = "anthropic"
+model = "claude-mythos-5-1"
+reference = "anthropic-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 10
+output_per_million = 50
+cached_input_per_million = 0.25
+note = "First-party Standard text reference. Cache writes have separate 5m/1h tariffs and are not represented as a single aggregate write rate. Fast/Batch, residency and tools are excluded; a listed rate does not assert account access to gated models."
+
+[[prices]]
+scope = "anthropic"
+model = "claude-fable-5"
+reference = "anthropic-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 10
+output_per_million = 50
+cached_input_per_million = 1
+note = "First-party Standard text reference. Cache writes have separate 5m/1h tariffs and are not represented as a single aggregate write rate. Fast/Batch, residency and tools are excluded; a listed rate does not assert account access to gated models."
+
+[[prices]]
+scope = "anthropic"
+model = "claude-mythos-5"
+reference = "anthropic-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 10
+output_per_million = 50
+cached_input_per_million = 1
+note = "First-party Standard text reference. Cache writes have separate 5m/1h tariffs and are not represented as a single aggregate write rate. Fast/Batch, residency and tools are excluded; a listed rate does not assert account access to gated models."
+
+[[prices]]
+scope = "anthropic"
+model = "claude-opus-5"
+reference = "anthropic-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 5
+output_per_million = 25
+cached_input_per_million = 0.5
+note = "First-party Standard text reference. Cache writes have separate 5m/1h tariffs and are not represented as a single aggregate write rate. Fast/Batch, residency and tools are excluded; a listed rate does not assert account access to gated models."
+
+[[prices]]
+scope = "anthropic"
+model = "claude-opus-4-8"
+reference = "anthropic-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 5
+output_per_million = 25
+cached_input_per_million = 0.5
+note = "First-party Standard text reference. Cache writes have separate 5m/1h tariffs and are not represented as a single aggregate write rate. Fast/Batch, residency and tools are excluded; a listed rate does not assert account access to gated models."
+
+[[prices]]
+scope = "anthropic"
+model = "claude-opus-4-7"
+reference = "anthropic-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 5
+output_per_million = 25
+cached_input_per_million = 0.5
+note = "First-party Standard text reference. Cache writes have separate 5m/1h tariffs and are not represented as a single aggregate write rate. Fast/Batch, residency and tools are excluded; a listed rate does not assert account access to gated models."
+
+[[prices]]
+scope = "anthropic"
+model = "claude-opus-4-6"
+reference = "anthropic-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 5
+output_per_million = 25
+cached_input_per_million = 0.5
+note = "First-party Standard text reference. Cache writes have separate 5m/1h tariffs and are not represented as a single aggregate write rate. Fast/Batch, residency and tools are excluded; a listed rate does not assert account access to gated models."
+
+[[prices]]
+scope = "anthropic"
+model = "claude-opus-4-5"
+reference = "anthropic-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 5
+output_per_million = 25
+cached_input_per_million = 0.5
+note = "First-party Standard text reference. Cache writes have separate 5m/1h tariffs and are not represented as a single aggregate write rate. Fast/Batch, residency and tools are excluded; a listed rate does not assert account access to gated models."
+
+[[prices]]
+scope = "anthropic"
+model = "claude-sonnet-5"
+reference = "anthropic-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2
+output_per_million = 10
+cached_input_per_million = 0.2
+note = "First-party Standard text reference. Cache writes have separate 5m/1h tariffs and are not represented as a single aggregate write rate. Fast/Batch, residency and tools are excluded; a listed rate does not assert account access to gated models."
+
+[[prices]]
+scope = "anthropic"
+model = "claude-sonnet-4-6"
+reference = "anthropic-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 3
+output_per_million = 15
+cached_input_per_million = 0.3
+note = "First-party Standard text reference. Cache writes have separate 5m/1h tariffs and are not represented as a single aggregate write rate. Fast/Batch, residency and tools are excluded; a listed rate does not assert account access to gated models."
+
+[[prices]]
+scope = "anthropic"
+model = "claude-sonnet-4-5"
+reference = "anthropic-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 3
+output_per_million = 15
+cached_input_per_million = 0.3
+note = "First-party Standard text reference. Cache writes have separate 5m/1h tariffs and are not represented as a single aggregate write rate. Fast/Batch, residency and tools are excluded; a listed rate does not assert account access to gated models."
+
+[[prices]]
+scope = "anthropic"
+model = "claude-haiku-4-5"
+reference = "anthropic-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 1
+output_per_million = 5
+cached_input_per_million = 0.1
+note = "First-party Standard text reference. Cache writes have separate 5m/1h tariffs and are not represented as a single aggregate write rate. Fast/Batch, residency and tools are excluded; a listed rate does not assert account access to gated models."
+
+[[prices]]
+scope = "anthropic"
+model = "claude-haiku-5-5"
+reference = "anthropic-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.1
+output_per_million = 0.5
+cached_input_per_million = 0.01
+request_input_min = 0
+request_input_max = 100000
+note = "Standard tier for a single prompt at most 100,000 input tokens, including cache reads and writes. Price selection requires that request input count; output also uses this tier. Cache-write TTL is separate."
+
+[[prices]]
+scope = "anthropic"
+model = "claude-haiku-5-5"
+reference = "anthropic-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.5
+output_per_million = 2.5
+cached_input_per_million = 0.05
+request_input_min = 100001
+note = "Standard tier for a single prompt over 100,000 input tokens, including cache reads and writes. All tokens in that request use this tier; missing request length cannot select the cheaper tier."
+
+[[prices]]
+scope = "deepseek"
+model = "deepseek-v4.1-flash"
+reference = "provider-deepseek-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.3
+output_per_million = 1.2
+cached_input_per_million = 0.006
+rate_tier = "peak"
+note = "Official text reference. Peak hours are 01:00-04:00 and 06:00-10:00 UTC on weekdays excluding Chinese public holidays; other periods are off-peak. The caller must identify the applicable tier. Retired Flash aliases are explicitly documented by DeepSeek."
+
+[[prices]]
+scope = "deepseek"
+model = "deepseek-v4.1-flash-1017"
+reference = "provider-deepseek-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.3
+output_per_million = 1.2
+cached_input_per_million = 0.006
+rate_tier = "peak"
+note = "Official text reference. Peak hours are 01:00-04:00 and 06:00-10:00 UTC on weekdays excluding Chinese public holidays; other periods are off-peak. The caller must identify the applicable tier. Retired Flash aliases are explicitly documented by DeepSeek."
+
+[[prices]]
+scope = "deepseek"
+model = "deepseek-v4-flash"
+reference = "provider-deepseek-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.3
+output_per_million = 1.2
+cached_input_per_million = 0.006
+rate_tier = "peak"
+note = "Official text reference. Peak hours are 01:00-04:00 and 06:00-10:00 UTC on weekdays excluding Chinese public holidays; other periods are off-peak. The caller must identify the applicable tier. Retired Flash aliases are explicitly documented by DeepSeek."
+
+[[prices]]
+scope = "deepseek"
+model = "deepseek-v4-flash-vision-exp"
+reference = "provider-deepseek-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.3
+output_per_million = 1.2
+cached_input_per_million = 0.006
+rate_tier = "peak"
+note = "Official text reference. Peak hours are 01:00-04:00 and 06:00-10:00 UTC on weekdays excluding Chinese public holidays; other periods are off-peak. The caller must identify the applicable tier. Retired Flash aliases are explicitly documented by DeepSeek."
+
+[[prices]]
+scope = "deepseek"
+model = "deepseek-v4.1-flash"
+reference = "provider-deepseek-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.15
+output_per_million = 0.6
+cached_input_per_million = 0.003
+rate_tier = "off-peak"
+note = "Official text reference. Peak hours are 01:00-04:00 and 06:00-10:00 UTC on weekdays excluding Chinese public holidays; other periods are off-peak. The caller must identify the applicable tier. Retired Flash aliases are explicitly documented by DeepSeek."
+
+[[prices]]
+scope = "deepseek"
+model = "deepseek-v4.1-flash-1017"
+reference = "provider-deepseek-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.15
+output_per_million = 0.6
+cached_input_per_million = 0.003
+rate_tier = "off-peak"
+note = "Official text reference. Peak hours are 01:00-04:00 and 06:00-10:00 UTC on weekdays excluding Chinese public holidays; other periods are off-peak. The caller must identify the applicable tier. Retired Flash aliases are explicitly documented by DeepSeek."
+
+[[prices]]
+scope = "deepseek"
+model = "deepseek-v4-flash"
+reference = "provider-deepseek-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.15
+output_per_million = 0.6
+cached_input_per_million = 0.003
+rate_tier = "off-peak"
+note = "Official text reference. Peak hours are 01:00-04:00 and 06:00-10:00 UTC on weekdays excluding Chinese public holidays; other periods are off-peak. The caller must identify the applicable tier. Retired Flash aliases are explicitly documented by DeepSeek."
+
+[[prices]]
+scope = "deepseek"
+model = "deepseek-v4-flash-vision-exp"
+reference = "provider-deepseek-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.15
+output_per_million = 0.6
+cached_input_per_million = 0.003
+rate_tier = "off-peak"
+note = "Official text reference. Peak hours are 01:00-04:00 and 06:00-10:00 UTC on weekdays excluding Chinese public holidays; other periods are off-peak. The caller must identify the applicable tier. Retired Flash aliases are explicitly documented by DeepSeek."
+
+[[prices]]
+scope = "deepseek"
+model = "deepseek-v4-pro"
+reference = "provider-deepseek-20261115"
+valid_from = "2026-11-15"
+input_per_million = 1.32
+output_per_million = 3.96
+cached_input_per_million = 0.044
+rate_tier = "peak"
+note = "Official text reference. Peak hours are 01:00-04:00 and 06:00-10:00 UTC on weekdays excluding Chinese public holidays; other periods are off-peak. The caller must identify the applicable tier. Retired Flash aliases are explicitly documented by DeepSeek."
+
+[[prices]]
+scope = "deepseek"
+model = "deepseek-v4-pro-0813"
+reference = "provider-deepseek-20261115"
+valid_from = "2026-11-15"
+input_per_million = 1.32
+output_per_million = 3.96
+cached_input_per_million = 0.044
+rate_tier = "peak"
+note = "Official text reference. Peak hours are 01:00-04:00 and 06:00-10:00 UTC on weekdays excluding Chinese public holidays; other periods are off-peak. The caller must identify the applicable tier. Retired Flash aliases are explicitly documented by DeepSeek."
+
+[[prices]]
+scope = "deepseek"
+model = "deepseek-v4-pro"
+reference = "provider-deepseek-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.66
+output_per_million = 1.98
+cached_input_per_million = 0.022
+rate_tier = "off-peak"
+note = "Official text reference. Peak hours are 01:00-04:00 and 06:00-10:00 UTC on weekdays excluding Chinese public holidays; other periods are off-peak. The caller must identify the applicable tier. Retired Flash aliases are explicitly documented by DeepSeek."
+
+[[prices]]
+scope = "deepseek"
+model = "deepseek-v4-pro-0813"
+reference = "provider-deepseek-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.66
+output_per_million = 1.98
+cached_input_per_million = 0.022
+rate_tier = "off-peak"
+note = "Official text reference. Peak hours are 01:00-04:00 and 06:00-10:00 UTC on weekdays excluding Chinese public holidays; other periods are off-peak. The caller must identify the applicable tier. Retired Flash aliases are explicitly documented by DeepSeek."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.8-max"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2
+output_per_million = 6
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.8-max-0902"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2
+output_per_million = 6
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.7-max"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2.5
+output_per_million = 7.5
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.7-max-2026-06-08"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2.5
+output_per_million = 7.5
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.7-max-2026-05-20"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2.5
+output_per_million = 7.5
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.7-max-2026-05-17"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2.5
+output_per_million = 7.5
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.8-flash"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.15
+output_per_million = 0.47
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.7-plus-2026-05-26"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.4
+output_per_million = 1.6
+request_input_min = 0
+request_input_max = 256000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.7-plus-2026-05-26"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 1.2
+output_per_million = 4.8
+request_input_min = 256001
+request_input_max = 1000000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.6-plus"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.5
+output_per_million = 3
+request_input_min = 0
+request_input_max = 256000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.6-plus-2026-04-02"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.5
+output_per_million = 3
+request_input_min = 0
+request_input_max = 256000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.6-plus"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2
+output_per_million = 6
+request_input_min = 256001
+request_input_max = 1000000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.6-plus-2026-04-02"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2
+output_per_million = 6
+request_input_min = 256001
+request_input_max = 1000000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.5-plus"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.4
+output_per_million = 2.4
+request_input_min = 0
+request_input_max = 256000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.5-plus-2026-02-15"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.4
+output_per_million = 2.4
+request_input_min = 0
+request_input_max = 256000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.5-plus-2026-04-20"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.4
+output_per_million = 2.4
+request_input_min = 0
+request_input_max = 256000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.5-plus"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.5
+output_per_million = 3
+request_input_min = 256001
+request_input_max = 1000000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.5-plus-2026-02-15"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.5
+output_per_million = 3
+request_input_min = 256001
+request_input_max = 1000000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.5-plus-2026-04-20"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.5
+output_per_million = 3
+request_input_min = 256001
+request_input_max = 1000000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.6-flash"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.25
+output_per_million = 1.5
+request_input_min = 0
+request_input_max = 256000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.6-flash-2026-04-16"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.25
+output_per_million = 1.5
+request_input_min = 0
+request_input_max = 256000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.6-flash"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 1
+output_per_million = 4
+request_input_min = 256001
+request_input_max = 1000000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.6-flash-2026-04-16"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 1
+output_per_million = 4
+request_input_min = 256001
+request_input_max = 1000000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.7-plus"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.32
+output_per_million = 1.28
+valid_until = "2026-11-15"
+request_input_min = 0
+request_input_max = 256000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded. Current alias has a temporary 20% discount without a published end date; only the reviewed day is covered."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.7-plus"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.96
+output_per_million = 3.84
+valid_until = "2026-11-15"
+request_input_min = 256001
+request_input_max = 1000000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded. Current alias has a temporary 20% discount without a published end date; only the reviewed day is covered."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.7-flash"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.03
+output_per_million = 0.13
+request_input_min = 0
+request_input_max = 32000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.7-flash-2026-07-15"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.03
+output_per_million = 0.13
+request_input_min = 0
+request_input_max = 32000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.7-flash"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.1
+output_per_million = 0.4
+request_input_min = 32001
+request_input_max = 256000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.7-flash-2026-07-15"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.1
+output_per_million = 0.4
+request_input_min = 32001
+request_input_max = 256000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.7-flash"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.2
+output_per_million = 0.8
+request_input_min = 256001
+request_input_max = 1000000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.7-flash-2026-07-15"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.2
+output_per_million = 0.8
+request_input_min = 256001
+request_input_max = 1000000
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.5-flash"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.1
+output_per_million = 0.4
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "qwen"
+model = "qwen3.5-flash-2026-02-23"
+reference = "provider-qwen-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.1
+output_per_million = 0.4
+note = "Alibaba Cloud International deployment, text rates. Cached-input and cache-write tariffs depend on cache mode/model/region and remain unspecified here. K=1,000 and M=1,000,000 input tokens; tools and media are excluded."
+
+[[prices]]
+scope = "zai"
+model = "glm-5.3"
+reference = "zai-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 1.4
+output_per_million = 4.4
+cached_input_per_million = 0.26
+note = "Published Z.ai USD API reference. Coding Plan points/off-peak quota discounts are not API prices. Temporary free cache storage does not imply free input processing; storage, tools and subscriptions are excluded."
+
+[[prices]]
+scope = "zai"
+model = "glm-5.3-flash"
+reference = "zai-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.15
+output_per_million = 0.5
+cached_input_per_million = 0.03
+note = "Published Z.ai USD API reference. Coding Plan points/off-peak quota discounts are not API prices. Temporary free cache storage does not imply free input processing; storage, tools and subscriptions are excluded."
+
+[[prices]]
+scope = "zai"
+model = "glm-5.3-flashx"
+reference = "zai-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.37
+output_per_million = 1.25
+cached_input_per_million = 0.075
+note = "Published Z.ai USD API reference. Coding Plan points/off-peak quota discounts are not API prices. Temporary free cache storage does not imply free input processing; storage, tools and subscriptions are excluded."
+
+[[prices]]
+scope = "zai"
+model = "glm-5.3-flashx-legal"
+reference = "zai-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.37
+output_per_million = 1.25
+cached_input_per_million = 0.075
+note = "Published Z.ai USD API reference. Coding Plan points/off-peak quota discounts are not API prices. Temporary free cache storage does not imply free input processing; storage, tools and subscriptions are excluded."
+
+[[prices]]
+scope = "zai"
+model = "glm-5.2"
+reference = "zai-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 1.4
+output_per_million = 4.4
+cached_input_per_million = 0.26
+note = "Published Z.ai USD API reference. Coding Plan points/off-peak quota discounts are not API prices. Temporary free cache storage does not imply free input processing; storage, tools and subscriptions are excluded."
+
+[[prices]]
+scope = "zai"
+model = "glm-5.1"
+reference = "zai-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 1.4
+output_per_million = 4.4
+cached_input_per_million = 0.26
+note = "Published Z.ai USD API reference. Coding Plan points/off-peak quota discounts are not API prices. Temporary free cache storage does not imply free input processing; storage, tools and subscriptions are excluded."
+
+[[prices]]
+scope = "zai"
+model = "glm-5"
+reference = "zai-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 1
+output_per_million = 3.2
+cached_input_per_million = 0.2
+note = "Published Z.ai USD API reference. Coding Plan points/off-peak quota discounts are not API prices. Temporary free cache storage does not imply free input processing; storage, tools and subscriptions are excluded."
+
+[[prices]]
+scope = "zai"
+model = "glm-4.7"
+reference = "zai-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.6
+output_per_million = 2.2
+cached_input_per_million = 0.11
+note = "Published Z.ai USD API reference. Coding Plan points/off-peak quota discounts are not API prices. Temporary free cache storage does not imply free input processing; storage, tools and subscriptions are excluded."
+
+[[prices]]
+scope = "zai"
+model = "glm-4.6"
+reference = "zai-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.6
+output_per_million = 2.2
+cached_input_per_million = 0.11
+note = "Published Z.ai USD API reference. Coding Plan points/off-peak quota discounts are not API prices. Temporary free cache storage does not imply free input processing; storage, tools and subscriptions are excluded."
+
+[[prices]]
+scope = "zai"
+model = "glm-4.5"
+reference = "zai-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.6
+output_per_million = 2.2
+cached_input_per_million = 0.11
+note = "Published Z.ai USD API reference. Coding Plan points/off-peak quota discounts are not API prices. Temporary free cache storage does not imply free input processing; storage, tools and subscriptions are excluded."
+
+[[prices]]
+scope = "zai"
+model = "glm-4.5-air"
+reference = "zai-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.2
+output_per_million = 1.1
+cached_input_per_million = 0.03
+note = "Published Z.ai USD API reference. Coding Plan points/off-peak quota discounts are not API prices. Temporary free cache storage does not imply free input processing; storage, tools and subscriptions are excluded."
+
+[[prices]]
+scope = "zai"
+model = "glm-4.5-x"
+reference = "zai-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2.2
+output_per_million = 8.9
+cached_input_per_million = 0.45
+note = "Published Z.ai USD API reference. Coding Plan points/off-peak quota discounts are not API prices. Temporary free cache storage does not imply free input processing; storage, tools and subscriptions are excluded."
+
+[[prices]]
+scope = "zai"
+model = "glm-4.5-airx"
+reference = "zai-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 1.1
+output_per_million = 4.5
+cached_input_per_million = 0.22
+note = "Published Z.ai USD API reference. Coding Plan points/off-peak quota discounts are not API prices. Temporary free cache storage does not imply free input processing; storage, tools and subscriptions are excluded."
+
+[[prices]]
+scope = "zai"
+model = "glm-4.7-flashx"
+reference = "zai-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.07
+output_per_million = 0.4
+cached_input_per_million = 0.01
+note = "Published Z.ai USD API reference. Coding Plan points/off-peak quota discounts are not API prices. Temporary free cache storage does not imply free input processing; storage, tools and subscriptions are excluded."
+
+[[prices]]
+scope = "kimi"
+model = "kimi-k3.1-pro"
+reference = "kimi-api-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2
+output_per_million = 10
+cached_input_per_million = 0.2
+note = "Published Kimi USD text API reference across the 1M context. Cache writes have 5m/1h TTL-dependent charges; no TTL is assumed. Kimi membership and Kimi Code subscription prices are excluded."
+
+[[prices]]
+scope = "kimi"
+model = "kimi-k3.1-pro-highspeed"
+reference = "kimi-api-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 4
+output_per_million = 20
+cached_input_per_million = 0.2
+note = "Published Kimi USD text API reference across the 1M context. Cache writes have 5m/1h TTL-dependent charges; no TTL is assumed. Kimi membership and Kimi Code subscription prices are excluded."
+
+[[prices]]
+scope = "kimi"
+model = "kimi-k3"
+reference = "kimi-api-pricing-20261115"
+valid_from = "2026-11-15"
+input_per_million = 3
+output_per_million = 15
+cached_input_per_million = 0.3
+note = "Published Kimi USD text API reference across the 1M context. Cache writes have 5m/1h TTL-dependent charges; no TTL is assumed. Kimi membership and Kimi Code subscription prices are excluded."
+
+[[prices]]
+scope = "minimax"
+model = "MiniMax-M3.1-Flash"
+reference = "provider-minimax-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.15
+output_per_million = 0.6
+cached_input_per_million = 0.015
+note = "Standard text-token API reference in USD. Taxes, tools, storage, media, subscriptions and negotiated discounts are excluded."
+
+[[prices]]
+scope = "minimax"
+model = "MiniMax-M3"
+reference = "provider-minimax-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.3
+output_per_million = 1.2
+cached_input_per_million = 0.06
+rate_tier = "standard-short-context"
+note = "Published permanent-discount text rate for at most 512k input, using the provider's original 512k notation. The caller must explicitly select this context/service band; no numeric boundary conversion is assumed. Priority is a separate service tier; storage, tools and media are excluded."
+
+[[prices]]
+scope = "minimax"
+model = "MiniMax-M3"
+reference = "provider-minimax-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.6
+output_per_million = 2.4
+cached_input_per_million = 0.12
+rate_tier = "standard-long-context"
+note = "Published permanent-discount text rate for over 512k input, using the provider's original 512k notation. The caller must explicitly select this context/service band; no numeric boundary conversion is assumed. Priority is a separate service tier; storage, tools and media are excluded."
+
+[[prices]]
+scope = "minimax"
+model = "MiniMax-M3"
+reference = "provider-minimax-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.45
+output_per_million = 1.8
+cached_input_per_million = 0.09
+rate_tier = "priority-short-context"
+note = "Published permanent-discount text rate for at most 512k input, using the provider's original 512k notation. The caller must explicitly select this context/service band; no numeric boundary conversion is assumed. Priority is a separate service tier; storage, tools and media are excluded."
+
+[[prices]]
+scope = "minimax"
+model = "MiniMax-M3"
+reference = "provider-minimax-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.9
+output_per_million = 3.6
+cached_input_per_million = 0.18
+rate_tier = "priority-long-context"
+note = "Published permanent-discount text rate for over 512k input, using the provider's original 512k notation. The caller must explicitly select this context/service band; no numeric boundary conversion is assumed. Priority is a separate service tier; storage, tools and media are excluded."
+
+[[prices]]
+scope = "xai"
+model = "grok-4.7"
+reference = "provider-xai-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2
+output_per_million = 6
+cached_input_per_million = 0.5
+request_input_min = 0
+request_input_max = 199999
+note = "Global Standard text rates for a request below 200,000 input tokens. At the threshold, all input/cached/output tokens use the long-context tier. US regional processing and server tools are separate charges."
+
+[[prices]]
+scope = "xai"
+model = "grok-4.7"
+reference = "provider-xai-20261115"
+valid_from = "2026-11-15"
+input_per_million = 4
+output_per_million = 12
+cached_input_per_million = 1
+request_input_min = 200000
+note = "Global Standard text rates for a request with at least 200,000 input tokens. All tokens use this tier; request input length is required. US regional processing and server tools are separate charges."
+
+[[prices]]
+scope = "xai"
+model = "grok-build-0.1"
+reference = "provider-xai-20261115"
+valid_from = "2026-11-15"
+input_per_million = 1
+output_per_million = 2
+cached_input_per_million = 0.2
+request_input_min = 0
+request_input_max = 199999
+note = "Global Standard text rates for a request below 200,000 input tokens. At the threshold, all input/cached/output tokens use the long-context tier. US regional processing and server tools are separate charges."
+
+[[prices]]
+scope = "xai"
+model = "grok-build-0.1"
+reference = "provider-xai-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2
+output_per_million = 4
+cached_input_per_million = 0.4
+request_input_min = 200000
+note = "Global Standard text rates for a request with at least 200,000 input tokens. All tokens use this tier; request input length is required. US regional processing and server tools are separate charges."
+
+[[prices]]
+scope = "xai"
+model = "grok-4.6"
+reference = "provider-xai-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2
+output_per_million = 6
+cached_input_per_million = 0.5
+request_input_min = 0
+request_input_max = 199999
+note = "Global Standard text rates for a request below 200,000 input tokens. At the threshold, all input/cached/output tokens use the long-context tier. US regional processing and server tools are separate charges."
+
+[[prices]]
+scope = "xai"
+model = "grok-4.6"
+reference = "provider-xai-20261115"
+valid_from = "2026-11-15"
+input_per_million = 4
+output_per_million = 12
+cached_input_per_million = 1
+request_input_min = 200000
+note = "Global Standard text rates for a request with at least 200,000 input tokens. All tokens use this tier; request input length is required. US regional processing and server tools are separate charges."
+
+[[prices]]
+scope = "xai"
+model = "grok-4.5"
+reference = "provider-xai-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2
+output_per_million = 6
+cached_input_per_million = 0.3
+request_input_min = 0
+request_input_max = 199999
+note = "Global Standard text rates for a request below 200,000 input tokens. At the threshold, all input/cached/output tokens use the long-context tier. US regional processing and server tools are separate charges."
+
+[[prices]]
+scope = "xai"
+model = "grok-4.5"
+reference = "provider-xai-20261115"
+valid_from = "2026-11-15"
+input_per_million = 4
+output_per_million = 12
+cached_input_per_million = 0.6
+request_input_min = 200000
+note = "Global Standard text rates for a request with at least 200,000 input tokens. All tokens use this tier; request input length is required. US regional processing and server tools are separate charges."
+
+[[prices]]
+scope = "xai"
+model = "grok-4.3"
+reference = "provider-xai-20261115"
+valid_from = "2026-11-15"
+input_per_million = 1.25
+output_per_million = 2.5
+cached_input_per_million = 0.2
+request_input_min = 0
+request_input_max = 199999
+note = "Global Standard text rates for a request below 200,000 input tokens. At the threshold, all input/cached/output tokens use the long-context tier. US regional processing and server tools are separate charges."
+
+[[prices]]
+scope = "xai"
+model = "grok-4.3"
+reference = "provider-xai-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2.5
+output_per_million = 5
+cached_input_per_million = 0.4
+request_input_min = 200000
+note = "Global Standard text rates for a request with at least 200,000 input tokens. All tokens use this tier; request input length is required. US regional processing and server tools are separate charges."
+
+[[prices]]
+scope = "xai"
+model = "grok-4.20-multi-agent-0309"
+reference = "provider-xai-20261115"
+valid_from = "2026-11-15"
+input_per_million = 1.25
+output_per_million = 2.5
+cached_input_per_million = 0.2
+request_input_min = 0
+request_input_max = 199999
+note = "Global Standard text rates for a request below 200,000 input tokens. At the threshold, all input/cached/output tokens use the long-context tier. US regional processing and server tools are separate charges."
+
+[[prices]]
+scope = "xai"
+model = "grok-4.20-multi-agent-0309"
+reference = "provider-xai-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2.5
+output_per_million = 5
+cached_input_per_million = 0.4
+request_input_min = 200000
+note = "Global Standard text rates for a request with at least 200,000 input tokens. All tokens use this tier; request input length is required. US regional processing and server tools are separate charges."
+
+[[prices]]
+scope = "xai"
+model = "grok-4.20-0309-reasoning"
+reference = "provider-xai-20261115"
+valid_from = "2026-11-15"
+input_per_million = 1.25
+output_per_million = 2.5
+cached_input_per_million = 0.2
+request_input_min = 0
+request_input_max = 199999
+note = "Global Standard text rates for a request below 200,000 input tokens. At the threshold, all input/cached/output tokens use the long-context tier. US regional processing and server tools are separate charges."
+
+[[prices]]
+scope = "xai"
+model = "grok-4.20-0309-reasoning"
+reference = "provider-xai-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2.5
+output_per_million = 5
+cached_input_per_million = 0.4
+request_input_min = 200000
+note = "Global Standard text rates for a request with at least 200,000 input tokens. All tokens use this tier; request input length is required. US regional processing and server tools are separate charges."
+
+[[prices]]
+scope = "xai"
+model = "grok-4.20-0309-non-reasoning"
+reference = "provider-xai-20261115"
+valid_from = "2026-11-15"
+input_per_million = 1.25
+output_per_million = 2.5
+cached_input_per_million = 0.2
+request_input_min = 0
+request_input_max = 199999
+note = "Global Standard text rates for a request below 200,000 input tokens. At the threshold, all input/cached/output tokens use the long-context tier. US regional processing and server tools are separate charges."
+
+[[prices]]
+scope = "xai"
+model = "grok-4.20-0309-non-reasoning"
+reference = "provider-xai-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2.5
+output_per_million = 5
+cached_input_per_million = 0.4
+request_input_min = 200000
+note = "Global Standard text rates for a request with at least 200,000 input tokens. All tokens use this tier; request input length is required. US regional processing and server tools are separate charges."
+
+[[prices]]
+scope = "mistral"
+model = "mistral-large-4"
+reference = "provider-mistral-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.7
+output_per_million = 2.1
+cached_input_per_million = 0.07
+note = "Mistral global Standard text API rates, with its published cached-input price. Priority/Batch, regional premiums, audio, OCR, embeddings and tools are separate products or tariffs."
+
+[[prices]]
+scope = "mistral"
+model = "mistral-small-2603"
+reference = "provider-mistral-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.15
+output_per_million = 0.6
+cached_input_per_million = 0.015
+note = "Mistral global Standard text API rates, with its published cached-input price. Priority/Batch, regional premiums, audio, OCR, embeddings and tools are separate products or tariffs."
+
+[[prices]]
+scope = "mistral"
+model = "ministral-14b-2512"
+reference = "provider-mistral-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.2
+output_per_million = 0.2
+cached_input_per_million = 0.02
+note = "Mistral global Standard text API rates, with its published cached-input price. Priority/Batch, regional premiums, audio, OCR, embeddings and tools are separate products or tariffs."
+
+[[prices]]
+scope = "mistral"
+model = "ministral-8b-2512"
+reference = "provider-mistral-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.15
+output_per_million = 0.15
+cached_input_per_million = 0.015
+note = "Mistral global Standard text API rates, with its published cached-input price. Priority/Batch, regional premiums, audio, OCR, embeddings and tools are separate products or tariffs."
+
+[[prices]]
+scope = "mistral"
+model = "ministral-3b-2512"
+reference = "provider-mistral-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.1
+output_per_million = 0.1
+cached_input_per_million = 0.01
+note = "Mistral global Standard text API rates, with its published cached-input price. Priority/Batch, regional premiums, audio, OCR, embeddings and tools are separate products or tariffs."
+
+[[prices]]
+scope = "mistral"
+model = "codestral-2508"
+reference = "provider-mistral-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.3
+output_per_million = 0.9
+cached_input_per_million = 0.03
+note = "Mistral global Standard text API rates, with its published cached-input price. Priority/Batch, regional premiums, audio, OCR, embeddings and tools are separate products or tariffs."
+
+[[prices]]
+scope = "cohere"
+model = "command-r-plus-08-2024"
+reference = "provider-cohere-20261115"
+valid_from = "2026-11-15"
+input_per_million = 2.5
+output_per_million = 10
+note = "Published Cohere text-token API reference for the listed R+ model. Cached-input pricing is not established by this source and is unspecified. Model Vault GPU pricing is not a per-token tariff."
+
+[[prices]]
+scope = "cohere"
+model = "command-r-08-2024"
+reference = "provider-cohere-r-20261115"
+valid_from = "2026-11-15"
+input_per_million = 0.15
+output_per_million = 0.6
+note = "Published Cohere Command R August refresh token rates; this exact model remains listed in the model catalog. Cached-input rates are unspecified. No Command A+ price is inferred from another model."

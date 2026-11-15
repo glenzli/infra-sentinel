@@ -10,6 +10,27 @@ from infra_sentinel.resources.ai.pricing_catalog import bundled_pricing_catalog
 
 
 class AntigravityPricingTests(unittest.TestCase):
+    def test_new_families_and_effort_levels_resolve_only_their_exact_dated_base(self):
+        for effort in ("none", "minimal", "low", "medium", "high", "xhigh", "max", "thinking"):
+            identifier = f"gemini-4-hydrogen-{effort}"
+            early = resolve_antigravity_reference(identifier, usage_date="2026-11-11")
+            self.assertIsNone(early.price)
+            current = resolve_antigravity_reference(identifier, usage_date="2026-11-12")
+            self.assertEqual((current.model, current.marker_kind), ("gemini-4-hydrogen", "effort"))
+            self.assertEqual(current.price.input_per_million, 1.5)
+            self.assertEqual(current.price.cached_input_per_million, .075)
+            self.assertEqual(current.price.output_per_million, 7.5)
+        unknown = resolve_antigravity_reference("gemini-99-new-family-xhigh", usage_date="2026-11-15")
+        self.assertEqual(unknown.model, "gemini-99-new-family")
+        self.assertIsNone(unknown.price)
+        base = bundled_pricing_catalog().price_for("antigravity", "gemini-4-hydrogen", "2026-11-15")
+        class DownloadedCatalog:
+            def price_for(self, scope, model, usage_date=None):
+                return base if scope == "antigravity" and model == "future-model" and usage_date >= "2026-11-15" else None
+        future = resolve_antigravity_reference("future-model-xhigh", catalog=DownloadedCatalog(), usage_date="2026-11-15")
+        self.assertEqual(future.model, "future-model")
+        self.assertEqual(future.price, base)
+
     def test_gemini_effort_suffixes_reuse_base_price_and_preserve_exact_override(self):
         for marker in ("low", "medium", "high", "xhigh", "thinking"):
             with self.subTest(marker=marker):

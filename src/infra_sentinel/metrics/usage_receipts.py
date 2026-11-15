@@ -1,7 +1,7 @@
 """Counts-only CLI receipt admission and Agent-owned, idempotent storage.
 
 This ledger is separate from discovered session histories. Only an outer caller
-that knows its run is isolated may submit a receipt. No raw event identifier,
+that knows its run is not counted elsewhere may submit a receipt. No raw event identifier,
 source artifact, prompt, response, argv, or timing is retained.
 """
 
@@ -33,13 +33,18 @@ def validate_receipt(raw: Any, *, now_epoch: float | None = None) -> dict[str, A
         raise ValueError("receipt fields do not match the counts-only contract")
     if len(json.dumps(raw, separators=(",", ":")).encode("utf-8")) > MAX_RECEIPT_BYTES:
         raise ValueError("receipt exceeds 4096 bytes")
-    if raw["schema"] != RECEIPT_SCHEMA or raw["coverage"] != "isolated":
-        raise ValueError("only isolated CLI usage receipts are supported")
-    if raw["client"] not in ("codex", "agy") or raw["model_basis"] not in ("reported", "requested"):
+    if raw["schema"] != RECEIPT_SCHEMA:
+        raise ValueError("unsupported CLI usage receipt schema")
+    if raw["client"] not in ("codex", "agy", "claude-code") or raw["model_basis"] not in ("reported", "requested"):
         raise ValueError("invalid client or model provenance")
+    if raw["coverage"] != "isolated" and not (raw["client"] == "claude-code" and raw["coverage"] == "uncollected"):
+        raise ValueError("receipt coverage must exclude usage already counted by another source")
     if not isinstance(raw["event_hash"], str) or not re.fullmatch(r"[0-9a-f]{64}", raw["event_hash"]):
         raise ValueError("receipt requires a hashed event identity")
-    if not isinstance(raw["model"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}", raw["model"]):
+    model = raw["model"]
+    if isinstance(model, str) and raw["client"] == "claude-code" and model.endswith("[1m]"):
+        model = model[:-4]
+    if not isinstance(model, str) or len(raw["model"]) > 128 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}", model):
         raise ValueError("invalid model identifier")
     try:
         completed = datetime.fromisoformat(raw["completed_at"].replace("Z", "+00:00"))

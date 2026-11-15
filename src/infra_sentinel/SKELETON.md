@@ -46,12 +46,25 @@ policy. Explicit opt-in/configuration lives in `cli/codex_telemetry.py` and its
 setup use case, never in a collector. The Agent wires its lifecycle and the
 Codex collector consumes only safe diagnostic groups, independently of usage.
 `metrics/usage_receipts.py` owns strict counts-only admission, hashed attempt
-identities and the durable idempotent ledger for explicitly isolated CLI runs.
+identities and the durable idempotent ledger for otherwise uncollected CLI runs.
 The sampling loop handles `ai.usage.receipt.record`; `cli/usage_receipts.py`
 only publishes private command files and awaits an acknowledgement. The
 read-only `resources/ai/usage_receipts.py` adapter receives grouped counts from
 the ledger owner and exposes daily/model/hour totals without timing. This is
 an outer-caller integration, not discovery of arbitrary temporary state.
+`resources/ai/claude_code_usage.py` normalizes a fresh Claude Code terminal's
+session-wide per-model counts, including disjoint cache reads and writes. It
+owns native session/model identity and rejects resumed cumulative snapshots;
+`cli/usage_receipts.py` submits only its validated counts. Native transcripts,
+provider identity claims, costs and timings never enter that ledger.
+`resources/ai/claude_code_pricing.py` owns its dedicated, dated API references
+and disjoint token-leg estimates. Unknown cache-write tariffs remain unpriced;
+model context/effort display grouping never rewrites source identities or prices.
+`resources/ai/model_reference.py` owns known effort markers shared by the
+Codex, Antigravity and Claude Code pricing adapters; exact tariffs win over
+same-base references. `pricing_catalog.py` keeps provider-scoped rates, optional
+cache prices and explicit request-context/service bands. Unknown request lengths
+or tiers do not select a cheaper band, and a daily aggregate is not a request.
 `resources/ai/codex.py` consumes that ledger as its
 only Codex usage fact source. `cli/codex_usage_audit.py` only renders an
 aggregate audit; it does not own parsing or persist user rollout data.

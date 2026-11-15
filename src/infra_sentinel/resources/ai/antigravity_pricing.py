@@ -11,6 +11,7 @@ from infra_sentinel.resources.ai.pricing_catalog import (
     TextTokenPrice,
     bundled_pricing_catalog,
 )
+from infra_sentinel.resources.ai.model_reference import effort_variant
 
 
 GEMINI_DEVELOPER_API_PRICES_URL = "https://ai.google.dev/gemini-api/docs/pricing"
@@ -20,12 +21,8 @@ GOOGLE_CLOUD_ANTHROPIC_PRICES_URL = "https://cloud.google.com/gemini-enterprise-
 # They describe the name, not actual charges. Other pricing-relevant markers
 # such as preview, lite, image, TTS, live and service tiers are not stripped.
 _ACCESS_ID = re.compile(r"(?P<base>.+)(?P<marker>-(?:trial|trail|free))\Z")
-_GEMINI_BASE = r"gemini-[0-9]+(?:\.[0-9]+)?-(?:argon|carbon|pro|flash(?:-lite)?)"
+_GEMINI_BASE = r"gemini-[0-9]+(?:\.[0-9]+)?-(?:argon|carbon|hydrogen|pro|flash(?:-lite)?)"
 _ROLLOUT_ID = re.compile(rf"(?P<base>{_GEMINI_BASE})(?P<marker>-(?:[a-z]|exp(?:-[a-z0-9]+)?))\Z")
-_EFFORT_ID = re.compile(
-    rf"(?P<base>{_GEMINI_BASE}|claude-(?:opus|sonnet|haiku|fable)-[0-9]+(?:-[0-9]+)?)"
-    r"(?P<marker>-(?:low|medium|high|xhigh|thinking))\Z"
-)
 
 
 @dataclass(frozen=True)
@@ -63,14 +60,14 @@ def resolve_antigravity_reference(
     lookup = catalog or bundled_pricing_catalog()
     access = _ACCESS_ID.fullmatch(identifier)
     rollout = _ROLLOUT_ID.fullmatch(identifier)
-    effort = _EFFORT_ID.fullmatch(identifier)
-    variant = access or rollout or effort
-    marker = variant.group("marker") if variant else None
+    effort = effort_variant(identifier)
+    variant = access or rollout
+    marker = variant.group("marker") if variant else effort.marker if effort else None
     marker_kind = ("free" if marker == "-free" else "trial") if access else "rollout" if rollout else "effort" if effort else None
     price = lookup.price_for("antigravity", identifier, usage_date)
     if price is not None:
         return AntigravityModelReference(identifier, "exact", bool(rollout), marker, price, marker_kind)
-    base = variant.group("base") if variant else identifier
+    base = variant.group("base") if variant else effort.base if effort else identifier
     if base != identifier:
         price = lookup.price_for("antigravity", base, usage_date)
     return AntigravityModelReference(

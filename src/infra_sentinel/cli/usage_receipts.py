@@ -14,6 +14,15 @@ import uuid
 from infra_sentinel.app.configuration import desktop_state_directory
 from infra_sentinel.app.protocol import COMMAND_SCHEMA, COMMANDS_DIRECTORY, iso_now
 from infra_sentinel.metrics.usage_receipts import MAX_RECEIPT_BYTES, prepare_receipt
+from infra_sentinel.resources.ai.claude_code_usage import claude_code_receipts
+
+
+def submit_claude_code_result(
+    state_dir: Path, result: Any, *, completed_at: str, fresh_session: bool, wait_seconds: float = 15,
+) -> list[dict[str, Any]]:
+    """Submit validated per-model counts; raw native output never enters IPC."""
+    receipts = claude_code_receipts(result, completed_at=completed_at, fresh_session=fresh_session)
+    return [submit_receipt(state_dir, receipt, wait_seconds=wait_seconds) for receipt in receipts]
 
 
 def submit_receipt(state_dir: Path, raw: Any, *, wait_seconds: float = 15) -> dict[str, Any]:
@@ -45,7 +54,7 @@ def submit_receipt(state_dir: Path, raw: Any, *, wait_seconds: float = 15) -> di
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Record isolated CLI token usage; no prompt, response, timing or credentials")
+    parser = argparse.ArgumentParser(description="Record otherwise uncollected CLI token usage; no prompt, response, timing or credentials")
     location = parser.add_mutually_exclusive_group()
     location.add_argument("--config", type=Path)
     location.add_argument("--state-dir", type=Path)

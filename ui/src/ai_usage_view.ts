@@ -389,7 +389,7 @@ function modelReferenceAnnotations(
       const reference = asRecord(model.price_reference);
       const kind = reference.marker_kind === "trial" || reference.marker_kind === "free" ? reference.marker_kind
         : reference.suspected_rollout === true ? "rollout"
-        : dimension === "model" && reference.match === "base-reference" && reference.marker_kind !== "effort" ? "base" : null;
+        : dimension === "model" && reference.match === "base-reference" && !["effort", "context"].includes(String(reference.marker_kind)) ? "base" : null;
       if (!kind) continue;
       const variants = groups.get(kind) ?? [];
       variants.push(model);

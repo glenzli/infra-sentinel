@@ -20,14 +20,16 @@ export type ProjectedUsage = {
 type MutableInterval = UsageInterval & { rawModels: Map<string, number> };
 type TodayTarget = { tokens: number; startedEpoch?: number; models: Map<string, number> };
 
-// Effort is a display dimension of these model families. Keep access, rollout,
-// preview and modality variants distinct; source receipts retain their raw IDs.
-const EFFORT_MODEL = /^((?:gemini-[0-9]+(?:\.[0-9]+)?-(?:argon|carbon|pro|flash(?:-lite)?)|claude-(?:opus|sonnet|haiku|fable)-[0-9]+(?:-[0-9]+)?))-(?:low|medium|high|xhigh|thinking)$/;
+// Known effort levels apply to new model names too. Other variants remain
+// distinct; source receipts and precomputed prices retain their raw IDs.
+const EFFORT_MODEL = /^([a-z0-9][a-z0-9._:/+-]*(?:\[1m\])?)-(?:none|minimal|low|medium|high|xhigh|max)$/;
+const THINKING_MODEL = /^((?:gemini-[0-9]+(?:\.[0-9]+)?-(?:argon|carbon|hydrogen|pro|flash(?:-lite)?)|claude-(?:opus|sonnet|haiku|fable)-[0-9]+(?:-[0-9]+)?))-(?:thinking)$/;
 
 export function canonicalModelId(value: unknown): string {
   const raw = String(value ?? "").trim().toLowerCase();
   const model = raw.startsWith("openai/") ? raw.slice("openai/".length) : raw;
-  return model.replace(EFFORT_MODEL, "$1");
+  return model.replace(/\[1m\]$/, "").replace(EFFORT_MODEL, "$1")
+    .replace(THINKING_MODEL, "$1").replace(/\[1m\]$/, "");
 }
 
 function rawIntervals(points: Record<string, unknown>[]): UsageInterval[] {

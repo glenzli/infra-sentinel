@@ -1,4 +1,4 @@
-# Isolated CLI token accounting
+# CLI token accounting receipts
 
 Normal Codex CLI sessions under the configured Codex home and AGY sessions in
 the default state directories are discovered automatically. A run using
@@ -6,6 +6,9 @@ the default state directories are discovered automatically. A run using
 state directory, may leave no discoverable history. Its outer caller can submit
 a usage receipt **after** the isolated child exits. No exporter, hooks inside
 the child, localhost access, or weakening of its isolation is required.
+Claude Code sessions not counted by another source can use the same ledger,
+with the native result adapter below. This does not install hooks or scan
+Claude Code history automatically.
 
 This interface records counts. It never infers token speed, first-token delay,
 or request duration. It does not discover every isolated CLI invocation.
@@ -38,20 +41,28 @@ not fabricate zero usage when a run reports none.
 }
 ```
 
-`client` is `codex` or `agy`. `model_basis` is `reported` only when the source
-reports the actual model identity; otherwise use `requested`. A requested
-model name is not independent verification of the backend model.
+`client` is `codex`, `agy` or `claude-code`. `model_basis` is `reported` when
+the native result reports the model identity; otherwise use `requested`.
+Neither a requested name nor a native CLI label independently verifies a
+proxy's backend identity. Claude Code native context selectors such as `[1m]`
+are preserved in receipts and omitted from chart names. Its dedicated
+`claude-code` catalog scope prices only evidenced, dated model references.
+Known input, cache-read and output legs can be estimated independently; cache
+writes without a known TTL tariff remain unpriced, with their tokens counted.
 
 API reference estimates use the shared price catalog at the receipt's completion
 date. AGY names such as `gemini-3.8-flash-high` retain their original identity
 but use the dated `gemini-3.8-flash` reference when no exact variant entry exists;
-`high` is a recognized effort marker. Known `low`, `medium`, `high`, `xhigh`,
-and `thinking` markers use the same bounded resolver as ordinary AGY history.
+`high` is a recognized effort marker. Known `none`, `minimal`, `low`, `medium`,
+`high`, `xhigh` and `max` levels apply to newly observed model families too;
+known-family `thinking` markers use the same resolver as ordinary AGY history.
 The desktop groups these known effort variants under the base model in Token,
 history, and equivalent-value views, adding their counters and already computed
 price references. Raw model names remain in receipts and provider snapshots for
 audit and exact dated-price matching; effort does not create a separate display
 row or variant warning.
+Context selectors such as Claude Code's `[1m]` are also omitted in model and
+equivalent-value charts without changing the original tariff or counters.
 Unknown suffixes and pricing-relevant variants (for example image, TTS, preview,
 or a different base model) are not guessed. Exact variant catalog entries win.
 These are text API reference values, not the CLI provider's actual charges.
@@ -97,8 +108,43 @@ This is an explicit post-run integration; installing Sentinel does not patch
 third-party runners or shell commands. Do not resubmit regular sessions already
 counted by Codex, AGY, or Infer Runtime. There is no reliable identity join
 between an isolated receipt and those independent histories, so their overlap
-cannot be detected automatically. The required `coverage: isolated` field is
-the caller's assertion, not a filesystem audit.
+cannot be detected automatically. Codex and AGY require `coverage: isolated`.
+Claude Code also accepts `coverage: uncollected` for sessions the caller has
+verified are not already counted. These fields are caller assertions, not
+filesystem or operating-system isolation audits.
+
+## Claude Code native terminal adapter
+
+An outer runner can pass the final native stream-JSON `type: result` object to:
+
+```python
+from infra_sentinel.cli.usage_receipts import submit_claude_code_result
+
+acknowledgements = submit_claude_code_result(
+    state_dir, native_terminal,
+    completed_at=original_result_seen_at, fresh_session=True,
+)
+```
+
+The caller must verify the session was freshly created, no other collector
+counts it, and the completion timestamp is the original observed result time.
+The pure `resources.ai.claude_code_usage.claude_code_receipts` helper returns
+counts-only receipts for the same existing source/packaged submission paths.
+The raw result stays in the caller's memory and never enters Sentinel's IPC.
+
+The adapter requires complete native `usage` and `modelUsage` counters and
+checks their totals agree. Native uncached input, cache reads and cache creation
+are disjoint: all three enter receipt input. Native output already includes
+thinking; known thinking counters remain an output subset. Each model gets one
+receipt, keyed by a hash of the native session and model, so copied archives
+and delivery retries do not add consumption. Original native model labels are
+retained, including proxy labels; provider claims and `costUSD` are ignored.
+
+Session totals are cumulative. Resumed sessions are rejected by this adapter;
+they need a separately evidenced delta before submission. Intermediate
+snapshots, incomplete counters and conflicting aggregate/model totals are
+rejected. Zero-usage terminals create no rows. A failed terminal with complete,
+positive usage still counts, independently of the outer task's success.
 
 ## Storage, privacy and cost
 

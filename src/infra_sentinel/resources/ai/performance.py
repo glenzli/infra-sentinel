@@ -120,7 +120,7 @@ def performance_details(sample: PerformanceSample | None, *, scope: str = "reque
             )
             estimate["estimated"] = True
             groups.append(estimate)
-    if streaming is not None:
+    if streaming is not None and streaming >= MIN_ESTIMATED_STREAM_MS and sample.output_tokens > 1:
         groups.append(detail_group(
             "client-stream-performance", localized("Client stream rate", "客户端流速"),
             [
@@ -131,8 +131,8 @@ def performance_details(sample: PerformanceSample | None, *, scope: str = "reque
                              streaming / 1000, localized("excludes first-output waiting", "不含首输出等待"), unit="seconds"),
             ], badge=badge, sample=sample_context,
             note=localized(
-                "Client-observed delivery rate, including reasoning. Buffering and atomic delivery can inflate this value; it is not server decoding speed and must not be compared with turn or request averages.",
-                "客户端观测的交付流速，包含推理。缓冲和批量交付可能放大数值；它不是服务端解码速度，不能与轮次平均或请求平均直接比较。",
+                "Client-observed delivery rate, including reasoning. Omitted for fewer than two output tokens or delivery windows below 250 ms. Buffering can inflate longer windows too; this is not server decoding speed.",
+                "客户端观测的交付流速，包含推理。输出不足两个 Token 或交付窗口不足 250 ms 时不显示；较长窗口仍可能受缓冲影响，不代表服务端解码速度。",
             ),
         ))
     return groups

@@ -1,4 +1,4 @@
-"""Read-only projection of accepted isolated CLI usage receipts."""
+"""Read-only projection of accepted counts-only CLI usage receipts."""
 
 from __future__ import annotations
 
@@ -10,7 +10,8 @@ from infra_sentinel.core.collectors import Collection, CollectorCapability, Coll
 from infra_sentinel.resources.ai.antigravity_pricing import (
     estimate_antigravity_text_api_cost, resolve_antigravity_reference,
 )
-from infra_sentinel.resources.ai.codex_pricing import estimate_standard_api_cost
+from infra_sentinel.resources.ai.codex_pricing import estimate_standard_api_cost, resolve_standard_api_reference
+from infra_sentinel.resources.ai.claude_code_pricing import estimate_claude_code_text_api_cost
 from infra_sentinel.resources.ai.contract import (
     ai_usage_snapshot, daily_usage, detail_group, hourly_usage, localized,
     model_usage, pricing_day, token_metric, usage_window,
@@ -33,17 +34,31 @@ class CliUsageReceiptCollector:
         references: dict[str, dict[str, object]] = {}
         for row in rows:
             day, client, model = row["date"], row["client"], row["model"]
-            if client == "agy":
+            claude_estimate = None
+            if client == "claude-code":
+                claude_estimate = estimate_claude_code_text_api_cost(
+                    model, row, catalog=self._pricing_catalog, usage_date=day,
+                )
+                price = None
+                reference = claude_estimate.reference
+            elif client == "agy":
                 resolved = resolve_antigravity_reference(model, catalog=self._pricing_catalog, usage_date=day)
                 reference, price = resolved.projection(), resolved.price
             else:
-                price = self._pricing_catalog.price_for("codex", model, day)
-                reference = {"model": model, "match": "exact" if price else "unpriced", "available": price is not None}
+                price_model, price = resolve_standard_api_reference(model, catalog=self._pricing_catalog, usage_date=day)
+                reference = {"model": price_model, "match": "unpriced" if price is None else (
+                    "exact" if price_model == model else "base-reference"), "available": price is not None,
+                    **({"marker_kind": "effort"} if price_model != model else {})}
             references[model] = reference
             aggregate = days.setdefault(day, {}).setdefault(model, {
                 "id": model, "cost_usd": 0.0, "priced_tokens": 0, "unpriced_tokens": 0,
                 "price_reference": reference,
             })
+            if claude_estimate is not None:
+                aggregate["cost_usd"] += claude_estimate.total_cost_usd
+                aggregate["priced_tokens"] += claude_estimate.priced_tokens
+                aggregate["unpriced_tokens"] += claude_estimate.unpriced_tokens
+                continue
             cached = row["cached_input_tokens"]
             cache_write = row["cache_write_input_tokens"]
             if (price is None or cached is None
@@ -98,8 +113,8 @@ class CliUsageReceiptCollector:
         today_models = days.get(today, {})
         pricing, references = self._pricing(data.get("pricing", []))
         detail = localized(
-            "Counts reported by an outer caller for isolated CLI attempts. Regular persisted sessions must not also be submitted. Reasoning is included in output. No speed is inferred.",
-            "外层调用器提交的隔离 CLI 用量；已有常规会话记录的调用不应再次提交。推理计入输出，不推算速度。",
+            "Counts reported by an outer caller for CLI usage not counted by another source. Reasoning is included in output. No speed is inferred.",
+            "外层调用器提交的 CLI 用量；已由其他来源统计的调用不应再次提交。推理计入输出，不推算速度。",
         )
         provenance = localized(
             "Model names retain the caller's reported/requested provenance. Requested names do not verify the backend model. Cache and reasoning breakdowns may be absent.",
@@ -111,12 +126,12 @@ class CliUsageReceiptCollector:
             hour[row["model"]] = hour.get(row["model"], 0) + row["total_tokens"]
         snapshot = ai_usage_snapshot(
             source_id=self.capability.source_id, label="CLI receipts", status="ok",
-            observed_at=observed.isoformat(timespec="seconds"), collection_method="isolated-cli-usage-receipts",
-            today=usage_window(sum(today_models.values()), method="caller-reported-isolated-usage", detail=detail),
+            observed_at=observed.isoformat(timespec="seconds"), collection_method="caller-reported-cli-usage-receipts",
+            today=usage_window(sum(today_models.values()), method="caller-reported-cli-usage", detail=detail),
             cumulative=usage_window(sum(models.values()), method="idempotent-receipt-ledger", detail=detail),
             models=[model_usage(
                 model, today_tokens=today_models.get(model, 0), cumulative_tokens=tokens,
-                today_method="caller-reported-isolated-usage", today_detail=detail,
+                today_method="caller-reported-cli-usage", today_detail=detail,
                 cumulative_method="idempotent-receipt-ledger", cumulative_detail=detail,
                 price_reference=references.get(model),
             ) for model, tokens in sorted(models.items())],
@@ -126,8 +141,8 @@ class CliUsageReceiptCollector:
                 token_metric("receipt-count", localized("Receipts today", "当日回执"), sum(row["receipts"] for row in today_rows), detail, unit="count"),
                 token_metric("requested-model-count", localized("Requested model names", "使用请求模型名的回执"), sum(row["receipts"] for row in today_rows if row["model_basis"] == "requested"), provenance, unit="count"),
             ], note=provenance), detail_group("cli-receipt-pricing", localized("API price reference", "API 参考估算"), [], note=localized(
-                "Uses the dated catalog and known effort suffixes while preserving original model IDs. Missing cache breakdowns remain unpriced. Output already includes reasoning. This is a text API reference, not the CLI provider's bill.",
-                "按适用日期的目录及已知推理强度后缀匹配，保留原始模型名。缺少必要缓存细分的用量不估价，输出已含推理。这是文本 API 参考估算，不是 CLI 提供方账单。",
+                "Uses dated model references while preserving original IDs. Claude Code uses its dedicated scope; cache writes without a known TTL tariff remain unpriced. Output already includes reasoning. This is a text API reference, not the CLI provider's bill.",
+                "按日期匹配模型参考价，保留原始型号。Claude Code 使用独立价格范围；缓存写入缺少有效期费率时保留未估价，输出已含推理。这是文本 API 参考估算，不是 CLI 提供方账单。",
             ))],
             confidence="medium", privacy="numeric-usage-and-hashed-event-identities-only",
             daily_history=[daily_usage(day, sum(values.values()), [{"id": model, "tokens": tokens} for model, tokens in sorted(values.items())]) for day, values in sorted(days.items())],
